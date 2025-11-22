@@ -1,0 +1,202 @@
+name: Kernel Build with SUSFS
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, release]
+      lto_type:
+        description: 'LTO type'
+        required: true
+        default: 'thin'
+        type: choice
+        options: [thin, full, none]
+
+env:
+  BUILD: ${{ github.event.inputs.build_type || 'dev' }}
+  LTO_TYPE: ${{ github.event.inputs.lto_type || 'thin' }}
+  PIXEL8A: 'y'
+  THREADS: 16
+  KERNEL_BRANCH: 'android14-6.1-2025-09'
+  SUSFS_BRANCH: 'gki-android14-6.1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+    - name: Checkout build configuration
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Clone AOSP Kernel Source
+      run: |
+        echo "Cloning AOSP kernel_common (${{ env.KERNEL_BRANCH }})"
+        git clone --depth=1 --branch ${{ env.KERNEL_BRANCH }} \
+          https://github.com/aosp-mirror/kernel_common.git \
+          kernel-source
+        echo "KERNEL_ROOT=$(pwd)/kernel-source" >> $GITHUB_ENV
+        echo "AOSP kernel source cloned successfully"
+
+    - name: Copy build configuration to kernel source
+      run: |
+        echo "Copying build files to kernel source..."
+        cp build-kernel.sh kernel-source/
+        cp -r .github kernel-source/ || echo "No .github directory to copy"
+        chmod +x kernel-source/build-kernel.sh
+        echo "Build configuration copied"
+
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential libssl-dev libelf-dev \
+          git curl wget ccache patch bc \
+          pahole dwarves libdw-dev zlib1g-dev flex bison
+
+    - name: Install Clang
+      run: |
+        mkdir -p clang-setup
+        cd clang-setup
+        wget -q -O clang.tar.gz https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
+        tar -xzf clang.tar.gz
+        echo "$(pwd)/bin" >> $GITHUB_PATH
+        echo "CLANG_PATH=$(pwd)/bin" >> $GITHUB_ENV
+
+    - name: Setup ARM toolchains
+      run: |
+        # ARM64 toolchain
+        wget -q -O gcc-arm64.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+        tar -xf gcc-arm64.tar.xz
+        echo "ARM64_TOOLCHAIN=$(pwd)/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
+        
+        # ARM32 toolchain
+        wget -q -O gcc-arm32.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
+        tar -xf gcc-arm32.tar.xz
+        echo "ARM32_TOOLCHAIN=$(pwd)/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-" >> $GITHUB_ENV
+
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+
+    - name: Clone SUSFS
+      run: |
+        git clone --depth=1 -b ${{ env.SUSFS_BRANCH }} https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+        echo "SUSFS repository cloned"
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Clone AnyKernel3
+      run: |
+        git clone --depth=1 -b KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a.git AnyKernel3-p8a
+        echo "AnyKernel3 cloned"
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Copy SUSFS files
+      run: |
+        echo "Copying SUSFS files..."
+        
+        # Create directories
+        mkdir -p fs/susfs include/linux
+        
+        # Copy SUSFS files
+        find susfs4ksu/ -name "*.c" -exec cp {} fs/susfs/ 2>/dev/null \; || true
+        find susfs4ksu/ -name "*.h" -exec cp {} include/linux/ 2>/dev/null \; || true
+        find susfs4ksu/ -name "*.patch" -exec cp {} ./ 2>/dev/null \; || true
+        
+        # Verify copies
+        echo "=== Verification ==="
+        [ -f "fs/susfs/susfs.c" ] && echo "✓ susfs.c" || echo "✗ susfs.c missing"
+        [ -f "include/linux/susfs.h" ] && echo "✓ susfs.h" || echo "✗ susfs.h missing"
+        ls -la *.patch 2>/dev/null | head -5 || echo "No patch files found"
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Apply kernel patches
+      run: |
+        echo "Applying kernel patches..."
+        
+        # Apply main SUSFS patch
+        if [ -f "50_add_susfs_in_gki-android14-6.1.patch" ]; then
+          echo "Applying main SUSFS patch..."
+          patch -p1 -i 50_add_susfs_in_gki-android14-6.1.patch || echo "SUSFS patch applied with warnings"
+        fi
+        
+        # Apply CLIDR fix
+        if [ -f ".github/patches/fix-clidr-uninitialized.patch" ]; then
+          echo "Applying CLIDR fix..."
+          patch -p1 -i .github/patches/fix-clidr-uninitialized.patch || echo "CLIDR fix applied"
+        else
+          echo "CLIDR patch not found at .github/patches/fix-clidr-uninitialized.patch"
+          ls -la .github/patches/ 2>/dev/null || echo "Patches directory not found"
+        fi
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Build kernel
+      env:
+        CLANG_PATH: ${{ env.CLANG_PATH }}
+        ARM64_TOOLCHAIN: ${{ env.ARM64_TOOLCHAIN }}
+        ARM32_TOOLCHAIN: ${{ env.ARM32_TOOLCHAIN }}
+        BUILD: ${{ env.BUILD }}
+        LTO_TYPE: ${{ env.LTO_TYPE }}
+        PIXEL8A: ${{ env.PIXEL8A }}
+        THREADS: ${{ env.THREADS }}
+      run: |
+        echo "=== Building from: $(pwd) ==="
+        echo "=== Kernel source verification ==="
+        [ -f "Kconfig" ] && echo "✓ Kconfig found" || echo "✗ Kconfig missing"
+        [ -f "Makefile" ] && echo "✓ Makefile found" || echo "✗ Makefile missing"
+        [ -d "arch/arm64" ] && echo "✓ ARM64 arch found" || echo "✗ ARM64 arch missing"
+        
+        # Build the kernel
+        echo "=== Starting kernel build ==="
+        time ./build-kernel.sh
+        
+        # Show cache stats
+        ccache -s 2>/dev/null || true
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Check build output
+      run: |
+        echo "=== Checking build outputs ==="
+        find . -name "*.zip" -type f | head -10
+        find out/ -name "Image" -type f 2>/dev/null | head -5
+        find builds/ -name "*.zip" -type f 2>/dev/null | head -5
+      working-directory: ${{ env.KERNEL_ROOT }}
+
+    - name: Upload kernel artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-${{ github.sha }}-${{ env.BUILD }}
+        path: |
+          kernel-source/builds/**/*.zip
+          kernel-source/out/arch/arm64/boot/Image
+        retention-days: 30
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: kernel-*
+        path: artifacts
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/**/*.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

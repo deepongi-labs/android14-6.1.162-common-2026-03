@@ -63,32 +63,47 @@ jobs:
               "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
           fi
 
-          # Handle ZyCromerZ Clang properly
+          # Handle ZyCromerZ Clang - it extracts files directly to current directory
           if [ ! -d "clang" ]; then
             echo "📦 Setting up ZyCromerZ Clang..."
-            # Download the Clang release
-            wget -q --show-progress -O clang.tar.gz \
-              "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
             
-            # Extract and handle the directory structure
+            # Download the Clang release if not already downloaded
+            if [ ! -f "clang.tar.gz" ]; then
+              wget -q --show-progress -O clang.tar.gz \
+                "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+            fi
+            
+            # Extract and see what we get
+            echo "Extracting ZyCromerZ Clang..."
             tar -xzf clang.tar.gz
             
-            # The extracted directory might have a different name
-            # List contents to see what we got
-            echo "Contents after Clang extraction:"
+            # The ZyCromerZ Clang extracts files directly to current directory
+            # Let's see what was extracted and organize it properly
+            echo "Contents after extraction:"
             ls -la
             
-            # Find and rename the Clang directory
-            CLANG_DIR=$(find . -maxdepth 1 -type d -name "Clang*" -o -name "clang*" | head -1)
-            if [ -n "$CLANG_DIR" ] && [ "$CLANG_DIR" != "." ]; then
-              mv "$CLANG_DIR" clang
-              echo "✓ Renamed $CLANG_DIR to clang"
-            else
-              # If no directory was found, create one and move binaries
-              mkdir -p clang
-              # Move any extracted files to clang directory
-              find . -maxdepth 1 -type f -exec mv {} clang/ \; 2>/dev/null || true
-              echo "✓ Created clang directory and moved files"
+            # Create clang directory and move all extracted files into it
+            mkdir -p clang
+            echo "Moving extracted files to clang/ directory..."
+            
+            # Move all files and directories except what we don't want
+            for item in *; do
+              if [ "$item" != "clang" ] && [ "$item" != "clang.tar.gz" ] && \
+                 [ "$item" != "gcc-arm64.tar.xz" ] && [ "$item" != "gcc-arm32.tar.xz" ] && \
+                 [ "$item" != "." ] && [ "$item" != ".." ]; then
+                mv "$item" clang/ 2>/dev/null || true
+              fi
+            done
+            
+            echo "Final clang directory structure:"
+            ls -la clang/
+            
+            # Check if bin directory exists, if not create it and move binaries
+            if [ ! -d "clang/bin" ]; then
+              echo "Creating bin directory and organizing binaries..."
+              mkdir -p clang/bin
+              # Move any executable files to bin directory
+              find clang -maxdepth 1 -type f -executable -exec mv {} clang/bin/ \; 2>/dev/null || true
             fi
           fi
 
@@ -103,19 +118,60 @@ jobs:
             mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc
           fi
 
-          # Set paths
+          # Set paths - ZyCromerZ Clang might have different structure
           CLANG_BIN="$PWD/clang/bin"
+          
+          # If bin directory doesn't exist, try to find where the binaries are
+          if [ ! -d "$CLANG_BIN" ]; then
+            echo "🔍 Searching for Clang binaries..."
+            # Find clang binary and set path accordingly
+            CLANG_PATH=$(find clang -name "clang" -type f | head -1)
+            if [ -n "$CLANG_PATH" ]; then
+              CLANG_BIN=$(dirname "$CLANG_PATH")
+              echo "Found Clang at: $CLANG_PATH"
+              echo "Setting CLANG_BIN to: $CLANG_BIN"
+            else
+              # If we can't find clang, try using the clang directory directly
+              CLANG_BIN="$PWD/clang"
+              echo "Using clang directory as CLANG_BIN: $CLANG_BIN"
+            fi
+          fi
+
           ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
           ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
 
-          # Verify binaries exist
-          echo "🔍 Checking toolchain binaries..."
-          for tool in "$CLANG_BIN/clang" "$CLANG_BIN/ld.lld" \
-                      "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
+          # Verify everything exists
+          echo "🔍 Checking toolchain setup..."
+          echo "CLANG_BIN: $CLANG_BIN"
+          echo "ARM64_TOOLCHAIN: $ARM64_TOOLCHAIN"
+          echo "ARM32_TOOLCHAIN: $ARM32_TOOLCHAIN"
+          
+          # List clang directory to see what we have
+          echo "Clang directory contents:"
+          ls -la clang/
+
+          # Check for clang binary
+          if [ -f "$CLANG_BIN/clang" ]; then
+            echo "✅ Clang binary found: $CLANG_BIN/clang"
+          else
+            # Try to find clang anywhere in the clang directory
+            FOUND_CLANG=$(find clang -name "clang" -type f | head -1)
+            if [ -n "$FOUND_CLANG" ]; then
+              CLANG_BIN=$(dirname "$FOUND_CLANG")
+              echo "✅ Found Clang at: $FOUND_CLANG"
+              echo "Updating CLANG_BIN to: $CLANG_BIN"
+            else
+              echo "❌ Clang binary not found in expected locations"
+              echo "Searching for any executable files in clang directory:"
+              find clang -type f -executable | head -10
+              exit 1
+            fi
+          fi
+
+          # Verify other toolchains
+          for tool in "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
             if [ ! -f "$tool" ]; then
               echo "::error::Toolchain binary not found: $tool"
-              echo "Available in directory:"
-              ls -la "$(dirname "$tool")" 2>/dev/null || echo "Directory not found"
               exit 1
             fi
           done
@@ -124,8 +180,8 @@ jobs:
           echo "ARM64_TOOLCHAIN=$ARM64_TOOLCHAIN" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=$ARM32_TOOLCHAIN" >> $GITHUB_ENV
 
-          echo "✅ Toolchains setup complete"
-          echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
+          echo "✅ ZyCromerZ Clang setup complete!"
+          echo "clang version: $("$CLANG_BIN/clang" --version | head -1)"
           echo "aarch64-gcc: $("${ARM64_TOOLCHAIN}gcc" --version | head -1)"
           echo "arm-gcc: $("${ARM32_TOOLCHAIN}gcc" --version | head -1)"
 

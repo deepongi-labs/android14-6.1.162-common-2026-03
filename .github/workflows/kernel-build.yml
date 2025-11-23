@@ -351,6 +351,8 @@ jobs:
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
           CONFIG_CC_FLAGS="-O3 -flto -ffunction-sections -fdata-sections"
           CONFIG_CCACHE=y
+          CONFIG_LTO=y
+          CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
           CONFIG_IP_SET=y
           CONFIG_IP_SET_MAX=256

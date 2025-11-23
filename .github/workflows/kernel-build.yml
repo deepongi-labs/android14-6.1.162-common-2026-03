@@ -1,3 +1,79 @@
+🔧 GKI Kernel Builder - GitHub Actions Generator
+Configure your CI workflow for Android Common Kernel 6.1.145 with KernelSU + SuSFS integration
+
+📋 Instructions: Fill in the configuration below to generate a complete GitHub Actions workflow file. This will build your GKI kernel with KernelSU (tiann) and SuSFS (simonpunk) integration automatically.
+📦 Kernel Source Configuration
+Kernel Source URL
+https://android.googlesource.com/kernel/common
+Kernel Branch
+android14-6.1-2025-09
+Defconfig Name
+gki_defconfig
+Architecture
+arm64
+LOCALVERSION (e.g., -KernelSU-SuSFS)
+-deepongi
+🔐 KernelSU & SuSFS Configuration
+KernelSU Repository
+https://github.com/tiann/KernelSU
+KernelSU Branch/Tag
+main
+
+Enable SuSFS Integration
+SuSFS Repository
+https://gitlab.com/simonpunk/susfs4ksu.git
+SuSFS Branch
+gki-android14-6.1
+⚙️ Build Optimizations
+GKI Defconfig Modifications (one per line, format: CONFIG_NAME=y or # CONFIG_NAME is not set)
+CONFIG_KSU=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_DEBUG=n
+# CONFIG_ANDROID_PARANOID_NETWORK is not set
+✅ Build Optimizations (Always Enabled):
+• ThinLTO (Link Time Optimization)
+• ccache for faster rebuilds
+• Performance-optimized base configs
+🛠️ Toolchain Configuration
+✅ Default Toolchains (Always Used):
+• Clang 22.0.0 (ZyCromerZ)
+• GCC ARM64 14.3.rel1 (ARM Official)
+• GCC ARM32 14.3.rel1 (ARM Official)
+🩹 Extra Patches
+Additional Patches to Apply
+https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch
+
+Kernel Root
+Remove
+https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch
+
+KernelSU Folder
+Remove
+https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch
+
+Kernel Root
+Remove
++ Add Patch
+📦 Output Configuration
+Kernel ZIP Name Pattern
+GKI-KernelSU-SuSFS-{version}-{date}
+AnyKernel3 Repository
+https://github.com/deepongi-labs/AnyKernel3-p8a
+AnyKernel3 Branch
+KernelSU
+
+Remove GKI exports for WiFi fix (rm android/abi_gki_protected_exports_*)
+🔧 SuSFS File Copy
+ℹ️ Automatic File Copy: When SuSFS is enabled, the workflow will automatically copy these files from susfs4ksu repository:
+• kernel_patches/fs/susfs.c → kernel fs/
+• kernel_patches/include/linux/susfs.h → kernel include/linux/
+• kernel_patches/include/linux/susfs_def.h → kernel include/linux/
+
+💡 Tip: Add your custom SuSFS patches (10_enable_susfs_for_ksu.patch, 50_add_susfs_in_gki-android14-6.1.patch) in the Extra Patches section above.
+🚀 Generate GitHub Actions Workflow
+✅ Generated Workflow
+Save this as .github/workflows/build-kernel.yml in your repository:
+
 name: Build GKI Kernel with KernelSU and SuSFS
 
 on:
@@ -21,7 +97,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod
           
       - name: Setup Custom Toolchain
         run: |
@@ -67,35 +143,34 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
           echo "KernelSU integrated successfully"
 
-      - name: Clone and Apply SuSFS
+      - name: Clone and Integrate SuSFS
         run: |
           git clone --depth=1 --branch=gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git susfs
           cd kernel
-          
-          # Copy SuSFS kernel patches
-          if [ -d "${{ github.workspace }}/susfs/kernel_patches" ]; then
-            cp -r ${{ github.workspace }}/susfs/kernel_patches/* ./
-          fi
-          
-          # Apply SuSFS patches
-          if [ -d "${{ github.workspace }}/susfs/kernel_patches/KernelSU" ]; then
-            cd KernelSU
-            for patch in ${{ github.workspace }}/susfs/kernel_patches/KernelSU/*.patch; do
-              if [ -f "$patch" ]; then
-                echo "Applying $patch"
-                patch -p1 < "$patch" || echo "Patch $patch failed, continuing..."
-              fi
-            done
-            cd ..
-          fi
-          
-          echo "SuSFS integrated successfully"
+          cp ${{ github.workspace }}/susfs/kernel_patches/fs/susfs.c fs/
+          cp ${{ github.workspace }}/susfs/kernel_patches/include/linux/susfs.h include/linux/
+          cp ${{ github.workspace }}/susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          echo "SuSFS files copied successfully"
 
       - name: Apply Custom Patch 1 (Kernel Root)
         run: |
           cd kernel
-          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o patch_0.patch
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o patch_0.patch
           patch -p1 < patch_0.patch || echo "Patch 0 failed, continuing..."
+          cd ${{ github.workspace }}/kernel
+
+      - name: Apply Custom Patch 2 (KernelSU Folder)
+        run: |
+          cd kernel/KernelSU
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch" -o patch_1.patch
+          patch -p1 < patch_1.patch || echo "Patch 1 failed, continuing..."
+          cd ${{ github.workspace }}/kernel
+
+      - name: Apply Custom Patch 3 (Kernel Root)
+        run: |
+          cd kernel
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o patch_2.patch
+          patch -p1 < patch_2.patch || echo "Patch 2 failed, continuing..."
           cd ${{ github.workspace }}/kernel
       - name: Configure Kernel
         run: |
@@ -158,7 +233,7 @@ jobs:
           echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_NET_SCH_FQ_CODEL=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_NET_SCH_CAKE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_DEFAULT_FQ=y " >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_DEFAULT_FQ=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_DEFAULT_TCP_CONG="bbr"" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_F2FS_FS=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_F2FS_FS_XATTR=y" >> arch/arm64/configs/gki_defconfig
@@ -189,7 +264,6 @@ jobs:
           echo "CONFIG_TCP_CONG_BBR=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_CCACHE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_BIC=n" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_WESTWOOD=n" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_HTCP=n" >> arch/arm64/configs/gki_defconfig
@@ -209,9 +283,13 @@ jobs:
           echo "CONFIG_LTO_CLANG_THIN=y" >> arch/arm64/configs/gki_defconfig
           echo "# CONFIG_LTO_CLANG_FULL is not set" >> arch/arm64/configs/gki_defconfig
           
-          echo "CONFIG_LOCALVERSION=\"-deepongi+\"" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION=\"-deepongi\"" >> arch/arm64/configs/gki_defconfig
           
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+          # Remove ABI exports for WiFi fix
+          rm -vf android/abi_gki_protected_exports_* || true
+          
+          
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out gki_defconfig
 
       - name: Build Kernel
         run: |
@@ -220,6 +298,12 @@ jobs:
           export SUBARCH=arm64
           export CLANG_PATH=${{ github.workspace }}/toolchain/clang/bin
           export PATH="$CLANG_PATH:$PATH"
+          
+          if ! command -v ld.lld &> /dev/null; then
+            echo "::error::ld.lld not found in PATH"
+            exit 1
+          fi
+          ls -l $(which ld.lld)
           export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
           export PATH="$(dirname ${{ env.ARM64_TOOLCHAIN }}):$PATH"
           export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
@@ -232,8 +316,8 @@ jobs:
             LLVM=1 \
             ARCH=arm64 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN" \
-            CROSS_COMPILE="$ARM64_TOOLCHAIN" \
+            CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
+            CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
             CC=clang \
             LD=ld.lld \
             HOSTLD=ld.lld \
@@ -321,3 +405,10 @@ jobs:
             ${{ env.KERNEL_ZIP }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+📋 Copy to Clipboard
+📚 Next Steps
+Create .github/workflows/ directory in your repository
+Save the generated workflow as build-kernel.yml
+Commit and push to trigger the workflow
+Go to Actions tab to monitor the build
+Download the kernel ZIP from Releases when complete

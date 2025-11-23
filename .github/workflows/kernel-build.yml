@@ -28,25 +28,66 @@ jobs:
           mkdir -p ${{ github.workspace }}/toolchain
           cd ${{ github.workspace }}/toolchain
           
-          wget -q -O clang-toolchain.tar.xz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
-          mkdir -p clang
-          tar -xf clang-toolchain.tar.xz -C clang --strip-components=1
-          export CLANG_PATH="${{ github.workspace }}/toolchain/clang/bin"
+          echo "Checking for cached toolchains..."
           
-          wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
-          tar -xf gcc-arm64.tar.xz
+          # Force re-extract if cache exists but bins are missing
+          if [ -f "clang-toolchain.tar.xz" ] || [ -f "clang-toolchain.tar.gz" ]; then
+            echo "Found cached archive, extracting..."
+            rm -rf clang
+            mkdir -p clang
+            if [ -f "clang-toolchain.tar.xz" ]; then
+              tar -xf clang-toolchain.tar.xz -C clang --strip-components=1
+            elif [ -f "clang-toolchain.tar.gz" ]; then
+              tar -xzf clang-toolchain.tar.gz -C clang --strip-components=1
+            fi
+          elif [ ! -d "clang/bin" ]; then
+            echo "Downloading Clang toolchain..."
+            wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+            mkdir -p clang
+            tar -xzf clang-toolchain.tar.gz -C clang --strip-components=1
+            # Keep archive for cache
+          fi
+          
+          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin" ]; then
+            echo "Downloading ARM64 GCC toolchain..."
+            wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+            tar -xf gcc-arm64.tar.xz
+          fi
+          
+          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin" ]; then
+            echo "Downloading ARM32 GCC toolchain..."
+            wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+            tar -xf gcc-arm32.tar.xz
+          fi
+          
+          # Verify Clang bin exists
+          if [ ! -d "clang/bin" ]; then
+            echo "::error::Clang bin directory failed to extract/restore"
+            ls -la
+            exit 1
+          fi
+          
+          # Set environment variables
           ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
+          if [ -z "$ARM64_DIR" ]; then
+            echo "::error::ARM64 toolchain directory not found"
+            exit 1
+          fi
           echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
           
-          wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
-          tar -xf gcc-arm32.tar.xz
           ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
+          if [ -z "$ARM32_DIR" ]; then
+            echo "::error::ARM32 toolchain directory not found"
+            exit 1
+          fi
           echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
           
-          if [ -d "clang/bin" ]; then
-            export PATH="${{ github.workspace }}/toolchain/clang/bin:$PATH"
-            clang --version
-          fi
+          echo "✓ Clang version:"
+          ${{ github.workspace }}/toolchain/clang/bin/clang --version
+          
+          echo "✓ ARM64 GCC version:"
+          ${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc --version | head -1
+
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2

@@ -527,44 +527,13 @@ jobs:
           name: "Kernel Build #${{ github.run_number }}"
           body: |
             ## 🚀 GKI Kernel with KernelSU & SuSFS
-
             **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
-
             ### 📊 Build Info
             - **Duration:** ${{ env.BUILD_TIME }} seconds
             - **Kernel:** 6.1.145
-            - **Branch:** android14-6.1-2025-09
-            - **Commit:** ${{ github.sha }}
-
-            ### 🔧 Features
-            - ✅ KernelSU (main branch)
-            - ✅ SuSFS (gki-android14-6.1)
-            - ✅ ZyCromerZ Clang 22.0.0 + ThinLTO
-            - ✅ Comprehensive GKI defconfig optimizations
-            - ✅ ARM64 Cortex-X3/A715/A510 optimizations
-            - ✅ BBR TCP congestion control
-            - ✅ Enhanced security hooks
-
-            ### 📦 Checksums
-            **SHA256:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.sha256)
-            ```
-            **MD5:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.md5)
-            ```
-
-            ### ⚡ Installation
-            1. Download the ZIP file
-            2. Verify checksums
-            3. Flash in custom recovery
-            4. Reboot and enjoy!
-
-            > ⚠️ Always backup before flashing!
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}  # Use PAT instead of GITHUB_TOKEN

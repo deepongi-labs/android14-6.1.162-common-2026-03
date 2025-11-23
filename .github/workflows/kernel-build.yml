@@ -1,0 +1,289 @@
+name: Kernel Build with SUSFS - Optimized
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - release
+      lto_type:
+        description: 'LTO type'
+        required: true
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      build_clean:
+        description: 'Build cleaning strategy'
+        required: true
+        default: 'smart'
+        type: choice
+        options:
+          - smart
+          - always
+          - none
+
+env:
+  BUILD: ${{ github.event.inputs.build_type || 'dev' }}
+  LTO_TYPE: ${{ github.event.inputs.lto_type || 'thin' }}
+  BUILD_CLEAN: ${{ github.event.inputs.build_clean || 'smart' }}
+  PIXEL8A: 'y'
+  THREADS: 8
+  KERNEL_BRANCH: 'android14-6.1-2025-09'
+  SUSFS_BRANCH: 'gki-android14-6.1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout build configuration
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libssl-dev libelf-dev git curl wget \
+            ccache patch bc pahole dwarves libdw-dev zlib1g-dev \
+            flex bison libncurses-dev rsync file
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache-kernel
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Clone AOSP Kernel Source
+        run: |
+          echo "Cloning AOSP kernel_common (${{ env.KERNEL_BRANCH }})"
+          git clone --depth=1 --branch ${{ env.KERNEL_BRANCH }} https://github.com/aosp-mirror/kernel_common.git common
+          echo "AOSP kernel source cloned successfully"
+
+      - name: Set KERNEL_ROOT environment variable
+        run: echo "KERNEL_ROOT=${GITHUB_WORKSPACE}/common" >> $GITHUB_ENV
+
+      - name: Install Clang
+        run: |
+          echo "Installing Clang..."
+          mkdir -p clang-setup
+          cd clang-setup
+          wget -q -O clang.tar.gz https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
+          tar -xzf clang.tar.gz
+          echo "$(pwd)/bin" >> $GITHUB_PATH
+          echo "CLANG_PATH=$(pwd)/bin" >> $GITHUB_ENV
+
+      - name: Setup ARM toolchains
+        run: |
+          echo "Setting up ARM toolchains..."
+          wget -q -O gcc-arm64.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          tar -xf gcc-arm64.tar.xz
+          echo "ARM64_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
+
+          wget -q -O gcc-arm32.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
+          tar -xf gcc-arm32.tar.xz
+          echo "ARM32_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-" >> $GITHUB_ENV
+
+      - name: Cache toolchains for future runs
+        uses: actions/cache@v4
+        with:
+          path: |
+            clang-setup
+            arm-gnu-toolchain-*
+          key: ${{ runner.os }}-toolchains-${{ env.CLANG_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-toolchains-
+
+      - name: Copy build scripts to kernel source
+        run: |
+          echo "Copying build configuration to kernel source..."
+          cp build-kernel.sh common/
+          chmod +x common/build-kernel.sh
+          
+          # Copy only fix patches (not SUSFS patches)
+          echo "Copying fix patches..."
+          mkdir -p common/.github/patches
+          cp -r .github/patches/*.patch common/.github/patches/ 2>/dev/null || echo "No fix patches found"
+          echo "Build scripts and fix patches copied"
+
+      - name: Install KernelSU (from tiann)
+        run: |
+          echo "Installing KernelSU from tiann repository..."
+          cd common
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          echo "KernelSU installation completed"
+          ls -la KernelSU/ 2>/dev/null && echo "✓ KernelSU directory created" || echo "✗ KernelSU directory missing"
+
+      - name: Remove protected ABI exports files
+        run: |
+          echo "Removing protected ABI exports files..."
+          cd common
+          rm -vf android/abi_gki_protected_exports_*
+          echo "Files removed from android/ directory"
+          ls -la android/abi_gki_* 2>/dev/null | head -5 || echo "No remaining ABI files to show"
+
+      - name: Clone SUSFS
+        run: |
+          git clone --depth=1 -b ${{ env.SUSFS_BRANCH }} https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu || echo "SUSFS clone failed, continuing anyway"
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Clone AnyKernel3
+        run: |
+          git clone --depth=1 -b KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a.git AnyKernel3-p8a || echo "AnyKernel3 clone failed, continuing anyway"
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Copy SUSFS source files (NO PATCHES)
+        run: |
+          echo "Copying SUSFS source files (without patches)..."
+          
+          # Create directories if they don't exist
+          mkdir -p fs include/linux
+          
+          # Copy the specific SUSFS files from their exact locations
+          echo "Copying susfs.c to common/fs/..."
+          cp susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || echo "Failed to copy susfs.c"
+          
+          echo "Copying susfs.h to common/include/linux/..."
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || echo "Failed to copy susfs.h"
+          
+          echo "Copying susfs_def.h to common/include/linux/..."
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || echo "Failed to copy susfs_def.h"
+          
+          echo "=== Verification ==="
+          [ -f "fs/susfs.c" ] && echo "✓ fs/susfs.c" || echo "✗ fs/susfs.c missing"
+          [ -f "include/linux/susfs.h" ] && echo "✓ include/linux/susfs.h" || echo "✗ include/linux/susfs.h missing"
+          [ -f "include/linux/susfs_def.h" ] && echo "✓ include/linux/susfs_def.h" || echo "✗ include/linux/susfs_def.h missing"
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Apply kernel patches
+        run: |
+          echo "Applying kernel patches..."
+          echo "=== Available patches ==="
+          find . -name "*.patch" -type f 2>/dev/null | head -10 || echo "No patch files found"
+          
+          # Apply SUSFS patches FIRST (50 and 10) - from susfs4ksu folder only
+          echo "=== Applying SUSFS patches FIRST (from susfs4ksu/) ==="
+      
+          # SUSFS main kernel patch (50) - from susfs4ksu folder
+          if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
+            echo "Applying SUSFS main patch (50) from susfs4ksu..."
+            patch -p1 -f -i "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || echo "SUSFS patch applied with warnings"
+          else
+            echo "SUSFS main patch (50) not found in susfs4ksu"
+          fi
+      
+          # KernelSU-specific SUSFS patch (10) - from susfs4ksu folder
+          echo "=== Applying KernelSU SUSFS patches (from susfs4ksu/) ==="
+          if [ -d "KernelSU" ] && [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+            echo "Applying KernelSU SUSFS patch (10) from susfs4ksu..."
+            cd KernelSU
+            patch -p1 -f -i "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || echo "KernelSU patch applied with warnings"
+            cd ..
+          else
+            echo "KernelSU SUSFS patch (10) not found in susfs4ksu or KernelSU directory missing"
+          fi
+          
+          # Apply fix patches LAST (after SUSFS patches) - from .github/patches only
+          echo "=== Applying fix patches LAST (from .github/patches/) ==="
+          if [ -d ".github/patches" ]; then
+            for patch_file in .github/patches/*.patch; do
+              if [ -f "$patch_file" ]; then
+                echo "Applying fix patch: $patch_file"
+                patch -p1 -f -i "$patch_file" || echo "Failed to apply $patch_file"
+              fi
+            done
+          else
+            echo "No .github/patches directory found for fix patches"
+          fi
+          
+          echo "=== Patch application completed ==="
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Build kernel
+        env:
+          CLANG_PATH: ${{ env.CLANG_PATH }}
+          ARM64_TOOLCHAIN: ${{ env.ARM64_TOOLCHAIN }}
+          ARM32_TOOLCHAIN: ${{ env.ARM32_TOOLCHAIN }}
+          BUILD: ${{ env.BUILD }}
+          LTO_TYPE: ${{ env.LTO_TYPE }}
+          BUILD_CLEAN: ${{ env.BUILD_CLEAN }}
+          PIXEL8A: ${{ env.PIXEL8A }}
+          THREADS: ${{ env.THREADS }}
+        run: |
+          echo "=== Building from: $(pwd) ==="
+          [ -f "Kconfig" ] && echo "✓ Kconfig found" || echo "✗ Kconfig missing"
+          [ -f "Makefile" ] && echo "✓ Makefile found" || echo "✗ Makefile missing"
+          [ -d "arch/arm64" ] && echo "✓ ARM64 arch found" || echo "✗ ARM64 arch missing"
+          [ -d "KernelSU" ] && echo "✓ KernelSU found" || echo "✗ KernelSU missing"
+          [ -f "fs/susfs.c" ] && echo "✓ fs/susfs.c found" || echo "✗ fs/susfs.c missing"
+          [ -f "include/linux/susfs.h" ] && echo "✓ include/linux/susfs.h found" || echo "✗ include/linux/susfs.h missing"
+          [ -f "include/linux/susfs_def.h" ] && echo "✓ include/linux/susfs_def.h found" || echo "✗ include/linux/susfs_def.h missing"
+          echo "=== Starting kernel build ==="
+          echo "LTO Type: $LTO_TYPE"
+          echo "Build Clean: $BUILD_CLEAN"
+          echo "Threads: $THREADS"
+          ./build-kernel.sh
+          echo "=== Build completed ==="
+          ccache -s || true
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Check build output
+        run: |
+          echo "=== Checking build outputs ==="
+          find . -name "*.zip" -type f 2>/dev/null | head -10 || echo "No zip files found"
+          find out/ -name "Image" -type f 2>/dev/null | head -5 || echo "No Image file found"
+          find builds/ -name "*.zip" -type f 2>/dev/null | head -5 || echo "No build artifacts found"
+          echo "=== Build artifacts ==="
+          ls -la builds/6.1.155/ 2>/dev/null || echo "No builds directory"
+        working-directory: ${{ env.KERNEL_ROOT }}
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ github.sha }}-${{ env.BUILD }}-${{ env.LTO_TYPE }}
+          path: |
+            common/builds/**/*.zip
+            common/out/arch/arm64/boot/Image
+          retention-days: 30
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

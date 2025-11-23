@@ -232,16 +232,56 @@ jobs:
           set +e
           cd kernel
 
+          # Define patches in the correct order - SuSFS patches first, then fixes
           declare -A PATCH_MAP=(
-            ["fix-clidr-uninitialized"]="."
             ["10_enable_susfs_for_ksu"]="KernelSU" 
             ["50_add_susfs_in_gki-android14-6.1"]="."
+            ["fix-clidr-uninitialized"]="."
             ["fix_proc_base"]="."
           )
 
           PATCH_BASE="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main"
 
-          for patch_name in "${!PATCH_MAP[@]}"; do
+          # Apply patches in specific order
+          echo "🔧 Applying patches in correct order..."
+          
+          # First apply SuSFS patches
+          echo "📋 Applying SuSFS patches first..."
+          for patch_name in "10_enable_susfs_for_ksu" "50_add_susfs_in_gki-android14-6.1"; do
+            patch_dir="${PATCH_MAP[$patch_name]}"
+            patch_url="$PATCH_BASE/${patch_name}.patch"
+            
+            echo "🔧 Applying $patch_name to $patch_dir/"
+            
+            # Download patch
+            if ! curl -fsSL "$patch_url" -o "/tmp/${patch_name}.patch"; then
+              echo "⚠️ Failed to download $patch_name"
+              continue
+            fi
+
+            # Apply patch
+            if [ "$patch_dir" != "." ]; then
+              if [ ! -d "$patch_dir" ]; then
+                echo "❌ Directory $patch_dir not found, skipping $patch_name"
+                continue
+              fi
+              cd "$patch_dir"
+            fi
+
+            if patch -p1 --forward --no-backup-if-mismatch < "/tmp/${patch_name}.patch" 2>&1; then
+              echo "✅ $patch_name applied successfully"
+            else
+              echo "⚠️ $patch_name failed to apply (may already be applied)"
+            fi
+
+            # Return to kernel root
+            cd "${{ github.workspace }}/kernel"
+            rm -f "/tmp/${patch_name}.patch"
+          done
+
+          # Then apply fix patches
+          echo "🔧 Applying fix patches after SuSFS patches..."
+          for patch_name in "fix-clidr-uninitialized" "fix_proc_base"; do
             patch_dir="${PATCH_MAP[$patch_name]}"
             patch_url="$PATCH_BASE/${patch_name}.patch"
             
@@ -274,7 +314,7 @@ jobs:
           done
 
           set -e
-          echo "🎉 All patches processed"
+          echo "🎉 All patches applied in correct order!"
 
       - name: Configure Kernel
         id: config

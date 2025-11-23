@@ -465,8 +465,8 @@ jobs:
           export CROSS_COMPILE="$ARM64_TOOLCHAIN" 
           export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
 
-          # Build flags for optimization
-          export KBUILD_BUILD_TIMESTAMP=$(date -u -d "@$SOURCE_DATE_EPOCH")
+          # Simple build timestamp
+          export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           export KBUILD_BUILD_USER=github-actions
           export KBUILD_BUILD_HOST=github
 

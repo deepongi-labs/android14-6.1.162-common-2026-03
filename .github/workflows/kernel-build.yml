@@ -29,72 +29,61 @@ jobs:
           mkdir -p ${{ github.workspace }}/toolchain
           cd ${{ github.workspace }}/toolchain
           
-          echo "Checking for existing toolchains..."
+          echo "Setting up Clang toolchain..."
           
-          # Always ensure a fresh clang/ directory
+          # Always (re)extract Clang; caching can be added later if needed
           rm -rf clang
           mkdir -p clang
-          
-          # Download + extract Clang
-          if [ -f "clang-toolchain.tar.gz" ]; then
-            echo "Using cached clang-toolchain.tar.gz"
-          else
-            echo "Downloading Clang toolchain..."
-            wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
-          fi
-          
-          # Do NOT use --strip-components; layout may already have bin/ at root
+          wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
           tar -xzf clang-toolchain.tar.gz -C clang
           
-          # Download + extract ARM64 GCC if needed
-          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin" ]; then
-            echo "Downloading ARM64 GCC toolchain..."
-            wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
-            tar -xf gcc-arm64.tar.xz
-          fi
-          
-          # Download + extract ARM32 GCC if needed
-          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin" ]; then
-            echo "Downloading ARM32 GCC toolchain..."
-            wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
-            tar -xf gcc-arm32.tar.xz
-          fi
-          
-          echo "Locating Clang binary..."
-          CLANG_BIN_PATH=$(find "$PWD/clang" -maxdepth 4 -type f -name clang | head -1)
-          if [ -z "$CLANG_BIN_PATH" ]; then
-            echo "::error:: clang binary not found inside extracted clang toolchain"
-            find "$PWD/clang" -maxdepth 4 -type d -print
+          # Clang from ZyCromerZ unpacks with a top-level bin dir: clang/bin[web:64]
+          if [ ! -d "clang/bin" ]; then
+            echo "::error::Expected clang/bin directory, but it does not exist"
+            echo "Contents of clang/:"
+            find clang -maxdepth 3 -type d -print
             exit 1
           fi
-          CLANG_BIN_DIR=$(dirname "$CLANG_BIN_PATH")
+          
+          CLANG_BIN_DIR="$PWD/clang/bin"
           echo "Detected CLANG_BIN=$CLANG_BIN_DIR"
           echo "CLANG_BIN=$CLANG_BIN_DIR" >> $GITHUB_ENV
           
-          # Validate ld.lld in same bin dir
+          # Verify ld.lld is present
           if [ ! -f "$CLANG_BIN_DIR/ld.lld" ]; then
-            echo "::error:: ld.lld not found next to clang in $CLANG_BIN_DIR"
+            echo "::error::ld.lld not found in $CLANG_BIN_DIR"
             ls -la "$CLANG_BIN_DIR"
             exit 1
           fi
           
-          # Set GCC toolchain env vars
+          echo "✓ Clang version:"
+          "$CLANG_BIN_DIR/clang" --version | head -5
+          
+          echo "Setting up ARM GCC toolchains..."
+          
+          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin" ]; then
+            wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+            tar -xf gcc-arm64.tar.xz
+          fi
+          
+          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin" ]; then
+            wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+            tar -xf gcc-arm32.tar.xz
+          fi
+          
           ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
           if [ -z "$ARM64_DIR" ]; then
-            echo "::error:: ARM64 toolchain directory not found"
+            echo "::error::ARM64 toolchain directory not found"
             exit 1
           fi
           echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
           
           ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
           if [ -z "$ARM32_DIR" ]; then
-            echo "::error:: ARM32 toolchain directory not found"
+            echo "::error::ARM32 toolchain directory not found"
             exit 1
           fi
           echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
-          
-          echo "✓ Clang version:"
-          "$CLANG_BIN_DIR/clang" --version | head -5
           
           echo "✓ ARM64 GCC version:"
           "${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1

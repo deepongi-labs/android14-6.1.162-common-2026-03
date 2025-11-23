@@ -9,351 +9,390 @@ on:
     branches:
       - main
 
+env:
+  CCACHE_DIR: /tmp/ccache
+  CCACHE_MAXSIZE: 2G
+  MAKE_JOBS: ${{ github.runner_arch == 'x64' && 'all' || '2' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole pigz
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip \
+            cpio kmod pahole pigz ninja-build patchelf xxd \
+            rsync file
 
-      - name: Cache Toolchains
+      - name: Cache Toolchains and CCACHE
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/toolchain
-          key: toolchains-v2-${{ hashFiles('.github/workflows/*.yml') }}
+          path: |
+            ${{ github.workspace }}/toolchain
+            /tmp/ccache
+          key: ${{ runner.os }}-toolchains-ccache-${{ hashFiles('.github/workflows/*.yml') }}-v5
           restore-keys: |
-            toolchains-v2-
+            ${{ runner.os }}-toolchains-ccache-
 
       - name: Setup Custom Toolchain
+        id: toolchain
         run: |
-          set -e
-          mkdir -p ${{ github.workspace }}/toolchain
-          cd ${{ github.workspace }}/toolchain
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/toolchain"
+          cd "${{ github.workspace }}/toolchain"
 
-          # Download all toolchains in parallel if not cached
+          # Download toolchains in parallel with retry
+          download_with_retry() {
+            local url="$1"
+            local output="$2"
+            for i in {1..3}; do
+              if wget -q --show-progress -O "$output" "$url"; then
+                return 0
+              fi
+              echo "Download attempt $i failed, retrying..."
+              sleep 5
+            done
+            echo "❌ Failed to download $url after 3 attempts"
+            return 1
+          }
+
+          export -f download_with_retry
+
+          # Download all toolchains in parallel
           (
-            if [ ! -f "clang-toolchain.tar.gz" ]; then
-              wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz" &
-            fi
-            if [ ! -f "gcc-arm64.tar.xz" ]; then
-              wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz" &
-            fi
-            if [ ! -f "gcc-arm32.tar.xz" ]; then
-              wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz" &
-            fi
+            [ ! -f "clang-toolchain.tar.gz" ] && \
+            download_with_retry \
+              "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz" \
+              "clang-toolchain.tar.gz" &
+            
+            [ ! -f "gcc-arm64.tar.xz" ] && \
+            download_with_retry \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz" \
+              "gcc-arm64.tar.xz" &
+            
+            [ ! -f "gcc-arm32.tar.xz" ] && \
+            download_with_retry \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz" \
+              "gcc-arm32.tar.xz" &
             wait
           )
 
-          echo "Extracting toolchains..."
-          rm -rf clang
-          mkdir -p clang
-          tar -xzf clang-toolchain.tar.gz -C clang &
-
-          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu" ]; then
-            tar -xf gcc-arm64.tar.xz &
-          fi
-
-          if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi" ]; then
-            tar -xf gcc-arm32.tar.xz &
-          fi
+          echo "📦 Extracting toolchains..."
+          # Extract in parallel
+          [ ! -d "clang" ] && tar -xzf clang-toolchain.tar.gz -C . && mv Clang-22.0.0git-20250928 clang &
+          [ ! -d "aarch64-gcc" ] && tar -xf gcc-arm64.tar.xz && mv arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu aarch64-gcc &
+          [ ! -d "arm-gcc" ] && tar -xf gcc-arm32.tar.xz && mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc &
           wait
 
-          # Verify Clang
-          if [ ! -d "clang/bin" ]; then
-            echo "::error::Expected clang/bin directory, but it does not exist"
-            find clang -maxdepth 3 -type d -print
-            exit 1
-          fi
+          # Verify toolchains
+          CLANG_BIN="$PWD/clang/bin"
+          ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
+          ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
 
-          CLANG_BIN_DIR="$PWD/clang/bin"
-          echo "CLANG_BIN=$CLANG_BIN_DIR" >> $GITHUB_ENV
+          # Validate toolchain binaries exist
+          for tool in "$CLANG_BIN/clang" "$CLANG_BIN/ld.lld" \
+                      "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
+            if [ ! -f "$tool" ]; then
+              echo "::error::Toolchain binary not found: $tool"
+              exit 1
+            fi
+          done
 
-          if [ ! -f "$CLANG_BIN_DIR/ld.lld" ]; then
-            echo "::error::ld.lld not found in $CLANG_BIN_DIR"
-            ls -la "$CLANG_BIN_DIR"
-            exit 1
-          fi
+          echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
+          echo "ARM64_TOOLCHAIN=$ARM64_TOOLCHAIN" >> $GITHUB_ENV
+          echo "ARM32_TOOLCHAIN=$ARM32_TOOLCHAIN" >> $GITHUB_ENV
 
-          echo "✓ Clang version:"
-          "$CLANG_BIN_DIR/clang" --version | head -3
-
-          # Set GCC toolchain paths - use quotes to handle spaces
-          ARM64_DIR="arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu"
-          if [ ! -d "$ARM64_DIR" ]; then
-            echo "::error::ARM64 toolchain directory '$ARM64_DIR' not found"
-            ls -la
-            exit 1
-          fi
-          echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
-
-          ARM32_DIR="arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi"
-          if [ ! -d "$ARM32_DIR" ]; then
-            echo "::error::ARM32 toolchain directory '$ARM32_DIR' not found"
-            ls -la
-            exit 1
-          fi
-          echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
-
-          # Test and echo the toolchains with proper quoting
-          echo "✓ ARM64 GCC:"
-          "${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1
-          
-          echo "✓ ARM32 GCC:"
-          "${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-gcc" --version | head -1
-          
-          echo "✓ Toolchain setup complete"
-          echo "ARM64_TOOLCHAIN: ${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-"
-          echo "ARM32_TOOLCHAIN: ${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-"
+          echo "✅ Toolchains setup complete"
+          echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
+          echo "aarch64-gcc: $("${ARM64_TOOLCHAIN}gcc" --version | head -1)"
+          echo "arm-gcc: $("${ARM32_TOOLCHAIN}gcc" --version | head -1)"
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: kernel-build-${{ github.ref }}-${{ github.run_number }}
-          restore-keys: |
-            kernel-build-${{ github.ref }}-
-            kernel-build-
-          max-size: 2G
+        run: |
+          sudo apt-get install -y ccache
+          echo "::add-path::/usr/lib/ccache"
+          ccache --show-stats
 
       - name: Clone Kernel Source
         run: |
-          git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
-          cd kernel
-          echo "Kernel version: $(make kernelversion)"
+          if [ ! -d "kernel" ]; then
+            git clone --depth=1 --branch=android14-6.1-2025-09 \
+              https://android.googlesource.com/kernel/common kernel
+          else
+            cd kernel
+            git fetch --depth=1 origin android14-6.1-2025-09
+            git reset --hard origin/android14-6.1-2025-09
+            cd ..
+          fi
 
       - name: Integrate KernelSU
         run: |
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          echo "✓ KernelSU integrated successfully"
+          for i in {1..3}; do
+            if curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main; then
+              echo "✅ KernelSU integrated successfully"
+              break
+            fi
+            echo "⚠️ KernelSU integration attempt $i failed, retrying..."
+            sleep 10
+          done
 
       - name: Clone and Integrate SuSFS
         run: |
-          git clone --depth=1 --branch=gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          if [ ! -d "susfs" ]; then
+            git clone --depth=1 --branch=gki-android14-6.1 \
+              https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          fi
           cd kernel
-          cp ${{ github.workspace }}/susfs/kernel_patches/fs/susfs.c fs/
-          cp ${{ github.workspace }}/susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp ${{ github.workspace }}/susfs/kernel_patches/include/linux/susfs_def.h include/linux/
-          echo "✓ SuSFS files copied successfully"
+          cp ../susfs/kernel_patches/fs/susfs.c fs/
+          cp ../susfs/kernel_patches/include/linux/susfs.h include/linux/
+          cp ../susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          echo "✅ SuSFS files integrated"
 
       - name: Apply All Patches
+        id: patches
         run: |
-          set +e  # Disable exit on error for patch application
+          set +e
           cd kernel
-          
-          # Download all patches first
-          echo "📥 Downloading patches..."
-          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o /tmp/fix-clidr-uninitialized.patch
-          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch" -o /tmp/10_enable_susfs_for_ksu.patch
-          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o /tmp/50_add_susfs_in_gki-android14-6.1.patch
-          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch" -o /tmp/fix_proc_base.patch
-          
-          # Apply patches (continue even if some fail)
-          echo "🔧 Applying patches..."
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix-clidr-uninitialized.patch
-          echo "fix-clidr-uninitialized.patch exit code: $?"
-          
-          if [ -d "KernelSU" ]; then
-            cd KernelSU
-            patch -p1 --forward --no-backup-if-mismatch < /tmp/10_enable_susfs_for_ksu.patch
-            echo "10_enable_susfs_for_ksu.patch exit code: $?"
-            cd ..
-          fi
-          
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/50_add_susfs_in_gki-android14-6.1.patch
-          echo "50_add_susfs_in_gki-android14-6.1.patch exit code: $?"
-          
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix_proc_base.patch
-          echo "fix_proc_base.patch exit code: $?"
-          
-          # Clean up
-          rm -f /tmp/*.patch
-          set -e  # Re-enable exit on error
-          echo "🎉 Patch application completed"
+
+          declare -A PATCH_MAP=(
+            ["fix-clidr-uninitialized"]="."
+            ["10_enable_susfs_for_ksu"]="KernelSU" 
+            ["50_add_susfs_in_gki-android14-6.1"]="."
+            ["fix_proc_base"]="."
+          )
+
+          PATCH_BASE="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main"
+
+          for patch_name in "${!PATCH_MAP[@]}"; do
+            patch_dir="${PATCH_MAP[$patch_name]}"
+            patch_url="$PATCH_BASE/${patch_name}.patch"
+            
+            echo "🔧 Applying $patch_name to $patch_dir/"
+            
+            # Download patch
+            if ! curl -fsSL "$patch_url" -o "/tmp/${patch_name}.patch"; then
+              echo "⚠️ Failed to download $patch_name"
+              continue
+            fi
+
+            # Apply patch
+            if [ "$patch_dir" != "." ]; then
+              if [ ! -d "$patch_dir" ]; then
+                echo "❌ Directory $patch_dir not found, skipping $patch_name"
+                continue
+              fi
+              cd "$patch_dir"
+            fi
+
+            if patch -p1 --forward --no-backup-if-mismatch < "/tmp/${patch_name}.patch" 2>&1; then
+              echo "✅ $patch_name applied successfully"
+            else
+              echo "⚠️ $patch_name failed to apply (may already be applied)"
+            fi
+
+            # Return to kernel root
+            cd "${{ github.workspace }}/kernel"
+            rm -f "/tmp/${patch_name}.patch"
+          done
+
+          set -e
+          echo "🎉 All patches processed"
 
       - name: Configure Kernel
+        id: config
         run: |
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
 
-          CLANG_BIN="${{ env.CLANG_BIN }}"
-          if [ -z "$CLANG_BIN" ] || [ ! -d "$CLANG_BIN" ]; then
-            echo "::error::CLANG_BIN env var not set or directory missing"
-            exit 1
-          fi
+          # Setup environment
           export PATH="$CLANG_BIN:$PATH"
+          export CROSS_COMPILE="$ARM64_TOOLCHAIN"
+          export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
 
-          if [ ! -f "$CLANG_BIN/ld.lld" ]; then
-            echo "::error::ld.lld not found at $CLANG_BIN/ld.lld"
-            exit 1
-          fi
+          echo "⚙️ Generating kernel configuration..."
+          
+          # First generate base GKI config
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
-          echo "✓ Using ld.lld: $(which ld.lld)"
+          # Use scripts/config to modify the config properly
+          CONFIG_SCRIPT="./scripts/config"
+          CONFIG_FILE="out/.config"
 
-          export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
-          export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
-
-          # Apply defconfig modifications as a heredoc (much faster than many echo)
-          cat >> arch/arm64/configs/gki_defconfig << 'EOF'
-          CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_4K_PAGES=y
-          CONFIG_ARM64_TAGGED_ADDR_ABI=y
-          CONFIG_ARM64_PAN=y
-          CONFIG_ARM64_PTR_AUTH=y
-          CONFIG_SCHED_MC=y
-          CONFIG_ENERGY_MODEL=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-          CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y
-          CONFIG_CPU_FREQ=y
-          CONFIG_CPUFREQ_DT=y
-          CONFIG_CPU_IDLE=y
-          CONFIG_ARM_PSCI_CPUIDLE=y
-          CONFIG_THERMAL=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_FAIR_GROUP_SCHED=y
-          CONFIG_ARM64_CORTEX_X3=y
-          CONFIG_ARM64_CORTEX_A715=y
-          CONFIG_ARM64_CORTEX_A510=y
-          CONFIG_COMPACTION=y
-          CONFIG_MQ_IOSCHED_DEADLINE=y
-          CONFIG_IOSCHED_BFQ=y
-          CONFIG_TRANSPARENT_HUGEPAGE=y
-          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
-          CONFIG_ARM64_VA_BITS=48
-          CONFIG_ARM64_SVE=y
-          CONFIG_ARM64_SME=y
-          CONFIG_ARM64_BTI=y
-          CONFIG_SCHED_CORE=y
-          CONFIG_PERF_EVENTS=y
-          CONFIG_OPP=y
-          CONFIG_DEVFREQ_THERMAL=y
-          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-          CONFIG_THERMAL_GOV_STEP_WISE=y
-          CONFIG_THERMAL_GOV_FAIR_SHARE=y
-          CONFIG_THERMAL_EMULATION=y
-          CONFIG_THERMAL_WRITABLE_TRIPS=y
-          CONFIG_POWER_CAP=y
-          CONFIG_NUMA_BALANCING=y
-          CONFIG_CMA=y
-          CONFIG_CMA_AREAS=7
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_CUBIC=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_NET_SCH_CAKE=y
-          CONFIG_DEFAULT_FQ=y
-          CONFIG_DEFAULT_TCP_CONG="bbr"
-          CONFIG_F2FS_FS=y
-          CONFIG_F2FS_FS_XATTR=y
-          CONFIG_F2FS_FS_POSIX_ACL=y
-          CONFIG_F2FS_FS_SECURITY=y
-          CONFIG_LOCALVERSION_AUTO=n
-          CONFIG_KSU=y
-          CONFIG_KSU_KPROBES_HOOK=n
-          CONFIG_KSU_DEBUG=n
-          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP6_NF_MATCH_HL=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CCACHE=y
-          CONFIG_TCP_CONG_BIC=n
-          CONFIG_TCP_CONG_WESTWOOD=n
-          CONFIG_TCP_CONG_HTCP=n
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=256
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_LTO_CLANG_THIN=y
-          # CONFIG_LTO_CLANG_FULL is not set
-          CONFIG_LOCALVERSION="-deepongi"
-          EOF
+          # Enable all required configs
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PA_BITS_48
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_4K_PAGES
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_TAGGED_ADDR_ABI
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PAN
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PTR_AUTH
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_SCHED_MC
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ENERGY_MODEL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ_GOV_SCHEDUTIL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_UCLAMP_TASK
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_UCLAMP_TASK_GROUP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPUFREQ_DT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_IDLE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM_PSCI_CPUIDLE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_THERMAL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_FAIR_GROUP_SCHED
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_X3
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_A715
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_A510
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_COMPACTION
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_MQ_IOSCHED_DEADLINE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IOSCHED_BFQ
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TRANSPARENT_HUGEPAGE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TRANSPARENT_HUGEPAGE_MADVISE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_VA_BITS_48
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_SVE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_SME
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_BTI
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_SCHED_CORE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_PERF_EVENTS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_OPP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_DEVFREQ_THERMAL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_POWER_ALLOCATOR
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_STEP_WISE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_FAIR_SHARE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_EMULATION
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_WRITABLE_TRIPS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_POWER_CAP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NUMA_BALANCING
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CMA
+          $CONFIG_SCRIPT --file $CONFIG_FILE --set-val CONFIG_CMA_AREAS 7
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_ADVANCED
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_CUBIC
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_FQ
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_FQ_CODEL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_CAKE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_DEFAULT_FQ
+          $CONFIG_SCRIPT --file $CONFIG_FILE --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_XATTR
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_POSIX_ACL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_SECURITY
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_LOCALVERSION_AUTO
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_KPROBES_HOOK
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_DEBUG
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_ALLOWLIST_WORKAROUND
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_LSM_SECURITY_HOOKS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_PATH
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_MOUNT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_KSTAT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_TRY_UMOUNT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SPOOF_UNAME
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_ENABLE_LOG
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_MAP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TMPFS_XATTR
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TMPFS_POSIX_ACL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_NF_TARGET_TTL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP6_NF_TARGET_HL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP6_NF_MATCH_HL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_BBR
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CCACHE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_BIC
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_WESTWOOD
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_HTCP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET
+          $CONFIG_SCRIPT --file $CONFIG_FILE --set-val CONFIG_IP_SET_MAX 256
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_IP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_IPMAC
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_PORT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORTIP
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORTNET
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NET
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETNET
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETPORT
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETIFACE
+          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_LTO_CLANG_THIN
+          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_LTO_CLANG_FULL
+          $CONFIG_SCRIPT --file $CONFIG_FILE --set-str CONFIG_LOCALVERSION "-deepongi"
 
           # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
 
-          echo "✓ Generating kernel config..."
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out gki_defconfig
+          # Final config generation to resolve dependencies
+          echo "🔧 Running olddefconfig to resolve dependencies..."
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
+
+          echo "✅ Kernel configuration complete"
+          echo "📋 Final config summary:"
+          grep -E "CONFIG_(KSU|SUSFS|LTO|ARM64)" out/.config | head -20
 
       - name: Build Kernel
         id: build
-        continue-on-error: true
+        continue-on-error: false
         run: |
-          START_TIME=$(date +%s)
-
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
 
-          CLANG_BIN="${{ env.CLANG_BIN }}"
+          # Setup build environment
           export PATH="$CLANG_BIN:$PATH"
-          export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
-          export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
+          export CROSS_COMPILE="$ARM64_TOOLCHAIN" 
+          export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
 
-          echo "✓ Starting kernel build with $(nproc) cores..."
+          # Build flags for optimization
+          export KBUILD_BUILD_TIMESTAMP=$(date -u -d "@$SOURCE_DATE_EPOCH")
+          export KBUILD_BUILD_USER=github-actions
+          export KBUILD_BUILD_HOST=github
 
+          echo "🏗️ Starting kernel build with $(nproc) cores..."
+          echo "📊 CCACHE stats before build:"
+          ccache -s
+
+          START_TIME=$SECONDS
+
+          # Build with detailed output but only show errors in real-time
           make -j$(nproc) \
             LLVM_IAS=1 \
             LLVM=1 \
             ARCH=arm64 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
-            CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
+            CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN" \
+            CROSS_COMPILE="$ARM64_TOOLCHAIN" \
             CC="ccache clang" \
             LD=ld.lld \
             HOSTLD=ld.lld \
             O=out \
-            2>&1 | tee build.log
+            2>&1 | tee build.log | grep -E "(error|warning|Error|Warning|FAILED)"
 
-          END_TIME=$(date +%s)
-          BUILD_DURATION=$((END_TIME - START_TIME))
-          BUILD_DURATION_MIN=$((BUILD_DURATION / 60))
-          BUILD_DURATION_SEC=$((BUILD_DURATION % 60))
+          BUILD_STATUS=${PIPESTATUS[0]}
+          BUILD_TIME=$((SECONDS - START_TIME))
 
-          if [ -f out/arch/arm64/boot/Image.gz ]; then
-            echo "✅ Kernel built successfully in ${BUILD_DURATION_MIN}m ${BUILD_DURATION_SEC}s"
-            echo "BUILD_TIME=$BUILD_DURATION" >> $GITHUB_ENV
-            echo "BUILD_TIME_MIN=$BUILD_DURATION_MIN" >> $GITHUB_ENV
-            echo "BUILD_TIME_SEC=$BUILD_DURATION_SEC" >> $GITHUB_ENV
-            exit 0
+          echo "📊 CCACHE stats after build:"
+          ccache -s
+
+          if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image.gz ]; then
+            echo "✅ Kernel built successfully in ${BUILD_TIME}s"
+            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+            echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "::error::Kernel build failed - Image.gz not found"
-            echo "BUILD_TIME=$BUILD_DURATION" >> $GITHUB_ENV
-            echo "BUILD_TIME_MIN=$BUILD_DURATION_MIN" >> $GITHUB_ENV
-            echo "BUILD_TIME_SEC=$BUILD_DURATION_SEC" >> $GITHUB_ENV
+            echo "❌ Kernel build failed after ${BUILD_TIME}s"
+            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV  
+            echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             exit 1
           fi
 
@@ -361,98 +400,110 @@ jobs:
         if: failure() && steps.build.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-failed-${{ github.run_number }}
-          path: kernel/build.log
-          retention-days: 7
-
-      - name: Check Build Success
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "::error::Kernel build failed! Check the uploaded build log artifact for details."
-          exit 1
+          name: build-failure-logs-${{ github.run_number }}
+          path: |
+            kernel/build.log
+            kernel/out/.config
+          retention-days: 30
 
       - name: Prepare AnyKernel3
+        if: success()
         run: |
-          git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          git clone --depth=1 --branch=KernelSU \
+            https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
           cd AnyKernel3
-          rm -rf .git
+          rm -rf .git .github
 
-          cp ../kernel/out/arch/arm64/boot/Image.gz ./ || { echo "::error::Image.gz not found"; exit 1; }
+          # Copy kernel artifacts
+          cp ../kernel/out/arch/arm64/boot/Image.gz ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
-          echo "✓ AnyKernel3 prepared"
+
+          # Add build info
+          echo "build.date=$(date -u +%Y-%m-%d)" > build.info
+          echo "build.commit=${{ github.sha }}" >> build.info
+          echo "build.run=${{ github.run_number }}" >> build.info
+
+          echo "✅ AnyKernel3 prepared"
 
       - name: Package Kernel
+        if: success()
         run: |
           cd AnyKernel3
-          VERSION="$(cat ../kernel/out/.config | grep "Linux/arm64" | awk '{print $3}' || echo "6.1.145")"
-          DATE="$(date +%Y%m%d_%H%M)"
-          ZIP_NAME="GKI-KernelSU-SuSFS-${VERSION}-${DATE}.zip"
+          KERNEL_VERSION="6.1.145"
+          TIMESTAMP=$(date +%Y%m%d_%H%M)
+          ZIP_NAME="GKI-KernelSU-SuSFS-${KERNEL_VERSION}-${TIMESTAMP}.zip"
 
-          # Use pigz for faster compression if installed
-          if command -v pigz &> /dev/null; then
-            tar cf - . | pigz -9 > "../${ZIP_NAME%.zip}.tar.gz"
-            mv "../${ZIP_NAME%.zip}.tar.gz" "../$ZIP_NAME"
-          else
-            zip -r9 "../$ZIP_NAME" * -x .git README.md ./*placeholder
-          fi
+          # Create flashable zip
+          zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
+
+          # Generate checksums
           cd ..
-          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
-
-          SIZE=$(du -h "$ZIP_NAME" | cut -f1)
-          echo "✅ Kernel packaged: $ZIP_NAME ($SIZE)"
-
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
-          echo "SHA256: $(cat ${ZIP_NAME}.sha256)"
+          md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
 
-      - name: Upload Kernel ZIP
+          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+          
+          echo "📦 Package created: $ZIP_NAME ($(du -h $ZIP_NAME | cut -f1))"
+          echo "📄 SHA256: $(cat ${ZIP_NAME}.sha256)"
+          echo "📄 MD5: $(cat ${ZIP_NAME}.md5)"
+
+      - name: Upload Kernel Artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KERNEL_ZIP }}
+          name: kernel-build-${{ github.run_number }}
           path: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
+            ${{ env.KERNEL_ZIP }}.md5
+          retention-days: 30
 
       - name: Create Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && success()
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}
-          name: Kernel Build ${{ github.run_number }}
+          name: "Kernel Build #${{ github.run_number }}"
           body: |
-            ## 🎉 GKI Kernel Build #${{ github.run_number }}
-            
-            **Build Time:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s
-            **Kernel Version:** 6.1.145
-            **Branch:** android14-6.1-2025-09
-            **Commit:** ${{ github.sha }}
-            
-            ### Integrated Components
-            - ✅ **KernelSU** (main branch)
-            - ✅ **SuSFS** (gki-android14-6.1)
-            - ✅ **Clang 22.0.0** (ZyCromerZ)
-            - ✅ **LTO:** ThinLTO
-            
-            ### Features
-            - ARM64 optimization (Cortex-X3/A715/A510)
-            - BBR TCP congestion control
-            - F2FS filesystem support
-            - Enhanced thermal management
-            - IP sets and netfilter support
-            
-            ### Installation
-            1. Download the kernel ZIP below
-            2. Verify SHA256 checksum
-            3. Boot to recovery (TWRP/OrangeFox)
-            4. Flash the ZIP
-            5. Reboot and enjoy!
-            
-            ### SHA256
+            ## 🚀 GKI Kernel with KernelSU & SuSFS
+
+            **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
+
+            ### 📊 Build Info
+            - **Duration:** ${{ env.BUILD_TIME }} seconds
+            - **Kernel:** 6.1.145
+            - **Branch:** android14-6.1-2025-09
+            - **Commit:** ${{ github.sha }}
+
+            ### 🔧 Features
+            - ✅ KernelSU (main branch)
+            - ✅ SuSFS (gki-android14-6.1)
+            - ✅ Clang 22.0.0 + ThinLTO
+            - ✅ ARM64 optimizations
+            - ✅ BBR TCP congestion control
+            - ✅ Enhanced security hooks
+
+            ### 📦 Checksums
+            **SHA256:**
             ```
             $(cat ${{ env.KERNEL_ZIP }}.sha256)
             ```
+            **MD5:**
+            ```
+            $(cat ${{ env.KERNEL_ZIP }}.md5)
+            ```
+
+            ### ⚡ Installation
+            1. Download the ZIP file
+            2. Verify checksums
+            3. Flash in custom recovery
+            4. Reboot and enjoy!
+
+            > ⚠️ Always backup before flashing!
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
+            ${{ env.KERNEL_ZIP }}.md5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

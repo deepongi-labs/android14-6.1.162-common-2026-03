@@ -66,8 +66,6 @@ jobs:
             return 1
           }
 
-          export -f download_with_retry
-
           # Download all toolchains in parallel
           (
             [ ! -f "clang-toolchain.tar.gz" ] && \
@@ -88,22 +86,72 @@ jobs:
           )
 
           echo "📦 Extracting toolchains..."
-          # Extract in parallel
-          [ ! -d "clang" ] && tar -xzf clang-toolchain.tar.gz -C . && mv Clang-22.0.0git-20250928 clang &
-          [ ! -d "aarch64-gcc" ] && tar -xf gcc-arm64.tar.xz && mv arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu aarch64-gcc &
-          [ ! -d "arm-gcc" ] && tar -xf gcc-arm32.tar.xz && mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc &
+          # Extract in parallel and handle directory names properly
+          if [ ! -d "clang" ]; then
+            tar -xzf clang-toolchain.tar.gz -C .
+            # Find the actual extracted directory name
+            CLANG_DIR=$(find . -maxdepth 1 -type d -name "Clang*" -o -name "clang*" | head -1)
+            if [ -n "$CLANG_DIR" ]; then
+              mv "$CLANG_DIR" clang
+              echo "✓ Clang extracted and renamed from $CLANG_DIR to clang"
+            else
+              echo "❌ Could not find extracted Clang directory"
+              ls -la
+              exit 1
+            fi
+          fi &
+
+          if [ ! -d "aarch64-gcc" ]; then
+            tar -xf gcc-arm64.tar.xz
+            ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" -o -name "*arm-gnu*" | head -1)
+            if [ -n "$ARM64_DIR" ]; then
+              mv "$ARM64_DIR" aarch64-gcc
+              echo "✓ ARM64 GCC extracted and renamed from $ARM64_DIR to aarch64-gcc"
+            else
+              echo "❌ Could not find extracted ARM64 GCC directory"
+              ls -la
+              exit 1
+            fi
+          fi &
+
+          if [ ! -d "arm-gcc" ]; then
+            tar -xf gcc-arm32.tar.xz
+            ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" -o -name "*arm-gnu*" | head -1)
+            if [ -n "$ARM32_DIR" ]; then
+              mv "$ARM32_DIR" arm-gcc
+              echo "✓ ARM32 GCC extracted and renamed from $ARM32_DIR to arm-gcc"
+            else
+              echo "❌ Could not find extracted ARM32 GCC directory"
+              ls -la
+              exit 1
+            fi
+          fi &
+          
           wait
 
-          # Verify toolchains
+          # Verify toolchains exist
+          echo "🔍 Verifying toolchain directories..."
+          for dir in clang aarch64-gcc arm-gcc; do
+            if [ ! -d "$dir" ]; then
+              echo "::error::Toolchain directory $dir not found"
+              echo "Current directory contents:"
+              ls -la
+              exit 1
+            fi
+          done
+
           CLANG_BIN="$PWD/clang/bin"
           ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
           ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
 
           # Validate toolchain binaries exist
+          echo "🔍 Checking toolchain binaries..."
           for tool in "$CLANG_BIN/clang" "$CLANG_BIN/ld.lld" \
                       "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
             if [ ! -f "$tool" ]; then
               echo "::error::Toolchain binary not found: $tool"
+              echo "Available files in $(dirname "$tool"):"
+              ls -la "$(dirname "$tool")" || true
               exit 1
             fi
           done

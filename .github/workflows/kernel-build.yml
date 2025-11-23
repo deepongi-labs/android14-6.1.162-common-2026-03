@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole
           
       - name: Setup Custom Toolchain
         run: |
@@ -33,15 +33,15 @@ jobs:
           tar -xzf clang.tar.gz -C clang --strip-components=1
           export CLANG_PATH="${{ github.workspace }}/toolchain/clang/bin"
           
-          wget -O gcc-arm64.tar.gz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
-          mkdir -p gcc-arm64
-          tar -xzf gcc-arm64.tar.gz -C gcc-arm64 --strip-components=1
-          export GCC_ARM64_PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin"
+          # ARM64
+          wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+          tar -xf gcc-arm64.tar.xz
+          echo "ARM64_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
           
-          wget -O gcc-arm32.tar.gz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
-          mkdir -p gcc-arm32
-          tar -xzf gcc-arm32.tar.gz -C gcc-arm32 --strip-components=1
-          export GCC_ARM32_PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin"
+          # ARM32
+          wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+          tar -xf gcc-arm32.tar.xz
+          echo "ARM32_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-" >> $GITHUB_ENV
           
           if [ -d "clang/bin" ]; then
             export PATH="${{ github.workspace }}/toolchain/clang/bin:$PATH"

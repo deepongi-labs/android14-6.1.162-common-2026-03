@@ -425,7 +425,8 @@ jobs:
 
           START_TIME=$SECONDS
 
-          # Build with detailed output but only show errors in real-time
+          # Build with normal output (shows file compilation progress)
+          echo "🔧 Building with full compilation output..."
           make -j$(nproc) \
             LLVM_IAS=1 \
             LLVM=1 \
@@ -437,7 +438,7 @@ jobs:
             LD=ld.lld \
             HOSTLD=ld.lld \
             O=out \
-            2>&1 | tee build.log | grep -E "(error|warning|Error|Warning|FAILED)"
+            2>&1 | tee build.log
 
           BUILD_STATUS=${PIPESTATUS[0]}
           BUILD_TIME=$((SECONDS - START_TIME))
@@ -445,7 +446,7 @@ jobs:
           echo "📊 CCACHE stats after build:"
           ccache -s
 
-          if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image.gz ]; then
+          if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image ]; then
             echo "✅ Kernel built successfully in ${BUILD_TIME}s"
             echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
@@ -474,8 +475,8 @@ jobs:
           cd AnyKernel3
           rm -rf .git .github
 
-          # Copy kernel artifacts
-          cp ../kernel/out/arch/arm64/boot/Image.gz ./
+          # Copy kernel artifacts - using Image instead of Image.gz
+          cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
@@ -484,8 +485,7 @@ jobs:
           echo "build.commit=${{ github.sha }}" >> build.info
           echo "build.run=${{ github.run_number }}" >> build.info
 
-          echo "✅ AnyKernel3 prepared"
-
+          echo "✅ AnyKernel3 prepared with uncompressed Image"
       - name: Package Kernel
         if: success()
         run: |

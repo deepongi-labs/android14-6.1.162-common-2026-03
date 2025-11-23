@@ -142,7 +142,7 @@ jobs:
             "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
             "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
           )
-
+          
           for entry in "${PATCHES[@]}"; do
             IFS=':' read -r url dir <<< "$entry"
             echo "Applying $(basename "$url") in $dir/"
@@ -154,6 +154,7 @@ jobs:
             fi
             cd "${{ github.workspace }}/kernel"
           done
+
 
       - name: Configure Kernel
         run: |

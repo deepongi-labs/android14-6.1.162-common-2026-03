@@ -84,23 +84,33 @@ jobs:
           echo "✓ Clang version:"
           "$CLANG_BIN_DIR/clang" --version | head -3
 
-          # Set GCC toolchain paths
-          ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
-          if [ -z "$ARM64_DIR" ]; then
-            echo "::error::ARM64 toolchain directory not found"
+          # Set GCC toolchain paths - use quotes to handle spaces
+          ARM64_DIR="arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu"
+          if [ ! -d "$ARM64_DIR" ]; then
+            echo "::error::ARM64 toolchain directory '$ARM64_DIR' not found"
+            ls -la
             exit 1
           fi
           echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
 
-          ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
-          if [ -z "$ARM32_DIR" ]; then
-            echo "::error::ARM32 toolchain directory not found"
+          ARM32_DIR="arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi"
+          if [ ! -d "$ARM32_DIR" ]; then
+            echo "::error::ARM32 toolchain directory '$ARM32_DIR' not found"
+            ls -la
             exit 1
           fi
           echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
 
-          echo "✓ ARM64 GCC: $("${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1)"
+          # Test and echo the toolchains with proper quoting
+          echo "✓ ARM64 GCC:"
+          "${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1
+          
+          echo "✓ ARM32 GCC:"
+          "${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-gcc" --version | head -1
+          
           echo "✓ Toolchain setup complete"
+          echo "ARM64_TOOLCHAIN: ${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-"
+          echo "ARM32_TOOLCHAIN: ${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-"
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2

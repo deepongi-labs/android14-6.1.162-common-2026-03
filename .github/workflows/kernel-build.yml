@@ -329,10 +329,3 @@ jobs:
             ${{ env.KERNEL_ZIP }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-📋 Copy to Clipboard
-📚 Next Steps
-Create .github/workflows/ directory in your repository
-Save the generated workflow as build-kernel.yml
-Commit and push to trigger the workflow
-Go to Actions tab to monitor the build
-Download the kernel ZIP from Releases when complete

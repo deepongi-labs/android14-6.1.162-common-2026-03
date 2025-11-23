@@ -132,29 +132,28 @@ jobs:
           cp ${{ github.workspace }}/susfs/kernel_patches/include/linux/susfs_def.h include/linux/
           echo "✓ SuSFS files copied successfully"
 
-      - name: Apply All Patches
-        run: |
-          cd kernel
-
-          PATCHES=(
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch:."
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch:KernelSU"
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
-          )
-          
-          for entry in "${PATCHES[@]}"; do
-            IFS=':' read -r url dir <<< "$entry"
-            echo "Applying $(basename "$url") in $dir/"
-            cd "$dir"
-            if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
-              echo "✓ Patch $(basename "$url") applied successfully"
-            else
-              echo "⚠ Patch $(basename "$url") failed or already applied, continuing..."
-            fi
-            cd "${{ github.workspace }}/kernel"
-          done
-
+          - name: Apply All Patches
+            run: |
+              cd kernel
+        
+              PATCHES=(
+                "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch:."
+                "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch:KernelSU"
+                "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
+                "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
+              )
+        
+              for entry in "${PATCHES[@]}"; do
+                IFS=':' read -r url dir <<< "$entry"
+                echo "Applying $(basename "$url") to $dir/"
+                cd "$dir"
+                if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
+                  echo "✓ Patch applied successfully"
+                else
+                  echo "⚠ Patch failed or already applied, continuing..."
+                fi
+                cd "${{ github.workspace }}/kernel"
+              done
 
       - name: Configure Kernel
         run: |

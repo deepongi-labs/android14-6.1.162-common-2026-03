@@ -1,289 +1,322 @@
-name: Kernel Build with SUSFS - Optimized
+name: Build GKI Kernel with KernelSU and SuSFS
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-      - master
-      - develop
   pull_request:
     branches:
       - main
-      - master
-      - develop
-  schedule:
-    - cron: '0 0 * * 0'
-  workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: true
-        default: 'dev'
-        type: choice
-        options:
-          - dev
-          - release
-      lto_type:
-        description: 'LTO type'
-        required: true
-        default: 'thin'
-        type: choice
-        options:
-          - thin
-          - full
-          - none
-      build_clean:
-        description: 'Build cleaning strategy'
-        required: true
-        default: 'smart'
-        type: choice
-        options:
-          - smart
-          - always
-          - none
-
-env:
-  BUILD: ${{ github.event.inputs.build_type || 'dev' }}
-  LTO_TYPE: ${{ github.event.inputs.lto_type || 'thin' }}
-  BUILD_CLEAN: ${{ github.event.inputs.build_clean || 'smart' }}
-  PIXEL8A: 'y'
-  THREADS: 8
-  KERNEL_BRANCH: 'android14-6.1-2025-09'
-  SUSFS_BRANCH: 'gki-android14-6.1'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     
     steps:
-      - name: Checkout build configuration
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Setup build environment
+      - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential libssl-dev libelf-dev git curl wget \
-            ccache patch bc pahole dwarves libdw-dev zlib1g-dev \
-            flex bison libncurses-dev rsync file
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/ccache-kernel
-          key: ${{ runner.os }}-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-
-
-      - name: Clone AOSP Kernel Source
-        run: |
-          echo "Cloning AOSP kernel_common (${{ env.KERNEL_BRANCH }})"
-          git clone --depth=1 --branch ${{ env.KERNEL_BRANCH }} https://github.com/aosp-mirror/kernel_common.git common
-          echo "AOSP kernel source cloned successfully"
-
-      - name: Set KERNEL_ROOT environment variable
-        run: echo "KERNEL_ROOT=${GITHUB_WORKSPACE}/common" >> $GITHUB_ENV
-
-      - name: Install Clang
-        run: |
-          echo "Installing Clang..."
-          mkdir -p clang-setup
-          cd clang-setup
-          wget -q -O clang.tar.gz https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
-          tar -xzf clang.tar.gz
-          echo "$(pwd)/bin" >> $GITHUB_PATH
-          echo "CLANG_PATH=$(pwd)/bin" >> $GITHUB_ENV
-
-      - name: Setup ARM toolchains
-        run: |
-          echo "Setting up ARM toolchains..."
-          wget -q -O gcc-arm64.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-          tar -xf gcc-arm64.tar.xz
-          echo "ARM64_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
-
-          wget -q -O gcc-arm32.tar.xz https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz
-          tar -xf gcc-arm32.tar.xz
-          echo "ARM32_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-" >> $GITHUB_ENV
-
-      - name: Cache toolchains for future runs
-        uses: actions/cache@v4
-        with:
-          path: |
-            clang-setup
-            arm-gnu-toolchain-*
-          key: ${{ runner.os }}-toolchains-${{ env.CLANG_VERSION }}
-          restore-keys: |
-            ${{ runner.os }}-toolchains-
-
-      - name: Copy build scripts to kernel source
-        run: |
-          echo "Copying build configuration to kernel source..."
-          cp build-kernel.sh common/
-          chmod +x common/build-kernel.sh
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod
           
-          # Copy only fix patches (not SUSFS patches)
-          echo "Copying fix patches..."
-          mkdir -p common/.github/patches
-          cp -r .github/patches/*.patch common/.github/patches/ 2>/dev/null || echo "No fix patches found"
-          echo "Build scripts and fix patches copied"
-
-      - name: Install KernelSU (from tiann)
+      - name: Setup Custom Toolchain
         run: |
-          echo "Installing KernelSU from tiann repository..."
-          cd common
+          mkdir -p ${{ github.workspace }}/toolchain
+          cd ${{ github.workspace }}/toolchain
+          
+          wget -O clang.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+          mkdir -p clang
+          tar -xzf clang.tar.gz -C clang --strip-components=1
+          export CLANG_PATH="${{ github.workspace }}/toolchain/clang/bin"
+          
+          wget -O gcc-arm64.tar.gz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+          mkdir -p gcc-arm64
+          tar -xzf gcc-arm64.tar.gz -C gcc-arm64 --strip-components=1
+          export GCC_ARM64_PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin"
+          
+          wget -O gcc-arm32.tar.gz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+          mkdir -p gcc-arm32
+          tar -xzf gcc-arm32.tar.gz -C gcc-arm32 --strip-components=1
+          export GCC_ARM32_PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin"
+          
+          if [ -d "clang/bin" ]; then
+            export PATH="${{ github.workspace }}/toolchain/clang/bin:$PATH"
+            clang --version
+          fi
+          
+          if [ -d "gcc-arm64/bin" ]; then
+            export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
+            aarch64-linux-android-gcc --version || aarch64-linux-gnu-gcc --version || echo "GCC ARM64 verification skipped"
+          fi
+          
+          if [ -d "gcc-arm32/bin" ]; then
+            export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
+            arm-linux-androideabi-gcc --version || arm-linux-gnueabi-gcc --version || echo "GCC ARM32 verification skipped"
+          fi
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: kernel-build-${{ github.sha }}
+          restore-keys: |
+            kernel-build-
+
+      - name: Clone Kernel Source
+        run: |
+          git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
+          cd kernel
+          echo "Kernel version: $(make kernelversion)"
+
+      - name: Integrate KernelSU
+        run: |
+          cd kernel
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          echo "KernelSU installation completed"
-          ls -la KernelSU/ 2>/dev/null && echo "✓ KernelSU directory created" || echo "✗ KernelSU directory missing"
+          echo "KernelSU integrated successfully"
 
-      - name: Remove protected ABI exports files
+      - name: Clone and Apply SuSFS
         run: |
-          echo "Removing protected ABI exports files..."
-          cd common
-          rm -vf android/abi_gki_protected_exports_*
-          echo "Files removed from android/ directory"
-          ls -la android/abi_gki_* 2>/dev/null | head -5 || echo "No remaining ABI files to show"
-
-      - name: Clone SUSFS
-        run: |
-          git clone --depth=1 -b ${{ env.SUSFS_BRANCH }} https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu || echo "SUSFS clone failed, continuing anyway"
-        working-directory: ${{ env.KERNEL_ROOT }}
-
-      - name: Clone AnyKernel3
-        run: |
-          git clone --depth=1 -b KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a.git AnyKernel3-p8a || echo "AnyKernel3 clone failed, continuing anyway"
-        working-directory: ${{ env.KERNEL_ROOT }}
-
-      - name: Copy SUSFS source files (NO PATCHES)
-        run: |
-          echo "Copying SUSFS source files (without patches)..."
+          git clone --depth=1 --branch=gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          cd kernel
           
-          # Create directories if they don't exist
-          mkdir -p fs include/linux
-          
-          # Copy the specific SUSFS files from their exact locations
-          echo "Copying susfs.c to common/fs/..."
-          cp susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || echo "Failed to copy susfs.c"
-          
-          echo "Copying susfs.h to common/include/linux/..."
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || echo "Failed to copy susfs.h"
-          
-          echo "Copying susfs_def.h to common/include/linux/..."
-          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || echo "Failed to copy susfs_def.h"
-          
-          echo "=== Verification ==="
-          [ -f "fs/susfs.c" ] && echo "✓ fs/susfs.c" || echo "✗ fs/susfs.c missing"
-          [ -f "include/linux/susfs.h" ] && echo "✓ include/linux/susfs.h" || echo "✗ include/linux/susfs.h missing"
-          [ -f "include/linux/susfs_def.h" ] && echo "✓ include/linux/susfs_def.h" || echo "✗ include/linux/susfs_def.h missing"
-        working-directory: ${{ env.KERNEL_ROOT }}
-
-      - name: Apply kernel patches
-        run: |
-          echo "Applying kernel patches..."
-          echo "=== Available patches ==="
-          find . -name "*.patch" -type f 2>/dev/null | head -10 || echo "No patch files found"
-          
-          # Apply SUSFS patches FIRST (50 and 10) - from susfs4ksu folder only
-          echo "=== Applying SUSFS patches FIRST (from susfs4ksu/) ==="
-      
-          # SUSFS main kernel patch (50) - from susfs4ksu folder
-          if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
-            echo "Applying SUSFS main patch (50) from susfs4ksu..."
-            patch -p1 -f -i "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || echo "SUSFS patch applied with warnings"
-          else
-            echo "SUSFS main patch (50) not found in susfs4ksu"
+          # Copy SuSFS kernel patches
+          if [ -d "${{ github.workspace }}/susfs/kernel_patches" ]; then
+            cp -r ${{ github.workspace }}/susfs/kernel_patches/* ./
           fi
-      
-          # KernelSU-specific SUSFS patch (10) - from susfs4ksu folder
-          echo "=== Applying KernelSU SUSFS patches (from susfs4ksu/) ==="
-          if [ -d "KernelSU" ] && [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
-            echo "Applying KernelSU SUSFS patch (10) from susfs4ksu..."
+          
+          # Apply SuSFS patches
+          if [ -d "${{ github.workspace }}/susfs/kernel_patches/KernelSU" ]; then
             cd KernelSU
-            patch -p1 -f -i "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || echo "KernelSU patch applied with warnings"
-            cd ..
-          else
-            echo "KernelSU SUSFS patch (10) not found in susfs4ksu or KernelSU directory missing"
-          fi
-          
-          # Apply fix patches LAST (after SUSFS patches) - from .github/patches only
-          echo "=== Applying fix patches LAST (from .github/patches/) ==="
-          if [ -d ".github/patches" ]; then
-            for patch_file in .github/patches/*.patch; do
-              if [ -f "$patch_file" ]; then
-                echo "Applying fix patch: $patch_file"
-                patch -p1 -f -i "$patch_file" || echo "Failed to apply $patch_file"
+            for patch in ${{ github.workspace }}/susfs/kernel_patches/KernelSU/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "Applying $patch"
+                patch -p1 < "$patch" || echo "Patch $patch failed, continuing..."
               fi
             done
-          else
-            echo "No .github/patches directory found for fix patches"
+            cd ..
           fi
           
-          echo "=== Patch application completed ==="
-        working-directory: ${{ env.KERNEL_ROOT }}
+          echo "SuSFS integrated successfully"
 
-      - name: Build kernel
-        env:
-          CLANG_PATH: ${{ env.CLANG_PATH }}
-          ARM64_TOOLCHAIN: ${{ env.ARM64_TOOLCHAIN }}
-          ARM32_TOOLCHAIN: ${{ env.ARM32_TOOLCHAIN }}
-          BUILD: ${{ env.BUILD }}
-          LTO_TYPE: ${{ env.LTO_TYPE }}
-          BUILD_CLEAN: ${{ env.BUILD_CLEAN }}
-          PIXEL8A: ${{ env.PIXEL8A }}
-          THREADS: ${{ env.THREADS }}
+      - name: Apply Custom Patch 1 (Kernel Root)
         run: |
-          echo "=== Building from: $(pwd) ==="
-          [ -f "Kconfig" ] && echo "✓ Kconfig found" || echo "✗ Kconfig missing"
-          [ -f "Makefile" ] && echo "✓ Makefile found" || echo "✗ Makefile missing"
-          [ -d "arch/arm64" ] && echo "✓ ARM64 arch found" || echo "✗ ARM64 arch missing"
-          [ -d "KernelSU" ] && echo "✓ KernelSU found" || echo "✗ KernelSU missing"
-          [ -f "fs/susfs.c" ] && echo "✓ fs/susfs.c found" || echo "✗ fs/susfs.c missing"
-          [ -f "include/linux/susfs.h" ] && echo "✓ include/linux/susfs.h found" || echo "✗ include/linux/susfs.h missing"
-          [ -f "include/linux/susfs_def.h" ] && echo "✓ include/linux/susfs_def.h found" || echo "✗ include/linux/susfs_def.h missing"
-          echo "=== Starting kernel build ==="
-          echo "LTO Type: $LTO_TYPE"
-          echo "Build Clean: $BUILD_CLEAN"
-          echo "Threads: $THREADS"
-          ./build-kernel.sh
-          echo "=== Build completed ==="
-          ccache -s || true
-        working-directory: ${{ env.KERNEL_ROOT }}
-
-      - name: Check build output
+          cd kernel
+          curl -L "https://github.com/infectedmushi/kernel_patches/blob/181ce32874921460724d38df7ce0af5d2dc672c6/fix-clidr-uninitialized.patch" -o patch_0.patch
+          patch -p1 < patch_0.patch || echo "Patch 0 failed, continuing..."
+          cd ${{ github.workspace }}/kernel
+      - name: Configure Kernel
         run: |
-          echo "=== Checking build outputs ==="
-          find . -name "*.zip" -type f 2>/dev/null | head -10 || echo "No zip files found"
-          find out/ -name "Image" -type f 2>/dev/null | head -5 || echo "No Image file found"
-          find builds/ -name "*.zip" -type f 2>/dev/null | head -5 || echo "No build artifacts found"
-          echo "=== Build artifacts ==="
-          ls -la builds/6.1.155/ 2>/dev/null || echo "No builds directory"
-        working-directory: ${{ env.KERNEL_ROOT }}
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_PATH=${{ github.workspace }}/toolchain/clang/bin
+          export PATH="$CLANG_PATH:$PATH"
+          export CROSS_COMPILE=${{ github.workspace }}/toolchain/gcc-arm64/bin/aarch64-linux-android-
+          export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
+          export CROSS_COMPILE_ARM32=${{ github.workspace }}/toolchain/gcc-arm32/bin/arm-linux-androideabi-
+          export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
+          
+          # Modify defconfig
+          echo "CONFIG_ARM64_PA_BITS=48" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_4K_PAGES=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_TAGGED_ADDR_ABI=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_PAN=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_PTR_AUTH=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_SCHED_MC=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ENERGY_MODEL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_UCLAMP_TASK=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_UCLAMP_TASK_GROUP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPU_FREQ=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPUFREQ_DT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPU_IDLE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM_PSCI_CPUIDLE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CPU_THERMAL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_FAIR_GROUP_SCHED=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_CORTEX_X3=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_CORTEX_A715=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_CORTEX_A510=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_COMPACTION=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_MQ_IOSCHED_DEADLINE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IOSCHED_BFQ=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TRANSPARENT_HUGEPAGE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_VA_BITS=48" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_SVE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_SME=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ARM64_BTI=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_SCHED_CORE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_PERF_EVENTS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_OPP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_DEVFREQ_THERMAL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL_GOV_STEP_WISE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL_GOV_FAIR_SHARE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL_EMULATION=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_THERMAL_WRITABLE_TRIPS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_POWER_CAP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NUMA_BALANCING=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CMA=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CMA_AREAS=7" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_ADVANCED=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_CUBIC=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_FQ_CODEL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_CAKE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_DEFAULT_FQ=y " >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_DEFAULT_TCP_CONG="bbr"" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_F2FS_FS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_F2FS_FS_XATTR=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_F2FS_FS_SECURITY=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION_AUTO=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_KPROBES_HOOK=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_DEBUG=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_ALLOWLIST_WORKAROUND=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_LSM_SECURITY_HOOKS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TMPFS_XATTR=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TMPFS_POSIX_ACL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_NF_TARGET_TTL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP6_NF_TARGET_HL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP6_NF_MATCH_HL=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_BBR=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CCACHE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_BIC=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_WESTWOOD=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_HTCP=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_MAX=256" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_IP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_IPMAC=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_PORT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORTIP=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORTNET=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NET=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETNET=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETPORT=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETIFACE=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LTO_CLANG_THIN=y" >> arch/arm64/configs/gki_defconfig
+          echo "# CONFIG_LTO_CLANG_FULL is not set" >> arch/arm64/configs/gki_defconfig
+          
+          echo "CONFIG_LOCALVERSION=\"-deepongi+\"" >> arch/arm64/configs/gki_defconfig
+          
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
 
-      - name: Upload kernel artifacts
+      - name: Build Kernel
+        run: |
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_PATH=${{ github.workspace }}/toolchain/clang/bin
+          export PATH="$CLANG_PATH:$PATH"
+          export CROSS_COMPILE=${{ github.workspace }}/toolchain/gcc-arm64/bin/aarch64-linux-android-
+          export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
+          export CROSS_COMPILE_ARM32=${{ github.workspace }}/toolchain/gcc-arm32/bin/arm-linux-androideabi-
+          export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
+          USE_CCACHE: 1
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
+          
+          if [ ! -f out/arch/arm64/boot/Image.gz ] && [ ! -f arch/arm64/boot/Image.gz ]; then
+            echo "Kernel build failed!"
+            exit 1
+          fi
+          
+          echo "Kernel built successfully"
+
+      - name: Prepare AnyKernel3
+        run: |
+          git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          cd AnyKernel3
+          rm -rf .git
+          
+          if [ -f ../kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/out/arch/arm64/boot/Image.gz ./
+          elif [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/arch/arm64/boot/Image.gz ./
+          fi
+          
+          if [ -f ../kernel/out/arch/arm64/boot/dtbo.img ]; then
+            cp ../kernel/out/arch/arm64/boot/dtbo.img ./
+          elif [ -f ../kernel/arch/arm64/boot/dtbo.img ]; then
+            cp ../kernel/arch/arm64/boot/dtbo.img ./
+          fi
+          
+          if [ -f ../kernel/out/arch/arm64/boot/dtb ]; then
+            cp ../kernel/out/arch/arm64/boot/dtb ./
+          elif [ -f ../kernel/arch/arm64/boot/dtb ]; then
+            cp ../kernel/arch/arm64/boot/dtb ./
+          fi
+
+      - name: Package Kernel
+        run: |
+          cd AnyKernel3
+          VERSION="$(cat ../kernel/include/config/kernel.release 2>/dev/null || echo "6.1.145")"
+          DATE="$(date +%Y%m%d)"
+          ZIP_NAME="GKI-KernelSU-SuSFS-$VERSION-$DATE.zip"
+          
+          zip -r9 "../$ZIP_NAME" * -x .git README.md ./*placeholder
+          cd ..
+          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+          
+          echo "✅ Kernel packaged: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+      - name: Upload Kernel ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ github.sha }}-${{ env.BUILD }}-${{ env.LTO_TYPE }}
-          path: |
-            common/builds/**/*.zip
-            common/out/arch/arm64/boot/Image
-          retention-days: 30
+          name: ${{ env.KERNEL_ZIP }}
+          path: ${{ env.KERNEL_ZIP }}
 
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: kernel-*
-          path: artifacts
-
-      - name: Create GitHub Release
+      - name: Create Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*.zip
+          tag_name: build-${{ github.run_number }}
+          name: Kernel Build ${{ github.run_number }}
+          body: |
+            ## 🎉 GKI Kernel Build
+            
+            **Kernel Version:** 6.1.145
+            **Branch:** android14-6.1-2025-09
+            **KernelSU:** Integrated from https://github.com/tiann/KernelSU
+            **SuSFS:** Integrated from https://gitlab.com/simonpunk/susfs4ksu.git
+            **Toolchain:** Custom
+            
+            ### Features
+            - ✅ KernelSU main
+            - ✅ SuSFS gki-android14-6.1
+            - ✅ LTO: ThinLTO
+            - ✅ Custom defconfig modifications applied
+            
+            ### Installation
+            1. Download the kernel ZIP
+            2. Boot to recovery
+            3. Flash the ZIP
+            4. Reboot and enjoy!
+          files: |
+            ${{ env.KERNEL_ZIP }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -21,49 +21,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod
           
       - name: Setup Custom Toolchain
         run: |
           mkdir -p ${{ github.workspace }}/toolchain
           cd ${{ github.workspace }}/toolchain
           
-          wget -O clang.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+          wget -q -O clang-toolchain.tar.xz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
           mkdir -p clang
-          tar -xzf clang.tar.gz -C clang --strip-components=1
+          tar -xf clang-toolchain.tar.xz -C clang --strip-components=1
           export CLANG_PATH="${{ github.workspace }}/toolchain/clang/bin"
           
-          # ARM64
           wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
           tar -xf gcc-arm64.tar.xz
-          echo "ARM64_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
+          ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
+          echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
           
-          # ARM32
           wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
           tar -xf gcc-arm32.tar.xz
-          echo "ARM32_TOOLCHAIN=${GITHUB_WORKSPACE}/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-" >> $GITHUB_ENV
+          ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
+          echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
           
           if [ -d "clang/bin" ]; then
             export PATH="${{ github.workspace }}/toolchain/clang/bin:$PATH"
             clang --version
           fi
-          
-          if [ -d "gcc-arm64/bin" ]; then
-            export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
-            aarch64-linux-android-gcc --version || aarch64-linux-gnu-gcc --version || echo "GCC ARM64 verification skipped"
-          fi
-          
-          if [ -d "gcc-arm32/bin" ]; then
-            export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
-            arm-linux-androideabi-gcc --version || arm-linux-gnueabi-gcc --version || echo "GCC ARM32 verification skipped"
-          fi
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: kernel-build-${{ github.sha }}
-          restore-keys: |
-            kernel-build-
 
       - name: Clone Kernel Source
         run: |
@@ -104,7 +87,7 @@ jobs:
       - name: Apply Custom Patch 1 (Kernel Root)
         run: |
           cd kernel
-          curl -L "https://github.com/infectedmushi/kernel_patches/blob/181ce32874921460724d38df7ce0af5d2dc672c6/fix-clidr-uninitialized.patch" -o patch_0.patch
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o patch_0.patch
           patch -p1 < patch_0.patch || echo "Patch 0 failed, continuing..."
           cd ${{ github.workspace }}/kernel
       - name: Configure Kernel
@@ -114,112 +97,17 @@ jobs:
           export SUBARCH=arm64
           export CLANG_PATH=${{ github.workspace }}/toolchain/clang/bin
           export PATH="$CLANG_PATH:$PATH"
-          export CROSS_COMPILE=${{ github.workspace }}/toolchain/gcc-arm64/bin/aarch64-linux-android-
-          export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
-          export CROSS_COMPILE_ARM32=${{ github.workspace }}/toolchain/gcc-arm32/bin/arm-linux-androideabi-
-          export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
+          export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
+          export PATH="$(dirname ${{ env.ARM64_TOOLCHAIN }}):$PATH"
+          export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
+          export PATH="$(dirname ${{ env.ARM32_TOOLCHAIN }}):$PATH"
           
           # Modify defconfig
-          echo "CONFIG_ARM64_PA_BITS=48" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_4K_PAGES=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_TAGGED_ADDR_ABI=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_PAN=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_PTR_AUTH=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_SCHED_MC=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ENERGY_MODEL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_UCLAMP_TASK=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_UCLAMP_TASK_GROUP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPU_FREQ=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPUFREQ_DT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPU_IDLE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM_PSCI_CPUIDLE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CPU_THERMAL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_FAIR_GROUP_SCHED=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_CORTEX_X3=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_CORTEX_A715=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_CORTEX_A510=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_COMPACTION=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_MQ_IOSCHED_DEADLINE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IOSCHED_BFQ=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TRANSPARENT_HUGEPAGE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_VA_BITS=48" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_SVE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_SME=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_ARM64_BTI=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_SCHED_CORE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_PERF_EVENTS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_OPP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_DEVFREQ_THERMAL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL_GOV_STEP_WISE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL_GOV_FAIR_SHARE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL_EMULATION=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_THERMAL_WRITABLE_TRIPS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_POWER_CAP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NUMA_BALANCING=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CMA=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CMA_AREAS=7" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_ADVANCED=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_CUBIC=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_FQ_CODEL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_CAKE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_DEFAULT_FQ=y " >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_DEFAULT_TCP_CONG="bbr"" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_F2FS_FS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_F2FS_FS_XATTR=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_F2FS_FS_SECURITY=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_LOCALVERSION_AUTO=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_KPROBES_HOOK=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_DEBUG=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_ALLOWLIST_WORKAROUND=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_LSM_SECURITY_HOOKS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TMPFS_XATTR=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TMPFS_POSIX_ACL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_NF_TARGET_TTL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP6_NF_TARGET_HL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP6_NF_MATCH_HL=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_BBR=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CCACHE=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_BIC=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_WESTWOOD=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_HTCP=n" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_MAX=256" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_BITMAP_IP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_BITMAP_IPMAC=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_BITMAP_PORT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_IP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_IPPORT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_IPPORTIP=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_IPPORTNET=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_NET=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_NETNET=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_NETPORT=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IP_SET_HASH_NETIFACE=y" >> arch/arm64/configs/gki_defconfig
+
           echo "CONFIG_LTO_CLANG_THIN=y" >> arch/arm64/configs/gki_defconfig
           echo "# CONFIG_LTO_CLANG_FULL is not set" >> arch/arm64/configs/gki_defconfig
           
-          echo "CONFIG_LOCALVERSION=\"-deepongi+\"" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION=\"-KernelSU-SuSFS\"" >> arch/arm64/configs/gki_defconfig
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
 
@@ -230,14 +118,23 @@ jobs:
           export SUBARCH=arm64
           export CLANG_PATH=${{ github.workspace }}/toolchain/clang/bin
           export PATH="$CLANG_PATH:$PATH"
-          export CROSS_COMPILE=${{ github.workspace }}/toolchain/gcc-arm64/bin/aarch64-linux-android-
-          export PATH="${{ github.workspace }}/toolchain/gcc-arm64/bin:$PATH"
-          export CROSS_COMPILE_ARM32=${{ github.workspace }}/toolchain/gcc-arm32/bin/arm-linux-androideabi-
-          export PATH="${{ github.workspace }}/toolchain/gcc-arm32/bin:$PATH"
-          USE_CCACHE: 1
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
+          export PATH="$(dirname ${{ env.ARM64_TOOLCHAIN }}):$PATH"
+          export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
+          export PATH="$(dirname ${{ env.ARM32_TOOLCHAIN }}):$PATH"
           
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
+          make -j$(nproc) \
+            LLVM_IAS=1 \
+            LLVM=1 \
+            ARCH=arm64 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN" \
+            CROSS_COMPILE="$ARM64_TOOLCHAIN" \
+            CC=clang \
+            LD=ld.lld \
+            HOSTLD=ld.lld \
+            O=out \
+            2>&1 | tee build.log
           
           if [ ! -f out/arch/arm64/boot/Image.gz ] && [ ! -f arch/arm64/boot/Image.gz ]; then
             echo "Kernel build failed!"

@@ -134,31 +134,38 @@ jobs:
 
       - name: Apply All Patches
         run: |
+          set +e  # Disable exit on error for patch application
           cd kernel
           
           # Download all patches first
+          echo "📥 Downloading patches..."
           curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o /tmp/fix-clidr-uninitialized.patch
           curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch" -o /tmp/10_enable_susfs_for_ksu.patch
           curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o /tmp/50_add_susfs_in_gki-android14-6.1.patch
           curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch" -o /tmp/fix_proc_base.patch
           
-          # Apply patches to respective directories
-          echo "Applying fix-clidr-uninitialized.patch to root"
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix-clidr-uninitialized.patch || echo "Patch may already be applied"
+          # Apply patches (continue even if some fail)
+          echo "🔧 Applying patches..."
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix-clidr-uninitialized.patch
+          echo "fix-clidr-uninitialized.patch exit code: $?"
           
-          echo "Applying 10_enable_susfs_for_ksu.patch to KernelSU"
-          cd KernelSU
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/10_enable_susfs_for_ksu.patch || echo "Patch may already be applied"
-          cd ..
+          if [ -d "KernelSU" ]; then
+            cd KernelSU
+            patch -p1 --forward --no-backup-if-mismatch < /tmp/10_enable_susfs_for_ksu.patch
+            echo "10_enable_susfs_for_ksu.patch exit code: $?"
+            cd ..
+          fi
           
-          echo "Applying 50_add_susfs_in_gki-android14-6.1.patch to root"
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/50_add_susfs_in_gki-android14-6.1.patch || echo "Patch may already be applied"
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/50_add_susfs_in_gki-android14-6.1.patch
+          echo "50_add_susfs_in_gki-android14-6.1.patch exit code: $?"
           
-          echo "Applying fix_proc_base.patch to root"
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix_proc_base.patch || echo "Patch may already be applied"
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix_proc_base.patch
+          echo "fix_proc_base.patch exit code: $?"
           
           # Clean up
           rm -f /tmp/*.patch
+          set -e  # Re-enable exit on error
+          echo "🎉 Patch application completed"
 
       - name: Configure Kernel
         run: |

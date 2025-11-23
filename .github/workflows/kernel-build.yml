@@ -302,6 +302,7 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_LTO_CLANG_THIN=y
           CONFIG_LOCALVERSION="-deepongi"
           EOF
 

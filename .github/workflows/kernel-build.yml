@@ -330,13 +330,13 @@ jobs:
 
           echo "⚙️ Creating custom GKI defconfig with all modifications..."
           
-          # Create a comprehensive custom defconfig with ALL your modifications
-          cat > arch/arm64/configs/custom_gki_defconfig << 'EOF'
-          # Base GKI configuration
-          CONFIG_GKI=y
-          CONFIG_ARM64=y
-          
-          # Your original GKI defconfig modifications
+          # First generate the base GKI config
+          echo "🔧 Generating base GKI config..."
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
+
+          # Now create a fragment with all your customizations and merge it
+          echo "🔧 Creating config fragment with customizations..."
+          cat > /tmp/custom_config_fragment << 'EOF'
           CONFIG_ARM64_PA_BITS_48=y
           CONFIG_ARM64_4K_PAGES=y
           CONFIG_ARM64_TAGGED_ADDR_ABI=y
@@ -437,21 +437,21 @@ jobs:
           CONFIG_LOCALVERSION="-deepongi"
           EOF
 
+          # Merge the custom config fragment
+          echo "🔧 Merging custom config fragment..."
+          ./scripts/kconfig/merge_config.sh -m -O out out/.config /tmp/custom_config_fragment
+
           # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
 
-          # Generate config using our comprehensive custom defconfig
-          echo "🔧 Generating kernel configuration from custom defconfig..."
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out custom_gki_defconfig
-
-          # Run olddefconfig to resolve any dependencies
+          # Final config generation to resolve dependencies
           echo "🔧 Resolving config dependencies..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configuration complete"
           echo "📋 Final config summary:"
-          grep -E "CONFIG_(KSU|SUSFS|LTO|ARM64)" out/.config | head -15
-
+          grep -E "CONFIG_(KSU|SUSFS|LTO|ARM64_PA|ARM64_4K|SCHED_MC|CPU_FREQ|F2FS|TCP_CONG)" out/.config | head -20
+          
       - name: Build Kernel
         id: build
         continue-on-error: false

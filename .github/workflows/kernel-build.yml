@@ -135,26 +135,30 @@ jobs:
       - name: Apply All Patches
         run: |
           cd kernel
-
-          PATCHES=(
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch:."
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch:KernelSU"
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
-            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
-          )
-
-          for entry in "${PATCHES[@]}"; do
-            IFS=':' read -r url dir <<< "$entry"
-            echo "Applying $(basename "$url") to $dir/"
-            cd "$dir"
-            if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
-              echo "✓ Patch applied successfully"
-            else
-              echo "⚠ Patch failed or already applied, continuing..."
-            fi
-            cd "${{ github.workspace }}/kernel"
-          done
-
+          
+          # Download all patches first
+          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o /tmp/fix-clidr-uninitialized.patch
+          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch" -o /tmp/10_enable_susfs_for_ksu.patch
+          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o /tmp/50_add_susfs_in_gki-android14-6.1.patch
+          curl -fsSL "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch" -o /tmp/fix_proc_base.patch
+          
+          # Apply patches to respective directories
+          echo "Applying fix-clidr-uninitialized.patch to root"
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix-clidr-uninitialized.patch || echo "Patch may already be applied"
+          
+          echo "Applying 10_enable_susfs_for_ksu.patch to KernelSU"
+          cd KernelSU
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/10_enable_susfs_for_ksu.patch || echo "Patch may already be applied"
+          cd ..
+          
+          echo "Applying 50_add_susfs_in_gki-android14-6.1.patch to root"
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/50_add_susfs_in_gki-android14-6.1.patch || echo "Patch may already be applied"
+          
+          echo "Applying fix_proc_base.patch to root"
+          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix_proc_base.patch || echo "Patch may already be applied"
+          
+          # Clean up
+          rm -f /tmp/*.patch
 
       - name: Configure Kernel
         run: |

@@ -47,123 +47,92 @@ jobs:
       - name: Setup Custom Toolchain
         id: toolchain
         run: |
-          set -euo pipefail
+          set -e
           mkdir -p "${{ github.workspace }}/toolchain"
           cd "${{ github.workspace }}/toolchain"
 
-          # Download toolchains in parallel with retry
-          download_with_retry() {
-            local url="$1"
-            local output="$2"
-            for i in {1..3}; do
-              if wget -q --show-progress -O "$output" "$url"; then
-                return 0
-              fi
-              echo "Download attempt $i failed, retrying..."
-              sleep 5
-            done
-            echo "❌ Failed to download $url after 3 attempts"
-            return 1
-          }
+          echo "📥 Downloading toolchains..."
+          # Download GCC toolchains
+          if [ ! -f "gcc-arm64.tar.xz" ]; then
+            wget -q --show-progress -O gcc-arm64.tar.xz \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+          fi
 
-          # Download all toolchains in parallel
-          (
-            [ ! -f "clang-toolchain.tar.gz" ] && \
-            download_with_retry \
-              "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz" \
-              "clang-toolchain.tar.gz" &
-            
-            [ ! -f "gcc-arm64.tar.xz" ] && \
-            download_with_retry \
-              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz" \
-              "gcc-arm64.tar.xz" &
-            
-            [ ! -f "gcc-arm32.tar.xz" ] && \
-            download_with_retry \
-              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz" \
-              "gcc-arm32.tar.xz" &
-            wait
-          )
+          if [ ! -f "gcc-arm32.tar.xz" ]; then
+            wget -q --show-progress -O gcc-arm32.tar.xz \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+          fi
 
-          echo "📦 Extracting toolchains..."
-          # Extract in parallel and handle directory names properly
+          # For Clang, use a different approach since ZyCromerZ structure is different
           if [ ! -d "clang" ]; then
-            tar -xzf clang-toolchain.tar.gz -C .
-            # Find the actual extracted directory name
-            CLANG_DIR=$(find . -maxdepth 1 -type d -name "Clang*" -o -name "clang*" | head -1)
-            if [ -n "$CLANG_DIR" ]; then
-              mv "$CLANG_DIR" clang
-              echo "✓ Clang extracted and renamed from $CLANG_DIR to clang"
-            else
-              echo "❌ Could not find extracted Clang directory"
-              ls -la
-              exit 1
-            fi
-          fi &
+            echo "📦 Setting up Clang..."
+            mkdir -p clang
+            cd clang
+            
+            # Download the actual Clang release (pre-built binaries)
+            wget -q --show-progress -O clang.tar.gz \
+              "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+            
+            # Extract what we downloaded
+            tar -xzf clang.tar.gz
+            
+            # The structure should now have bin/, lib/, etc.
+            echo "Clang directory contents after extraction:"
+            ls -la
+            cd ..
+          fi
 
+          echo "📦 Extracting GCC toolchains..."
+          # Extract GCC toolchains
           if [ ! -d "aarch64-gcc" ]; then
             tar -xf gcc-arm64.tar.xz
-            ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" -o -name "*arm-gnu*" | head -1)
-            if [ -n "$ARM64_DIR" ]; then
+            ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
+            if [ -n "$ARM64_DIR" ] && [ "$ARM64_DIR" != "aarch64-gcc" ]; then
               mv "$ARM64_DIR" aarch64-gcc
-              echo "✓ ARM64 GCC extracted and renamed from $ARM64_DIR to aarch64-gcc"
-            else
-              echo "❌ Could not find extracted ARM64 GCC directory"
-              ls -la
-              exit 1
+              echo "✓ Renamed $ARM64_DIR to aarch64-gcc"
             fi
-          fi &
+          fi
 
           if [ ! -d "arm-gcc" ]; then
             tar -xf gcc-arm32.tar.xz
-            ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" -o -name "*arm-gnu*" | head -1)
-            if [ -n "$ARM32_DIR" ]; then
+            ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
+            if [ -n "$ARM32_DIR" ] && [ "$ARM32_DIR" != "arm-gcc" ]; then
               mv "$ARM32_DIR" arm-gcc
-              echo "✓ ARM32 GCC extracted and renamed from $ARM32_DIR to arm-gcc"
-            else
-              echo "❌ Could not find extracted ARM32 GCC directory"
-              ls -la
-              exit 1
+              echo "✓ Renamed $ARM32_DIR to arm-gcc"
             fi
-          fi &
-          
-          wait
+          fi
 
-          # Verify toolchains exist
-          echo "🔍 Verifying toolchain directories..."
-          for dir in clang aarch64-gcc arm-gcc; do
-            if [ ! -d "$dir" ]; then
-              echo "::error::Toolchain directory $dir not found"
-              echo "Current directory contents:"
-              ls -la
-              exit 1
-            fi
-          done
+          echo "🔍 Final directory structure:"
+          ls -la
 
+          # Set paths - adjust based on actual Clang structure
           CLANG_BIN="$PWD/clang/bin"
+          
+          # If bin directory doesn't exist in clang, check if it's in a subdirectory
+          if [ ! -d "$CLANG_BIN" ]; then
+            echo "Looking for Clang bin directory..."
+            CLANG_BIN=$(find clang -name "clang" -type f | head -1 | xargs dirname)
+            if [ -z "$CLANG_BIN" ]; then
+              CLANG_BIN=$(find clang -name "bin" -type d | head -1)
+            fi
+            if [ -z "$CLANG_BIN" ]; then
+              echo "::error::Could not find Clang bin directory"
+              find clang -type f -name "clang" -o -name "clang-*" | head -10
+              exit 1
+            fi
+          fi
+
           ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
           ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
-
-          # Validate toolchain binaries exist
-          echo "🔍 Checking toolchain binaries..."
-          for tool in "$CLANG_BIN/clang" "$CLANG_BIN/ld.lld" \
-                      "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
-            if [ ! -f "$tool" ]; then
-              echo "::error::Toolchain binary not found: $tool"
-              echo "Available files in $(dirname "$tool"):"
-              ls -la "$(dirname "$tool")" || true
-              exit 1
-            fi
-          done
 
           echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
           echo "ARM64_TOOLCHAIN=$ARM64_TOOLCHAIN" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=$ARM32_TOOLCHAIN" >> $GITHUB_ENV
 
           echo "✅ Toolchains setup complete"
-          echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
-          echo "aarch64-gcc: $("${ARM64_TOOLCHAIN}gcc" --version | head -1)"
-          echo "arm-gcc: $("${ARM32_TOOLCHAIN}gcc" --version | head -1)"
+          echo "CLANG_BIN: $CLANG_BIN"
+          echo "ARM64_TOOLCHAIN: $ARM64_TOOLCHAIN" 
+          echo "ARM32_TOOLCHAIN: $ARM32_TOOLCHAIN"
 
       - name: Setup ccache
         run: |

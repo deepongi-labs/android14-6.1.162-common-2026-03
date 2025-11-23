@@ -32,7 +32,7 @@ jobs:
             build-essential bc bison flex libssl-dev libelf-dev \
             libncurses5-dev git wget curl lz4 zstd python3 python3-pip \
             cpio kmod pahole pigz ninja-build patchelf xxd \
-            rsync file
+            rsync file ccache
 
       - name: Cache Toolchains and CCACHE
         uses: actions/cache@v4
@@ -40,7 +40,7 @@ jobs:
           path: |
             ${{ github.workspace }}/toolchain
             /tmp/ccache
-          key: ${{ runner.os }}-toolchains-ccache-${{ hashFiles('.github/workflows/*.yml') }}-v5
+          key: ${{ runner.os }}-toolchains-ccache-${{ hashFiles('.github/workflows/*.yml') }}-v7
           restore-keys: |
             ${{ runner.os }}-toolchains-ccache-
 
@@ -63,81 +63,75 @@ jobs:
               "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
           fi
 
-          # For Clang, use a different approach since ZyCromerZ structure is different
+          # Handle ZyCromerZ Clang properly
           if [ ! -d "clang" ]; then
-            echo "📦 Setting up Clang..."
-            mkdir -p clang
-            cd clang
-            
-            # Download the actual Clang release (pre-built binaries)
+            echo "📦 Setting up ZyCromerZ Clang..."
+            # Download the Clang release
             wget -q --show-progress -O clang.tar.gz \
               "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
             
-            # Extract what we downloaded
+            # Extract and handle the directory structure
             tar -xzf clang.tar.gz
             
-            # The structure should now have bin/, lib/, etc.
-            echo "Clang directory contents after extraction:"
+            # The extracted directory might have a different name
+            # List contents to see what we got
+            echo "Contents after Clang extraction:"
             ls -la
-            cd ..
+            
+            # Find and rename the Clang directory
+            CLANG_DIR=$(find . -maxdepth 1 -type d -name "Clang*" -o -name "clang*" | head -1)
+            if [ -n "$CLANG_DIR" ] && [ "$CLANG_DIR" != "." ]; then
+              mv "$CLANG_DIR" clang
+              echo "✓ Renamed $CLANG_DIR to clang"
+            else
+              # If no directory was found, create one and move binaries
+              mkdir -p clang
+              # Move any extracted files to clang directory
+              find . -maxdepth 1 -type f -exec mv {} clang/ \; 2>/dev/null || true
+              echo "✓ Created clang directory and moved files"
+            fi
           fi
 
           echo "📦 Extracting GCC toolchains..."
-          # Extract GCC toolchains
           if [ ! -d "aarch64-gcc" ]; then
             tar -xf gcc-arm64.tar.xz
-            ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
-            if [ -n "$ARM64_DIR" ] && [ "$ARM64_DIR" != "aarch64-gcc" ]; then
-              mv "$ARM64_DIR" aarch64-gcc
-              echo "✓ Renamed $ARM64_DIR to aarch64-gcc"
-            fi
+            mv arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu aarch64-gcc
           fi
 
           if [ ! -d "arm-gcc" ]; then
             tar -xf gcc-arm32.tar.xz
-            ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
-            if [ -n "$ARM32_DIR" ] && [ "$ARM32_DIR" != "arm-gcc" ]; then
-              mv "$ARM32_DIR" arm-gcc
-              echo "✓ Renamed $ARM32_DIR to arm-gcc"
-            fi
+            mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc
           fi
 
-          echo "🔍 Final directory structure:"
-          ls -la
-
-          # Set paths - adjust based on actual Clang structure
+          # Set paths
           CLANG_BIN="$PWD/clang/bin"
-          
-          # If bin directory doesn't exist in clang, check if it's in a subdirectory
-          if [ ! -d "$CLANG_BIN" ]; then
-            echo "Looking for Clang bin directory..."
-            CLANG_BIN=$(find clang -name "clang" -type f | head -1 | xargs dirname)
-            if [ -z "$CLANG_BIN" ]; then
-              CLANG_BIN=$(find clang -name "bin" -type d | head -1)
-            fi
-            if [ -z "$CLANG_BIN" ]; then
-              echo "::error::Could not find Clang bin directory"
-              find clang -type f -name "clang" -o -name "clang-*" | head -10
-              exit 1
-            fi
-          fi
-
           ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
           ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
+
+          # Verify binaries exist
+          echo "🔍 Checking toolchain binaries..."
+          for tool in "$CLANG_BIN/clang" "$CLANG_BIN/ld.lld" \
+                      "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
+            if [ ! -f "$tool" ]; then
+              echo "::error::Toolchain binary not found: $tool"
+              echo "Available in directory:"
+              ls -la "$(dirname "$tool")" 2>/dev/null || echo "Directory not found"
+              exit 1
+            fi
+          done
 
           echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
           echo "ARM64_TOOLCHAIN=$ARM64_TOOLCHAIN" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=$ARM32_TOOLCHAIN" >> $GITHUB_ENV
 
           echo "✅ Toolchains setup complete"
-          echo "CLANG_BIN: $CLANG_BIN"
-          echo "ARM64_TOOLCHAIN: $ARM64_TOOLCHAIN" 
-          echo "ARM32_TOOLCHAIN: $ARM32_TOOLCHAIN"
+          echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
+          echo "aarch64-gcc: $("${ARM64_TOOLCHAIN}gcc" --version | head -1)"
+          echo "arm-gcc: $("${ARM32_TOOLCHAIN}gcc" --version | head -1)"
 
       - name: Setup ccache
         run: |
-          sudo apt-get install -y ccache
-          echo "::add-path::/usr/lib/ccache"
+          echo "$(dirname $(which ccache))" >> $GITHUB_PATH
           ccache --show-stats
 
       - name: Clone Kernel Source
@@ -238,125 +232,129 @@ jobs:
           export CROSS_COMPILE="$ARM64_TOOLCHAIN"
           export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
 
-          echo "⚙️ Generating kernel configuration..."
+          echo "⚙️ Creating custom GKI defconfig with all modifications..."
           
-          # First generate base GKI config
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
-
-          # Use scripts/config to modify the config properly
-          CONFIG_SCRIPT="./scripts/config"
-          CONFIG_FILE="out/.config"
-
-          # Enable all required configs
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PA_BITS_48
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_4K_PAGES
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_TAGGED_ADDR_ABI
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PAN
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_PTR_AUTH
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_SCHED_MC
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ENERGY_MODEL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ_GOV_SCHEDUTIL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_UCLAMP_TASK
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_UCLAMP_TASK_GROUP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_FREQ
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPUFREQ_DT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_IDLE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM_PSCI_CPUIDLE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CPU_THERMAL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_FAIR_GROUP_SCHED
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_X3
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_A715
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_CORTEX_A510
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_COMPACTION
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_MQ_IOSCHED_DEADLINE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IOSCHED_BFQ
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TRANSPARENT_HUGEPAGE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TRANSPARENT_HUGEPAGE_MADVISE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_VA_BITS_48
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_SVE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_SME
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_ARM64_BTI
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_SCHED_CORE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_PERF_EVENTS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_OPP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_DEVFREQ_THERMAL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_POWER_ALLOCATOR
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_STEP_WISE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_GOV_FAIR_SHARE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_EMULATION
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_THERMAL_WRITABLE_TRIPS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_POWER_CAP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NUMA_BALANCING
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CMA
-          $CONFIG_SCRIPT --file $CONFIG_FILE --set-val CONFIG_CMA_AREAS 7
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_ADVANCED
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_CUBIC
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_FQ
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_FQ_CODEL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_NET_SCH_CAKE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_DEFAULT_FQ
-          $CONFIG_SCRIPT --file $CONFIG_FILE --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_XATTR
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_POSIX_ACL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_F2FS_FS_SECURITY
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_LOCALVERSION_AUTO
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_KPROBES_HOOK
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_DEBUG
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_KSU_ALLOWLIST_WORKAROUND
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_LSM_SECURITY_HOOKS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_PATH
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_MOUNT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_KSTAT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_TRY_UMOUNT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SPOOF_UNAME
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_ENABLE_LOG
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_MAP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TMPFS_XATTR
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TMPFS_POSIX_ACL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_NF_TARGET_TTL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP6_NF_TARGET_HL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP6_NF_MATCH_HL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_TCP_CONG_BBR
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_CCACHE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_BIC
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_WESTWOOD
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_TCP_CONG_HTCP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET
-          $CONFIG_SCRIPT --file $CONFIG_FILE --set-val CONFIG_IP_SET_MAX 256
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_IP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_IPMAC
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_BITMAP_PORT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORTIP
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_IPPORTNET
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NET
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETNET
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETPORT
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_IP_SET_HASH_NETIFACE
-          $CONFIG_SCRIPT --file $CONFIG_FILE --enable CONFIG_LTO_CLANG_THIN
-          $CONFIG_SCRIPT --file $CONFIG_FILE --disable CONFIG_LTO_CLANG_FULL
-          $CONFIG_SCRIPT --file $CONFIG_FILE --set-str CONFIG_LOCALVERSION "-deepongi"
+          # Create a comprehensive custom defconfig with ALL your modifications
+          cat > arch/arm64/configs/custom_gki_defconfig << 'EOF'
+          # Base GKI configuration
+          CONFIG_GKI=y
+          CONFIG_ARM64=y
+          
+          # Your original GKI defconfig modifications
+          CONFIG_ARM64_PA_BITS_48=y
+          CONFIG_ARM64_4K_PAGES=y
+          CONFIG_ARM64_TAGGED_ADDR_ABI=y
+          CONFIG_ARM64_PAN=y
+          CONFIG_ARM64_PTR_AUTH=y
+          CONFIG_SCHED_MC=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPUFREQ_DT=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_ARM_PSCI_CPUIDLE=y
+          CONFIG_THERMAL=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_FAIR_GROUP_SCHED=y
+          CONFIG_ARM64_CORTEX_X3=y
+          CONFIG_ARM64_CORTEX_A715=y
+          CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_COMPACTION=y
+          CONFIG_MQ_IOSCHED_DEADLINE=y
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_TRANSPARENT_HUGEPAGE=y
+          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+          CONFIG_ARM64_VA_BITS_48=y
+          CONFIG_ARM64_SVE=y
+          CONFIG_ARM64_SME=y
+          CONFIG_ARM64_BTI=y
+          CONFIG_SCHED_CORE=y
+          CONFIG_PERF_EVENTS=y
+          CONFIG_OPP=y
+          CONFIG_DEVFREQ_THERMAL=y
+          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+          CONFIG_THERMAL_GOV_STEP_WISE=y
+          CONFIG_THERMAL_GOV_FAIR_SHARE=y
+          CONFIG_THERMAL_EMULATION=y
+          CONFIG_THERMAL_WRITABLE_TRIPS=y
+          CONFIG_POWER_CAP=y
+          CONFIG_NUMA_BALANCING=y
+          CONFIG_CMA=y
+          CONFIG_CMA_AREAS=7
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_DEFAULT_FQ=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_F2FS_FS=y
+          CONFIG_F2FS_FS_XATTR=y
+          CONFIG_F2FS_FS_POSIX_ACL=y
+          CONFIG_F2FS_FS_SECURITY=y
+          # CONFIG_LOCALVERSION_AUTO is not set
+          CONFIG_KSU=y
+          # CONFIG_KSU_KPROBES_HOOK is not set
+          # CONFIG_KSU_DEBUG is not set
+          # CONFIG_KSU_ALLOWLIST_WORKAROUND is not set
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_CCACHE=y
+          # CONFIG_TCP_CONG_BIC is not set
+          # CONFIG_TCP_CONG_WESTWOOD is not set
+          # CONFIG_TCP_CONG_HTCP is not set
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=256
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_LTO_CLANG_THIN=y
+          # CONFIG_LTO_CLANG_FULL is not set
+          CONFIG_LOCALVERSION="-deepongi"
+          EOF
 
           # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
 
-          # Final config generation to resolve dependencies
-          echo "🔧 Running olddefconfig to resolve dependencies..."
+          # Generate config using our comprehensive custom defconfig
+          echo "🔧 Generating kernel configuration from custom defconfig..."
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out custom_gki_defconfig
+
+          # Run olddefconfig to resolve any dependencies
+          echo "🔧 Resolving config dependencies..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configuration complete"
           echo "📋 Final config summary:"
-          grep -E "CONFIG_(KSU|SUSFS|LTO|ARM64)" out/.config | head -20
+          grep -E "CONFIG_(KSU|SUSFS|LTO|ARM64)" out/.config | head -15
 
       - name: Build Kernel
         id: build
@@ -496,8 +494,9 @@ jobs:
             ### 🔧 Features
             - ✅ KernelSU (main branch)
             - ✅ SuSFS (gki-android14-6.1)
-            - ✅ Clang 22.0.0 + ThinLTO
-            - ✅ ARM64 optimizations
+            - ✅ ZyCromerZ Clang 22.0.0 + ThinLTO
+            - ✅ Comprehensive GKI defconfig optimizations
+            - ✅ ARM64 Cortex-X3/A715/A510 optimizations
             - ✅ BBR TCP congestion control
             - ✅ Enhanced security hooks
 

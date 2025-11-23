@@ -249,9 +249,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
             CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
-            CC=clang \
-            LD=ld.lld \
-            HOSTLD=ld.lld \
+            CC="ccache clang" \
             O=out \
             2>&1 | tee build.log
           

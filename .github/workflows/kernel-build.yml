@@ -161,18 +161,18 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Set Clang path FIRST and verify it works
-          CLANG_BIN="${{ github.workspace }}/toolchain/clang/bin"
-          if [ ! -d "$CLANG_BIN" ]; then
-            echo "::error::Clang bin directory not found at $CLANG_BIN"
+          # Use detected Clang bin dir
+          CLANG_BIN="${{ env.CLANG_BIN }}"
+          if [ -z "$CLANG_BIN" ] || [ ! -d "$CLANG_BIN" ]; then
+            echo "::error:: CLANG_BIN env var not set or directory missing: '$CLANG_BIN'"
             exit 1
           fi
           export PATH="$CLANG_BIN:$PATH"
           
           # Verify ld.lld exists and is accessible
           if [ ! -f "$CLANG_BIN/ld.lld" ]; then
-            echo "::error::ld.lld not found at $CLANG_BIN/ld.lld"
-            ls -la "$CLANG_BIN/" | grep -i ld || echo "No ld files found"
+            echo "::error:: ld.lld not found at $CLANG_BIN/ld.lld"
+            ls -la "$CLANG_BIN/" | grep -i ld || echo "No ld* files found"
             exit 1
           fi
           
@@ -180,9 +180,10 @@ jobs:
           echo "✓ ld.lld version:"
           ld.lld --version
           
-          # Set toolchain vars (don't add to PATH, just use CROSS_COMPILE)
+          # Set toolchain vars
           export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
           export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
+          
           
           # Modify defconfig
           echo "CONFIG_ARM64_PA_BITS=48" >> arch/arm64/configs/gki_defconfig
@@ -297,20 +298,23 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Set Clang path FIRST
-          CLANG_BIN="${{ github.workspace }}/toolchain/clang/bin"
+          CLANG_BIN="${{ env.CLANG_BIN }}"
+          if [ -z "$CLANG_BIN" ] || [ ! -d "$CLANG_BIN" ]; then
+            echo "::error:: CLANG_BIN env var not set or directory missing: '$CLANG_BIN'"
+            exit 1
+          fi
           export PATH="$CLANG_BIN:$PATH"
           
           # Verify ld.lld
           if [ ! -f "$CLANG_BIN/ld.lld" ]; then
-            echo "::error::ld.lld not found at $CLANG_BIN/ld.lld"
+            echo "::error:: ld.lld not found at $CLANG_BIN/ld.lld"
+            ls -la "$CLANG_BIN"
             exit 1
           fi
           
           echo "✓ ld.lld path: $(which ld.lld)"
           echo "✓ ld.lld version: $(ld.lld --version | head -1)"
           
-          # Set toolchain vars
           export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
           export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
           

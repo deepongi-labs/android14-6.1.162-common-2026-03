@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
             libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole pigz
-      
+
       - name: Cache Toolchains
         uses: actions/cache@v4
         with:
@@ -36,63 +36,54 @@ jobs:
           set -e
           mkdir -p ${{ github.workspace }}/toolchain
           cd ${{ github.workspace }}/toolchain
-          
-          echo "Setting up toolchains..."
-          
-          # Download all toolchains in parallel
+
+          # Download all toolchains in parallel if not cached
           (
             if [ ! -f "clang-toolchain.tar.gz" ]; then
-              echo "Downloading Clang..."
               wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz" &
             fi
-            
             if [ ! -f "gcc-arm64.tar.xz" ]; then
-              echo "Downloading ARM64 GCC..."
               wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz" &
             fi
-            
             if [ ! -f "gcc-arm32.tar.xz" ]; then
-              echo "Downloading ARM32 GCC..."
               wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz" &
             fi
-            
             wait
           )
-          
+
           echo "Extracting toolchains..."
           rm -rf clang
           mkdir -p clang
           tar -xzf clang-toolchain.tar.gz -C clang &
-          
+
           if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu" ]; then
             tar -xf gcc-arm64.tar.xz &
           fi
-          
+
           if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi" ]; then
             tar -xf gcc-arm32.tar.xz &
           fi
-          
           wait
-          
+
           # Verify Clang
           if [ ! -d "clang/bin" ]; then
             echo "::error::Expected clang/bin directory, but it does not exist"
             find clang -maxdepth 3 -type d -print
             exit 1
           fi
-          
+
           CLANG_BIN_DIR="$PWD/clang/bin"
           echo "CLANG_BIN=$CLANG_BIN_DIR" >> $GITHUB_ENV
-          
+
           if [ ! -f "$CLANG_BIN_DIR/ld.lld" ]; then
             echo "::error::ld.lld not found in $CLANG_BIN_DIR"
             ls -la "$CLANG_BIN_DIR"
             exit 1
           fi
-          
+
           echo "✓ Clang version:"
           "$CLANG_BIN_DIR/clang" --version | head -3
-          
+
           # Set GCC toolchain paths
           ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
           if [ -z "$ARM64_DIR" ]; then
@@ -100,14 +91,14 @@ jobs:
             exit 1
           fi
           echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
-          
+
           ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
           if [ -z "$ARM32_DIR" ]; then
             echo "::error::ARM32 toolchain directory not found"
             exit 1
           fi
           echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
-          
+
           echo "✓ ARM64 GCC: $("${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1)"
           echo "✓ Toolchain setup complete"
 
@@ -144,22 +135,22 @@ jobs:
       - name: Apply All Patches
         run: |
           cd kernel
-          
-          declare -A PATCHES=(
-            ["fix-clidr-uninitialized.patch"]="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch:."
-            ["10_enable_susfs_for_ksu.patch"]="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch:KernelSU"
-            ["50_add_susfs_in_gki.patch"]="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
-            ["fix_proc_base.patch"]="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
+
+          PATCHES=(
+            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch:."
+            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch:KernelSU"
+            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch:."
+            "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch:."
           )
-          
-          for name in "${!PATCHES[@]}"; do
-            IFS=':' read -r url dir <<< "${PATCHES[$name]}"
-            echo "Applying $name in $dir/"
+
+          for entry in "${PATCHES[@]}"; do
+            IFS=':' read -r url dir <<< "$entry"
+            echo "Applying $(basename "$url") in $dir/"
             cd "$dir"
             if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
-              echo "✓ $name applied successfully"
+              echo "✓ Patch $(basename "$url") applied successfully"
             else
-              echo "⚠ $name failed or already applied, continuing..."
+              echo "⚠ Patch $(basename "$url") failed or already applied, continuing..."
             fi
             cd "${{ github.workspace }}/kernel"
           done
@@ -169,25 +160,25 @@ jobs:
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
-          
+
           CLANG_BIN="${{ env.CLANG_BIN }}"
           if [ -z "$CLANG_BIN" ] || [ ! -d "$CLANG_BIN" ]; then
             echo "::error::CLANG_BIN env var not set or directory missing"
             exit 1
           fi
           export PATH="$CLANG_BIN:$PATH"
-          
+
           if [ ! -f "$CLANG_BIN/ld.lld" ]; then
             echo "::error::ld.lld not found at $CLANG_BIN/ld.lld"
             exit 1
           fi
-          
+
           echo "✓ Using ld.lld: $(which ld.lld)"
-          
+
           export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
           export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
-          
-          # Apply defconfig modifications
+
+          # Apply defconfig modifications as a heredoc (much faster than many echo)
           cat >> arch/arm64/configs/gki_defconfig << 'EOF'
           CONFIG_ARM64_PA_BITS=48
           CONFIG_ARM64_4K_PAGES=y
@@ -288,10 +279,10 @@ jobs:
           # CONFIG_LTO_CLANG_FULL is not set
           CONFIG_LOCALVERSION="-deepongi"
           EOF
-          
+
           # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
-          
+
           echo "✓ Generating kernel config..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out gki_defconfig
 
@@ -300,18 +291,18 @@ jobs:
         continue-on-error: true
         run: |
           START_TIME=$(date +%s)
-          
+
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
-          
+
           CLANG_BIN="${{ env.CLANG_BIN }}"
           export PATH="$CLANG_BIN:$PATH"
           export CROSS_COMPILE=${{ env.ARM64_TOOLCHAIN }}
           export CROSS_COMPILE_COMPAT=${{ env.ARM32_TOOLCHAIN }}
-          
+
           echo "✓ Starting kernel build with $(nproc) cores..."
-          
+
           make -j$(nproc) \
             LLVM_IAS=1 \
             LLVM=1 \
@@ -324,16 +315,23 @@ jobs:
             HOSTLD=ld.lld \
             O=out \
             2>&1 | tee build.log
-          
+
           END_TIME=$(date +%s)
           BUILD_DURATION=$((END_TIME - START_TIME))
-          
+          BUILD_DURATION_MIN=$((BUILD_DURATION / 60))
+          BUILD_DURATION_SEC=$((BUILD_DURATION % 60))
+
           if [ -f out/arch/arm64/boot/Image.gz ]; then
-            echo "✅ Kernel built successfully in $((BUILD_DURATION / 60))m $((BUILD_DURATION % 60))s"
+            echo "✅ Kernel built successfully in ${BUILD_DURATION_MIN}m ${BUILD_DURATION_SEC}s"
             echo "BUILD_TIME=$BUILD_DURATION" >> $GITHUB_ENV
+            echo "BUILD_TIME_MIN=$BUILD_DURATION_MIN" >> $GITHUB_ENV
+            echo "BUILD_TIME_SEC=$BUILD_DURATION_SEC" >> $GITHUB_ENV
             exit 0
           else
             echo "::error::Kernel build failed - Image.gz not found"
+            echo "BUILD_TIME=$BUILD_DURATION" >> $GITHUB_ENV
+            echo "BUILD_TIME_MIN=$BUILD_DURATION_MIN" >> $GITHUB_ENV
+            echo "BUILD_TIME_SEC=$BUILD_DURATION_SEC" >> $GITHUB_ENV
             exit 1
           fi
 
@@ -356,13 +354,10 @@ jobs:
           git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
           cd AnyKernel3
           rm -rf .git
-          
+
           cp ../kernel/out/arch/arm64/boot/Image.gz ./ || { echo "::error::Image.gz not found"; exit 1; }
-          
-          # Copy optional files if they exist
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
-          
           echo "✓ AnyKernel3 prepared"
 
       - name: Package Kernel
@@ -371,17 +366,20 @@ jobs:
           VERSION="$(cat ../kernel/out/.config | grep "Linux/arm64" | awk '{print $3}' || echo "6.1.145")"
           DATE="$(date +%Y%m%d_%H%M)"
           ZIP_NAME="GKI-KernelSU-SuSFS-${VERSION}-${DATE}.zip"
-          
-          echo "Packaging kernel..."
-          zip -r9 "../$ZIP_NAME" * -x .git README.md ./*placeholder
-          
+
+          # Use pigz for faster compression if installed
+          if command -v pigz &> /dev/null; then
+            tar cf - . | pigz -9 > "../${ZIP_NAME%.zip}.tar.gz"
+            mv "../${ZIP_NAME%.zip}.tar.gz" "../$ZIP_NAME"
+          else
+            zip -r9 "../$ZIP_NAME" * -x .git README.md ./*placeholder
+          fi
           cd ..
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
-          
+
           SIZE=$(du -h "$ZIP_NAME" | cut -f1)
           echo "✅ Kernel packaged: $ZIP_NAME ($SIZE)"
-          
-          # Generate SHA256
+
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           echo "SHA256: $(cat ${ZIP_NAME}.sha256)"
 
@@ -402,7 +400,7 @@ jobs:
           body: |
             ## 🎉 GKI Kernel Build #${{ github.run_number }}
             
-            **Build Time:** ${{ env.BUILD_TIME }}s (${{ env.BUILD_TIME / 60 }}m)
+            **Build Time:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s
             **Kernel Version:** 6.1.145
             **Branch:** android14-6.1-2025-09
             **Commit:** ${{ github.sha }}

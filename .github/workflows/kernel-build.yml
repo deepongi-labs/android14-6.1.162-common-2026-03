@@ -288,12 +288,7 @@ jobs:
           # Now append all your customizations directly to the .config file
           echo "🔧 Applying custom configurations..."
           cat >> out/.config << 'EOF'
-# Custom GKI configurations
-# CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_KSU=y
-# CONFIG_KSU_KPROBES_HOOK is not set
-# CONFIG_KSU_DEBUG is not set
-# CONFIG_KSU_ALLOWLIST_WORKAROUND is not set
 CONFIG_KSU_LSM_SECURITY_HOOKS=y
 CONFIG_KSU_SUSFS=y
 CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -308,10 +303,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 CONFIG_KSU_SUSFS_SUS_MAP=y
 CONFIG_TMPFS_XATTR=y
 CONFIG_TMPFS_POSIX_ACL=y
-# CONFIG_TCP_CONG_BIC is not set
-# CONFIG_TCP_CONG_WESTWOOD is not set
-# CONFIG_TCP_CONG_HTCP is not set
-# CONFIG_LTO_CLANG_FULL is not set
 CONFIG_LOCALVERSION="-deepongi"
 EOF
 

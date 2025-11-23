@@ -21,73 +21,83 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod
+            libncurses5-dev git wget curl lz4 zstd python3 python3-pip cpio kmod pahole
           
       - name: Setup Custom Toolchain
         run: |
+          set -e
           mkdir -p ${{ github.workspace }}/toolchain
           cd ${{ github.workspace }}/toolchain
           
-          echo "Checking for cached toolchains..."
+          echo "Checking for existing toolchains..."
           
-          # Force re-extract if cache exists but bins are missing
-          if [ -f "clang-toolchain.tar.xz" ] || [ -f "clang-toolchain.tar.gz" ]; then
-            echo "Found cached archive, extracting..."
-            rm -rf clang
-            mkdir -p clang
-            if [ -f "clang-toolchain.tar.xz" ]; then
-              tar -xf clang-toolchain.tar.xz -C clang --strip-components=1
-            elif [ -f "clang-toolchain.tar.gz" ]; then
-              tar -xzf clang-toolchain.tar.gz -C clang --strip-components=1
-            fi
-          elif [ ! -d "clang/bin" ]; then
+          # Always ensure a fresh clang/ directory
+          rm -rf clang
+          mkdir -p clang
+          
+          # Download + extract Clang
+          if [ -f "clang-toolchain.tar.gz" ]; then
+            echo "Using cached clang-toolchain.tar.gz"
+          else
             echo "Downloading Clang toolchain..."
             wget -q -O clang-toolchain.tar.gz "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
-            mkdir -p clang
-            tar -xzf clang-toolchain.tar.gz -C clang --strip-components=1
-            # Keep archive for cache
           fi
           
+          # Do NOT use --strip-components; layout may already have bin/ at root
+          tar -xzf clang-toolchain.tar.gz -C clang
+          
+          # Download + extract ARM64 GCC if needed
           if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin" ]; then
             echo "Downloading ARM64 GCC toolchain..."
             wget -q -O gcc-arm64.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
             tar -xf gcc-arm64.tar.xz
           fi
           
+          # Download + extract ARM32 GCC if needed
           if [ ! -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin" ]; then
             echo "Downloading ARM32 GCC toolchain..."
             wget -q -O gcc-arm32.tar.xz "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
             tar -xf gcc-arm32.tar.xz
           fi
           
-          # Verify Clang bin exists
-          if [ ! -d "clang/bin" ]; then
-            echo "::error::Clang bin directory failed to extract/restore"
-            ls -la
+          echo "Locating Clang binary..."
+          CLANG_BIN_PATH=$(find "$PWD/clang" -maxdepth 4 -type f -name clang | head -1)
+          if [ -z "$CLANG_BIN_PATH" ]; then
+            echo "::error:: clang binary not found inside extracted clang toolchain"
+            find "$PWD/clang" -maxdepth 4 -type d -print
+            exit 1
+          fi
+          CLANG_BIN_DIR=$(dirname "$CLANG_BIN_PATH")
+          echo "Detected CLANG_BIN=$CLANG_BIN_DIR"
+          echo "CLANG_BIN=$CLANG_BIN_DIR" >> $GITHUB_ENV
+          
+          # Validate ld.lld in same bin dir
+          if [ ! -f "$CLANG_BIN_DIR/ld.lld" ]; then
+            echo "::error:: ld.lld not found next to clang in $CLANG_BIN_DIR"
+            ls -la "$CLANG_BIN_DIR"
             exit 1
           fi
           
-          # Set environment variables
+          # Set GCC toolchain env vars
           ARM64_DIR=$(find . -maxdepth 1 -type d -name "*aarch64*" | head -1)
           if [ -z "$ARM64_DIR" ]; then
-            echo "::error::ARM64 toolchain directory not found"
+            echo "::error:: ARM64 toolchain directory not found"
             exit 1
           fi
           echo "ARM64_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-" >> $GITHUB_ENV
           
           ARM32_DIR=$(find . -maxdepth 1 -type d -name "*arm-none*" | head -1)
           if [ -z "$ARM32_DIR" ]; then
-            echo "::error::ARM32 toolchain directory not found"
+            echo "::error:: ARM32 toolchain directory not found"
             exit 1
           fi
           echo "ARM32_TOOLCHAIN=${{ github.workspace }}/toolchain/${ARM32_DIR}/bin/arm-none-eabi-" >> $GITHUB_ENV
           
           echo "✓ Clang version:"
-          ${{ github.workspace }}/toolchain/clang/bin/clang --version
+          "$CLANG_BIN_DIR/clang" --version | head -5
           
           echo "✓ ARM64 GCC version:"
-          ${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc --version | head -1
-
+          "${{ github.workspace }}/toolchain/${ARM64_DIR}/bin/aarch64-none-linux-gnu-gcc" --version | head -1
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2

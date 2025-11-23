@@ -79,7 +79,7 @@ jobs:
       - name: Apply Custom Patch 1 (Kernel Root)
         run: |
           cd kernel
-          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o patch_0.patch
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o patch_0.patch
           patch -p1 < patch_0.patch || echo "Patch 0 failed, continuing..."
           cd ${{ github.workspace }}/kernel
 
@@ -93,9 +93,17 @@ jobs:
       - name: Apply Custom Patch 3 (Kernel Root)
         run: |
           cd kernel
-          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o patch_2.patch
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o patch_2.patch
           patch -p1 < patch_2.patch || echo "Patch 2 failed, continuing..."
           cd ${{ github.workspace }}/kernel
+
+      - name: Apply Custom Patch 4 (Kernel Root)
+        run: |
+          cd kernel
+          curl -L "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix_proc_base.patch" -o patch_3.patch
+          patch -p1 < patch_3.patch || echo "Patch 3 failed, continuing..."
+          cd ${{ github.workspace }}/kernel
+
       - name: Configure Kernel
         run: |
           cd kernel
@@ -158,7 +166,7 @@ jobs:
           echo "CONFIG_NET_SCH_FQ_CODEL=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_NET_SCH_CAKE=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_DEFAULT_FQ=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_DEFAULT_TCP_CONG="bbr"" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_F2FS_FS=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_F2FS_FS_XATTR=y" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_F2FS_FS_POSIX_ACL=y" >> arch/arm64/configs/gki_defconfig
@@ -211,7 +219,6 @@ jobs:
           
           # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
-          
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out gki_defconfig
 

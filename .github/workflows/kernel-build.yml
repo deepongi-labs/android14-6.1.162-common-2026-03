@@ -182,14 +182,6 @@ jobs:
             exit 1
           fi
           
-          # Apply CLIDR fix patch if exists
-          if [ -f "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" ]; then
-            echo "📋 Applying fix-clidr-uninitialized.patch"
-            cd kernel
-            patch -p1 --forward --no-backup-if-mismatch < "../susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" || echo "⚠️ CLIDR patch may already be applied"
-            cd ..
-          fi
-          
           # Apply KernelSU SuSFS enablement patch
           if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "kernel/KernelSU" ]; then
             echo "📋 Applying 10_enable_susfs_for_ksu.patch to KernelSU"
@@ -198,7 +190,25 @@ jobs:
             cd ../..
           fi
           
-          echo "🎉 All patches applied"
+          # Download and apply the CLIDR fix patch from external source
+          echo "📋 Downloading and applying fix-clidr-uninitialized.patch"
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o fix-clidr-uninitialized.patch
+          if [ -f "fix-clidr-uninitialized.patch" ]; then
+            if patch -p1 --forward --no-backup-if-mismatch < "fix-clidr-uninitialized.patch"; then
+              echo "✅ CLIDR fix patch applied successfully"
+              rm fix-clidr-uninitialized.patch
+            else
+              echo "⚠️ CLIDR fix patch may already be applied"
+              rm fix-clidr-uninitialized.patch
+            fi
+          else
+            echo "❌ Failed to download CLIDR fix patch"
+            exit 1
+          fi
+          cd ..
+          
+          echo "🎉 All patches applied in correct order"
 
       - name: Setup CCACHE Environment
         run: |

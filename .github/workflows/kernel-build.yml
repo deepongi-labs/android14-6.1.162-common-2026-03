@@ -83,7 +83,7 @@ jobs:
           cp ../susfs/kernel_patches/include/linux/susfs_def.h include/linux/
           echo "✅ SuSFS files integrated"
 
-      - name: Apply All Patches
+            - name: Apply All Patches
         id: patches
         run: |
           set +e
@@ -131,7 +131,17 @@ jobs:
           apply_patch_url "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
 
           echo "🔧 Applying KernelSU patch from susfs4ksu..."
-          apply_patch_file "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "KernelSU"
+          # Check if KernelSU directory exists and apply patch
+          if [ -d "KernelSU" ]; then
+            echo "📁 Found KernelSU directory, applying patch..."
+            apply_patch_file "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "KernelSU"
+          else
+            echo "❌ KernelSU directory not found at kernel/KernelSU/"
+            echo "📂 Current directory contents:"
+            ls -la
+            echo "📂 Looking for KernelSU..."
+            find . -name "KernelSU" -type d 2>/dev/null
+          fi
 
           set -e
           echo "🎉 All patches applied!"

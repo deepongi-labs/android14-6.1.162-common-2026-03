@@ -9,7 +9,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 0 * * 0'  # Weekly upstream sync
+    - cron: '0 0 * * 0'  # Weekly builds on Sunday
 
 env:
   # Use your local self-hosted toolchain paths
@@ -22,38 +22,6 @@ env:
   MAKE_JOBS: 8
 
 jobs:
-  sync-upstream:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, Linux, X64]
-    steps:
-      - name: Checkout Main Branch
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          
-      - name: Sync Kernel with Upstream
-        run: |
-          cd kernel
-          git remote add upstream https://android.googlesource.com/kernel/common 2>/dev/null || true
-          git fetch upstream android14-6.1-2025-09
-          
-          # Check if we're behind upstream
-          if ! git merge-base --is-ancestor HEAD upstream/android14-6.1-2025-09; then
-            echo "🔄 New upstream changes available, merging..."
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git merge upstream/android14-6.1-2025-09 --no-edit
-            cd ..
-            git add kernel
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git commit -m "chore: sync kernel with upstream changes" || echo "No changes to commit"
-            git push origin main
-          else
-            echo "✅ Kernel already up to date with upstream"
-          fi
-
   build-previous:
     runs-on: [self-hosted, Linux, X64]
     outputs:
@@ -75,9 +43,33 @@ jobs:
         with:
           fetch-depth: 20
 
+      - name: Verify Repository Structure
+        run: |
+          echo "🔍 Verifying repository structure..."
+          if [ ! -d "kernel" ]; then
+            echo "❌ kernel directory missing"
+            exit 1
+          fi
+          if [ ! -f "kernel/Makefile" ]; then
+            echo "❌ kernel Makefile missing - directory incomplete"
+            exit 1
+          fi
+          if [ ! -d "susfs4ksu" ]; then
+            echo "❌ susfs4ksu directory missing"
+            exit 1
+          fi
+          echo "✅ Repository structure verified"
+          echo "📁 Kernel: $(ls -la kernel/ | wc -l) items"
+          echo "📁 SuSFS: $(ls -la susfs4ksu/ | wc -l) items"
+
       - name: Patch setlocalversion Script
         run: |
           cd kernel
+          if [ ! -f "scripts/setlocalversion" ]; then
+            echo "❌ scripts/setlocalversion not found"
+            ls -la scripts/ | head -10
+            exit 1
+          fi
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
           echo "✅ setlocalversion patched to prevent dirty flag"
 
@@ -85,10 +77,9 @@ jobs:
         run: |
           cd kernel
           
-          # Install KernelSU if not already present
-          if [ ! -d "KernelSU" ]; then
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-          fi
+          # Install KernelSU
+          echo "🔧 Installing KernelSU..."
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
           
           # Enter the KernelSU folder
           cd KernelSU
@@ -120,19 +111,26 @@ jobs:
           if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
             cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
             echo "✅ Copied susfs.c to kernel/fs/"
+          else
+            echo "❌ susfs.c not found in susfs4ksu/kernel_patches/fs/"
+            ls -la susfs4ksu/kernel_patches/fs/ 2>/dev/null || echo "fs directory not found"
           fi
           
           if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
             cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
             echo "✅ Copied susfs.h to kernel/include/linux/"
+          else
+            echo "❌ susfs.h not found in susfs4ksu/kernel_patches/include/linux/"
           fi
           
           if [ -f "susfs4ksu/kernel_patches/include/linux/susfs_def.h" ]; then
             cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
             echo "✅ Copied susfs_def.h to kernel/include/linux/"
+          else
+            echo "❌ susfs_def.h not found in susfs4ksu/kernel_patches/include/linux/"
           fi
           
-          echo "✅ SuSFS files integrated from local folder"
+          echo "✅ SuSFS files integration completed"
 
       - name: Apply Local Patches
         id: patches
@@ -165,12 +163,15 @@ jobs:
           if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
             apply_patch "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" "kernel"
           else
-            echo "❌ Main SuSFS patch not found"
+            echo "❌ Main SuSFS patch not found at susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+            ls -la susfs4ksu/kernel_patches/ 2>/dev/null || echo "kernel_patches directory not found"
           fi
 
           # Apply CLIDR fix patch
           if [ -f "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" ]; then
             apply_patch "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" "kernel"
+          else
+            echo "⚠️ CLIDR fix patch not found"
           fi
 
           # Apply KernelSU SuSFS enablement patch
@@ -178,10 +179,11 @@ jobs:
             apply_patch "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "kernel/KernelSU"
           else
             echo "⚠️ KernelSU SuSFS patch not found or KernelSU directory missing"
+            ls -la susfs4ksu/kernel_patches/KernelSU/ 2>/dev/null || echo "KernelSU patches directory not found"
           fi
 
           set -e
-          echo "🎉 Local patches applied!"
+          echo "🎉 Patch application completed"
 
       - name: Setup CCACHE Environment
         run: |
@@ -308,7 +310,8 @@ jobs:
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configured"
-          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -100
+          echo "📋 Key configurations:"
+          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -20
 
       - name: Build Kernel
         id: build
@@ -418,12 +421,10 @@ jobs:
           fi
           echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
           
-          # Try to get SuSFS version/commit
+          # Get SuSFS version from local directory
           if [ -d "susfs4ksu" ]; then
-            cd susfs4ksu
-            SUSFS_VERSION=$(git log -1 --format="%h (%s)" 2>/dev/null || echo "local-gki-android14-6.1")
+            SUSFS_VERSION="local-$(ls -la susfs4ksu/kernel_patches/ | head -2 | tail -1 | cut -d' ' -f6-8 2>/dev/null || echo "gki-android14-6.1")"
             echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-            cd ..
           fi
           
           echo "✅ Build metadata extracted"
@@ -461,29 +462,6 @@ jobs:
             KSU_CHANGES="### 🔧 KernelSU Changes\n• KSU: Repository not available"
           fi
           
-          # Get Android kernel changes from common repo
-          echo "🐧 Fetching Android kernel changes from common android14-6.1-2025-09..."
-          KERNEL_CHANGES=""
-          if [ -d "kernel" ]; then
-            cd kernel
-            git remote add upstream https://android.googlesource.com/kernel/common 2>/dev/null || true
-            if git fetch upstream android14-6.1-2025-09 2>/dev/null; then
-              KERNEL_COMMITS=$(git log --oneline --pretty=format:"• Kernel: %s" upstream/android14-6.1-2025-09..HEAD 2>/dev/null | head -8)
-              if [ -n "$KERNEL_COMMITS" ]; then
-                KERNEL_CHANGES="$KERNEL_COMMITS"
-              else
-                KERNEL_CHANGES="• Kernel: Up to date with upstream"
-              fi
-            else
-              KERNEL_CHANGES="• Kernel: Unable to fetch upstream changes"
-            fi
-            KERNEL_COUNT=$(echo "$KERNEL_CHANGES" | grep -c "• Kernel:" || true)
-            KERNEL_CHANGES="### 🐧 Android Kernel Changes ($KERNEL_COUNT commits)\n$KERNEL_CHANGES"
-            cd ..
-          else
-            KERNEL_CHANGES="### 🐧 Android Kernel Changes\n• Kernel: Repository not available"
-          fi
-          
           # Get local repository changes
           echo "📁 Checking local repository changes..."
           LOCAL_CHANGES=$(git log --oneline --pretty=format:"• Local: %s" -n 5 2>/dev/null || echo "• Local: Changes not available")
@@ -491,7 +469,7 @@ jobs:
           LOCAL_CHANGES="### 📝 Local Repository Changes ($LOCAL_COUNT commits)\n$LOCAL_CHANGES"
           
           # Combine all changes
-          ALL_CHANGES=$(echo -e "$KSU_CHANGES\n\n$KERNEL_CHANGES\n\n$LOCAL_CHANGES")
+          ALL_CHANGES=$(echo -e "$KSU_CHANGES\n\n$LOCAL_CHANGES")
           
           # Format for GitHub output
           ALL_CHANGES="${ALL_CHANGES//'%'/'%25'}"
@@ -501,7 +479,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           
           echo "📝 Changes summary generated:"
-          echo "KSU: $KSU_COUNT commits | Kernel: $KERNEL_COUNT commits | Local: $LOCAL_COUNT commits"
+          echo "KSU: $KSU_COUNT commits | Local: $LOCAL_COUNT commits"
 
       - name: Prepare AnyKernel3
         if: success()
@@ -517,6 +495,7 @@ jobs:
           cd AnyKernel3
           rm -rf .git .github
 
+          # Copy kernel image
           cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
@@ -592,7 +571,6 @@ jobs:
             ### 📈 Changes Since Last Build
             **Sources:**
             - 🔧 [KernelSU](https://github.com/tiann/KernelSU) (main branch)
-            - 🐧 [Android Common Kernel](https://android.googlesource.com/kernel/common/) (android14-6.1-2025-09)
             - 📝 Local repository changes
             
             ${{ steps.changes.outputs.CHANGES_SINCE_LAST_BUILD }}

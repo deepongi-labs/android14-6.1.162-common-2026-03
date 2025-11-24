@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU and SuSFS by deepongi-labs
+name: Build GKI Kernel with KernelSU and SuSFS by deepongi
 
 on:
   workflow_dispatch:

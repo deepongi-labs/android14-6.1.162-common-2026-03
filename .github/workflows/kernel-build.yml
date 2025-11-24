@@ -83,7 +83,7 @@ jobs:
           cp ../susfs/kernel_patches/include/linux/susfs_def.h include/linux/
           echo "✅ SuSFS files integrated"
 
-            - name: Apply All Patches
+      - name: Apply All Patches
         id: patches
         run: |
           set +e
@@ -145,7 +145,6 @@ jobs:
 
           set -e
           echo "🎉 All patches applied!"
-
 
       - name: Configure Kernel
         id: config

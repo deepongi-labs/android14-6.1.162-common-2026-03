@@ -11,8 +11,8 @@ on:
 
 env:
   CCACHE_DIR: /tmp/ccache
-  CCACHE_MAXSIZE: 2G
-  MAKE_JOBS: 8
+  CCACHE_MAXSIZE: 5G
+  CCACHE_NOHASHDIR: 1   # Optional: improves cache hit accuracy
 
 jobs:
   build:
@@ -48,6 +48,11 @@ jobs:
           key: ${{ runner.os }}-toolchains-ccache-${{ hashFiles('.github/workflows/*.yml') }}-v7
           restore-keys: |
             ${{ runner.os }}-toolchains-ccache-
+
+      - name: Setup ccache environment
+        run: |
+          echo "Using ccache cache directory: $CCACHE_DIR"
+          ccache --zero-stats
 
       - name: Setup Custom Toolchain
         id: toolchain
@@ -207,6 +212,12 @@ jobs:
             cd ..
           fi
 
+      - name: Patch setlocalversion Script
+        run: |
+          cd kernel
+          sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
+          echo "✅ setlocalversion patched to prevent dirty flag"
+
       - name: Integrate KernelSU
         run: |
           cd kernel
@@ -271,6 +282,7 @@ jobs:
 
           set -e
           echo "🎉 All patches applied in correct order (SuSFS first, then fixes)!"
+
       - name: Configure Kernel
         id: config
         run: |
@@ -385,7 +397,7 @@ jobs:
           echo "✅ Kernel configuration complete"
           echo "📋 Final config summary:"
           grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -20
-          
+
       - name: Build Kernel
         id: build
         continue-on-error: false
@@ -412,6 +424,8 @@ jobs:
 
           # Build with normal output (shows file compilation progress)
           echo "🔧 Building with full compilation output..."
+          export CCACHE_DIR=/tmp/ccache
+          export CCACHE_MAXSIZE=5G
           make -j$(nproc) \
             LLVM_IAS=1 \
             LLVM=1 \
@@ -471,6 +485,7 @@ jobs:
           echo "build.run=${{ github.run_number }}" >> build.info
 
           echo "✅ AnyKernel3 prepared with uncompressed Image"
+
       - name: Package Kernel
         if: success()
         run: |
@@ -521,4 +536,4 @@ jobs:
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}  # Use PAT instead of GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}

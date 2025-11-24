@@ -30,16 +30,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Build Environment (Arch Linux)
-        run: |
-          sudo pacman -Syu --noconfirm
-          sudo pacman -S --noconfirm --needed base-devel
-          sudo pacman -S --noconfirm --needed \
-            bc bison flex openssl libelf ncurses \
-            git wget curl lz4 zstd python3 python-pip \
-            cpio kmod pahole pigz ninja rsync file
-          yay -S --noconfirm ccache patchelf xxd || true
-
       - name: Cache CCACHE
         uses: actions/cache@v4
         with:

@@ -268,9 +268,11 @@ jobs:
           echo "📊 Final CCACHE stats:"
           ccache -s
           
-          # Check hit rates
-          echo "📈 CCACHE performance:"
-          ccache -s | grep -E "(hit rate|cache hit|primary storage)"
+          # Check hit rates with better pattern matching
+          echo "📈 CCACHE performance summary:"
+          ccache -s | grep -E "(hit rate|Hits|Misses|Requests|Storage)" || echo "No hit rate data available (first build?)"
+          
+          echo "✅ CCACHE verification completed"
 
 
       - name: Build Kernel

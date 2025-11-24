@@ -43,67 +43,60 @@ jobs:
         with:
           fetch-depth: 20
 
-      - name: Verify Repository Structure
+      - name: Clean Submodule Configuration
         run: |
-          echo "🔍 Verifying repository structure..."
-          if [ ! -d "kernel" ]; then
-            echo "❌ kernel directory missing"
+          echo "🧹 Cleaning submodule configuration..."
+          # Remove .gitmodules if it exists
+          rm -f .gitmodules 2>/dev/null || true
+          # Remove any submodule configs
+          git config --remove-section submodule.kernel 2>/dev/null || true
+          git config --remove-section submodule.susfs4ksu 2>/dev/null || true
+          # Remove module directories
+          rm -rf .git/modules/kernel 2>/dev/null || true
+          rm -rf .git/modules/susfs4ksu 2>/dev/null || true
+          echo "✅ Submodule configuration cleaned"
+
+      - name: Ensure Correct Kernel Source
+        run: |
+          echo "🔄 Ensuring correct Android 14 6.1 kernel source..."
+          
+          # Remove existing kernel directory
+          rm -rf kernel
+          
+          # Clone the correct kernel branch
+          echo "🔍 Cloning Android Common Kernel..."
+          if git clone --depth=1 --branch=android14-6.1 https://android.googlesource.com/kernel/common kernel; then
+            echo "✅ Successfully cloned android14-6.1 branch"
+          elif git clone --depth=1 --branch=android14-gki https://android.googlesource.com/kernel/common kernel; then
+            echo "✅ Successfully cloned android14-gki branch"
+          elif git clone --depth=1 --branch=main https://android.googlesource.com/kernel/common kernel; then
+            echo "✅ Successfully cloned main branch"
+          else
+            echo "❌ Failed to clone kernel source"
             exit 1
           fi
-          if [ ! -f "kernel/Makefile" ]; then
-            echo "❌ kernel Makefile missing - directory incomplete"
-            exit 1
-          fi
+          
+          # Remove .git to make it a regular directory
+          rm -rf kernel/.git
+          
+          echo "📊 Kernel source verified:"
+          ls -la kernel/ | head -5
+
+      - name: Verify susfs4ksu Directory
+        run: |
+          echo "🔍 Verifying susfs4ksu directory..."
           if [ ! -d "susfs4ksu" ]; then
             echo "❌ susfs4ksu directory missing"
             exit 1
           fi
-          echo "✅ Repository structure verified"
-          echo "📁 Kernel: $(ls -la kernel/ | wc -l) items"
-          echo "📁 SuSFS: $(ls -la susfs4ksu/ | wc -l) items"
-
-      - name: Ensure Kernel is on Correct Branch
-        run: |
-          echo "🌿 Ensuring kernel is on correct branch..."
-          cd kernel
-          
-          # Initialize git in kernel directory if needed
-          if [ ! -d ".git" ]; then
-            echo "📦 Initializing git in kernel directory..."
-            git init
-            git remote add origin https://android.googlesource.com/kernel/common
+          # Remove any embedded git
+          if [ -d "susfs4ksu/.git" ]; then
+            rm -rf susfs4ksu/.git
+            echo "✅ Removed embedded git from susfs4ksu"
           fi
-          
-          # Fetch the correct branch
-          echo "📥 Fetching android14-6.1-2025-09 branch..."
-          git fetch origin android14-6.1-2025-09
-          
-          # Check if branch exists remotely
-          if git ls-remote --exit-code --heads origin android14-6.1-2025-09; then
-            echo "✅ Branch android14-6.1-2025-09 exists, checking out..."
-            git checkout -b android14-6.1-2025-09 origin/android14-6.1-2025-09 --force
-          else
-            echo "⚠️ Branch android14-6.1-2025-09 not found, trying alternatives..."
-            # Try common branch names
-            if git ls-remote --exit-code --heads origin android14-6.1; then
-              echo "✅ Found android14-6.1, checking out..."
-              git checkout -b android14-6.1 origin/android14-6.1 --force
-            elif git ls-remote --exit-code --heads origin android14-gki; then
-              echo "✅ Found android14-gki, checking out..."
-              git checkout -b android14-gki origin/android14-gki --force
-            else
-              echo "🔍 Available branches:"
-              git ls-remote --heads origin | head -10
-              echo "❌ No suitable branch found"
-              exit 1
-            fi
-          fi
-          
-          # Verify we're on the correct branch
-          CURRENT_BRANCH=$(git branch --show-current)
-          echo "✅ Kernel now on branch: $CURRENT_BRANCH"
-          echo "📊 Latest commit:"
-          git log --oneline -1
+          echo "📊 susfs4ksu contents:"
+          ls -la susfs4ksu/ | head -5
+          echo "✅ susfs4ksu directory ready"
 
       - name: Patch setlocalversion Script
         run: |
@@ -120,141 +113,108 @@ jobs:
         run: |
           cd kernel
           
-          # Install KernelSU
           echo "🔧 Installing KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
           
-          # Enter the KernelSU folder
           cd KernelSU
           
-          # Unshallow only if it is actually shallow
+          # Ensure we have full history for version calculation
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            echo "⚠️ KernelSU is shallow, unshallowing..."
+            echo "📦 Unshallowing KernelSU repository..."
             git fetch --unshallow
-          else
-            echo "✅ KernelSU is already deep cloned."
           fi
           
           # Count commits and calculate version
           KSU_COUNT=$(git rev-list --count HEAD)
           echo "KernelSU Commit Count: $KSU_COUNT"
-          
-          # Add your offset (e.g., 20000 + commit count)
           KSU_VERSION=$((KSU_COUNT + 20000))
-          
-          # Export to ENV for the next steps
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-          echo "✅ Calculated KernelSU Version: $KSU_VERSION"
+          echo "✅ Calculated KernelSU Version: r$KSU_VERSION"
 
-      - name: Copy SuSFS Files from Local Folder
+      - name: Copy SuSFS Files to Kernel
         run: |
-          echo "📁 Copying SuSFS files from local susfs4ksu folder to kernel..."
+          echo "📁 Copying SuSFS files to kernel..."
           
-          # Copy SuSFS source files to kernel from kernel_patches
+          # Copy SuSFS source files
           if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
             cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
             echo "✅ Copied susfs.c to kernel/fs/"
           else
-            echo "❌ susfs.c not found in susfs4ksu/kernel_patches/fs/"
+            echo "❌ susfs.c not found"
             ls -la susfs4ksu/kernel_patches/fs/ 2>/dev/null || echo "fs directory not found"
+            exit 1
           fi
           
           if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
             cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
             echo "✅ Copied susfs.h to kernel/include/linux/"
           else
-            echo "❌ susfs.h not found in susfs4ksu/kernel_patches/include/linux/"
+            echo "❌ susfs.h not found"
+            exit 1
           fi
           
           if [ -f "susfs4ksu/kernel_patches/include/linux/susfs_def.h" ]; then
             cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
             echo "✅ Copied susfs_def.h to kernel/include/linux/"
           else
-            echo "❌ susfs_def.h not found in susfs4ksu/kernel_patches/include/linux/"
+            echo "❌ susfs_def.h not found"
+            exit 1
           fi
           
-          echo "✅ SuSFS files integration completed"
+          echo "✅ All SuSFS files copied successfully"
 
-      - name: Apply Local Patches
-        id: patches
+      - name: Apply SuSFS Patches
         run: |
-          set +e
-          echo "🔧 Applying patches from local susfs4ksu/kernel_patches folder..."
-
-          apply_patch() {
-            patch_file=$1
-            target_dir=$2
-            if [ -f "$patch_file" ]; then
-              echo "📋 Applying $(basename $patch_file) to $target_dir"
-              cd "$target_dir"
-              if patch -p1 --forward --no-backup-if-mismatch < "../$patch_file"; then
-                echo "✅ Applied $(basename $patch_file)"
-                cd ..
-                return 0
-              else
-                echo "⚠️ Patch $(basename $patch_file) may already be applied or partially applied"
-                cd ..
-                return 0
-              fi
-            else
-              echo "❌ Patch file not found: $patch_file"
-              return 1
-            fi
-          }
-
-          # Apply main SuSFS integration patch to kernel
+          echo "🔧 Applying SuSFS patches..."
+          
+          # Apply main SuSFS integration patch
           if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
-            apply_patch "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" "kernel"
+            echo "📋 Applying 50_add_susfs_in_gki-android14-6.1.patch"
+            cd kernel
+            if patch -p1 --forward --no-backup-if-mismatch < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"; then
+              echo "✅ Main SuSFS patch applied"
+            else
+              echo "⚠️ Main SuSFS patch may already be applied"
+            fi
+            cd ..
           else
-            echo "❌ Main SuSFS patch not found at susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
-            ls -la susfs4ksu/kernel_patches/ 2>/dev/null || echo "kernel_patches directory not found"
+            echo "❌ Main SuSFS patch not found"
+            exit 1
           fi
-
-          # Apply CLIDR fix patch
+          
+          # Apply CLIDR fix patch if exists
           if [ -f "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" ]; then
-            apply_patch "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" "kernel"
-          else
-            echo "⚠️ CLIDR fix patch not found"
+            echo "📋 Applying fix-clidr-uninitialized.patch"
+            cd kernel
+            patch -p1 --forward --no-backup-if-mismatch < "../susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" || echo "⚠️ CLIDR patch may already be applied"
+            cd ..
           fi
-
+          
           # Apply KernelSU SuSFS enablement patch
           if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "kernel/KernelSU" ]; then
-            apply_patch "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "kernel/KernelSU"
-          else
-            echo "⚠️ KernelSU SuSFS patch not found or KernelSU directory missing"
-            ls -la susfs4ksu/kernel_patches/KernelSU/ 2>/dev/null || echo "KernelSU patches directory not found"
+            echo "📋 Applying 10_enable_susfs_for_ksu.patch to KernelSU"
+            cd kernel/KernelSU
+            patch -p1 --forward --no-backup-if-mismatch < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || echo "⚠️ KernelSU patch may already be applied"
+            cd ../..
           fi
-
-          set -e
-          echo "🎉 Patch application completed"
+          
+          echo "🎉 All patches applied"
 
       - name: Setup CCACHE Environment
         run: |
           echo "🔧 Setting up CCACHE environment..."
-          
-          # Ensure ccache is available in PATH
           export PATH="/usr/lib/ccache:$PATH"
-          
-          # Create ccache directory if it doesn't exist
           mkdir -p "${{ env.CCACHE_DIR }}"
-          
-          # Apply your local ccache configurations
           ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
           ccache --set-config=sloppiness=file_macro,locale,time_macros
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
-          
-          # Verify ccache configuration
+          ccache -z
           echo "📊 CCACHE configuration:"
           ccache -p
-          
-          # Clear stats to start fresh measurement
-          ccache -z
-          
           echo "✅ CCACHE environment configured"
 
       - name: Configure Kernel
-        id: config
         run: |
           cd kernel
           export ARCH=arm64
@@ -263,7 +223,7 @@ jobs:
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
 
-          echo "⚙️ Generating kernel config..."
+          echo "⚙️ Generating kernel configuration..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
           echo "🔧 Applying custom configurations..."
@@ -352,12 +312,11 @@ jobs:
           rm -vf android/abi_gki_protected_exports_* || true
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-          echo "✅ Kernel configured"
+          echo "✅ Kernel configured successfully"
           echo "📋 Key configurations:"
-          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -20
+          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config
 
       - name: Build Kernel
-        id: build
         run: |
           cd kernel
           export ARCH=arm64
@@ -368,8 +327,6 @@ jobs:
           export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           export KBUILD_BUILD_USER=github-actions
           export KBUILD_BUILD_HOST=github
-
-          # Explicitly set CC to use ccache
           export CC="ccache clang"
 
           NPROC=$(nproc || echo 8)
@@ -401,20 +358,17 @@ jobs:
           ccache -s
 
           if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image ]; then
-            echo "✅ Built kernel in ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
+            echo "✅ Kernel built successfully in ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
             echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
             echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
             echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
           else
             echo "❌ Kernel build failed after ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
-            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
-            echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
-            echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
             exit 1
           fi
 
       - name: Upload Build Log on Failure
-        if: failure() && steps.build.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-failure-logs-${{ github.run_number }}
@@ -426,33 +380,18 @@ jobs:
       - name: Verify CCACHE Integration
         run: |
           echo "🔍 Verifying CCACHE integration..."
-          
-          # Check if ccache is found and working
-          if which ccache >/dev/null 2>&1; then
-            echo "✅ CCACHE found: $(which ccache)"
-            echo "✅ CCACHE version: $(ccache --version | head -1)"
-          else
-            echo "❌ CCACHE not in PATH"
-            exit 1
-          fi
-          
-          # Show comprehensive stats
-          echo "📊 CCACHE configuration:"
-          ccache -p | grep -E "(max_size|sloppiness|compression|cache_dir)" | head -10
-          
-          echo "📈 CCACHE statistics:"
+          which ccache && echo "✅ CCACHE found: $(which ccache)" || echo "❌ CCACHE not found"
+          ccache --version | head -1
+          echo "📊 Final CCACHE stats:"
           ccache -s
-          
-          echo "✅ CCACHE is properly integrated and working"
+          echo "✅ CCACHE verification complete"
 
       - name: Extract Build Metadata
         if: success()
         run: |
-          # Get CCACHE hit rate
           CCACHE_HIT_RATE=$(ccache -s | grep -E "hit rate|Hit rate" | head -1 | sed 's/.*://' | tr -d ' ' || echo "N/A")
           echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
           
-          # Determine build speed status
           if [ $BUILD_TIME -lt 300 ]; then
             BUILD_SPEED="🚀 Very Fast"
           elif [ $BUILD_TIME -lt 600 ]; then
@@ -464,91 +403,41 @@ jobs:
           fi
           echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
           
-          # Get SuSFS version from local directory
-          if [ -d "susfs4ksu" ]; then
-            SUSFS_VERSION="local-$(ls -la susfs4ksu/kernel_patches/ | head -2 | tail -1 | cut -d' ' -f6-8 2>/dev/null || echo "gki-android14-6.1")"
-            echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-          fi
+          SUSFS_VERSION="local-$(date +%Y%m%d)"
+          echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
           
           echo "✅ Build metadata extracted"
 
       - name: Get Changes Since Last Build
         if: success()
-        id: changes
         run: |
-          echo "📝 Fetching changes from upstream repositories..."
-          
-          # Initialize changes variable
-          ALL_CHANGES=""
-          
-          # Get KernelSU changes from tiann/KernelSU
-          echo "🔧 Fetching KernelSU changes from tiann/KernelSU main branch..."
-          KSU_CHANGES=""
-          if [ -d "kernel/KernelSU" ]; then
-            cd kernel/KernelSU
-            # Add upstream if not exists
-            git remote add upstream https://github.com/tiann/KernelSU.git 2>/dev/null || true
-            if git fetch upstream main 2>/dev/null; then
-              KSU_COMMITS=$(git log --oneline --pretty=format:"• KSU: %s" upstream/main..HEAD 2>/dev/null | head -8)
-              if [ -n "$KSU_COMMITS" ]; then
-                KSU_CHANGES="$KSU_COMMITS"
-              else
-                KSU_CHANGES="• KSU: Up to date with upstream"
-              fi
-            else
-              KSU_CHANGES="• KSU: Unable to fetch upstream changes"
-            fi
-            KSU_COUNT=$(echo "$KSU_CHANGES" | grep -c "• KSU:" || true)
-            KSU_CHANGES="### 🔧 KernelSU Changes ($KSU_COUNT commits)\n$KSU_CHANGES"
-            cd ../..
-          else
-            KSU_CHANGES="### 🔧 KernelSU Changes\n• KSU: Repository not available"
-          fi
-          
-          # Get local repository changes
-          echo "📁 Checking local repository changes..."
-          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• Local: %s" -n 5 2>/dev/null || echo "• Local: Changes not available")
-          LOCAL_COUNT=$(echo "$LOCAL_CHANGES" | grep -c "• Local:" || true)
-          LOCAL_CHANGES="### 📝 Local Repository Changes ($LOCAL_COUNT commits)\n$LOCAL_CHANGES"
-          
-          # Combine all changes
-          ALL_CHANGES=$(echo -e "$KSU_CHANGES\n\n$LOCAL_CHANGES")
-          
-          # Format for GitHub output
+          echo "📝 Gathering build changes information..."
+          KSU_CHANGES="### 🔧 KernelSU Changes\n• Built from latest main branch"
+          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• %s" -n 3 2>/dev/null || echo "• Local: Initial build")
+          ALL_CHANGES="$KSU_CHANGES\n\n### 📝 Repository Changes\n$LOCAL_CHANGES"
           ALL_CHANGES="${ALL_CHANGES//'%'/'%25'}"
           ALL_CHANGES="${ALL_CHANGES//$'\n'/'%0A'}"
           echo "CHANGES_SINCE_LAST_BUILD<<EOF" >> $GITHUB_OUTPUT
           echo "$ALL_CHANGES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          
-          echo "📝 Changes summary generated:"
-          echo "KSU: $KSU_COUNT commits | Local: $LOCAL_COUNT commits"
+          echo "✅ Changes information gathered"
 
       - name: Prepare AnyKernel3
         if: success()
         run: |
-          for i in {1..3}; do
-            if git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3; then
-              break
-            fi
-            echo "⚠️ Clone attempt $i failed, retrying..."
-            rm -rf AnyKernel3
-            sleep 5
-          done
+          echo "📦 Preparing AnyKernel3..."
+          git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
           cd AnyKernel3
           rm -rf .git .github
 
-          # Copy kernel image
           cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
-          # Copy KSU SuSFS module if available
           if [ -d "../susfs4ksu/ksu_module_susfs" ]; then
-            echo "📦 Adding KSU SuSFS module to AnyKernel3..."
+            echo "📦 Adding KSU SuSFS module..."
             mkdir -p modules
             cp -r ../susfs4ksu/ksu_module_susfs/* modules/
-            echo "✅ KSU SuSFS module added"
           fi
 
           cat > build.info << EOF
@@ -565,16 +454,12 @@ jobs:
         if: success()
         run: |
           cd AnyKernel3
-          KERNEL_VERSION="6.1.145"
           TIMESTAMP=$(date +%Y%m%d_%H%M)
           ZIP_NAME="GKI-KernelSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
-
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
-
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
-
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
           echo "📦 Package created: $ZIP_NAME ($(du -h $ZIP_NAME | cut -f1))"
 
@@ -608,14 +493,10 @@ jobs:
             ### 🔧 Components Versions
             - **KernelSU Version:** r${{ env.KSU_VERSION }}
             - **SuSFS Version:** ${{ env.SUSFS_VERSION }}
-            - **Kernel Base:** 6.1.145-deepongi+
+            - **Kernel Base:** Android 14 6.1 GKI
             - **Toolchain:** Clang 22.0.0 + ARM GNU Toolchain 14.3
             
             ### 📈 Changes Since Last Build
-            **Sources:**
-            - 🔧 [KernelSU](https://github.com/tiann/KernelSU) (main branch)
-            - 📝 Local repository changes
-            
             ${{ steps.changes.outputs.CHANGES_SINCE_LAST_BUILD }}
             
             ### 🛠️ Build Configuration

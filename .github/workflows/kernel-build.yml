@@ -30,6 +30,16 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Cache CCACHE
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ github.ref }}-${{ hashFiles('.github/workflows/*.yml') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ github.ref }}-
+            ${{ runner.os }}-ccache-
+            ${{ runner.os }}-
+
       - name: Setup ccache
         run: |
           mkdir -p ${{ env.CCACHE_DIR }}
@@ -73,7 +83,7 @@ jobs:
           echo "KernelSU Commit Count: $KSU_COUNT"
           
           # Add your offset (e.g., 20000 + commit count)
-          KSU_VERSION=$((KSU_COUNT + 10000 + 200)) # Adjust this math as you like
+          KSU_VERSION=$((KSU_COUNT + 20000)) # Adjust this math as you like
           
           # 5. Export to ENV for the next steps
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV

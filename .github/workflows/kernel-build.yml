@@ -62,6 +62,49 @@ jobs:
           echo "📁 Kernel: $(ls -la kernel/ | wc -l) items"
           echo "📁 SuSFS: $(ls -la susfs4ksu/ | wc -l) items"
 
+      - name: Ensure Kernel is on Correct Branch
+        run: |
+          echo "🌿 Ensuring kernel is on correct branch..."
+          cd kernel
+          
+          # Initialize git in kernel directory if needed
+          if [ ! -d ".git" ]; then
+            echo "📦 Initializing git in kernel directory..."
+            git init
+            git remote add origin https://android.googlesource.com/kernel/common
+          fi
+          
+          # Fetch the correct branch
+          echo "📥 Fetching android14-6.1-2025-09 branch..."
+          git fetch origin android14-6.1-2025-09
+          
+          # Check if branch exists remotely
+          if git ls-remote --exit-code --heads origin android14-6.1-2025-09; then
+            echo "✅ Branch android14-6.1-2025-09 exists, checking out..."
+            git checkout -b android14-6.1-2025-09 origin/android14-6.1-2025-09 --force
+          else
+            echo "⚠️ Branch android14-6.1-2025-09 not found, trying alternatives..."
+            # Try common branch names
+            if git ls-remote --exit-code --heads origin android14-6.1; then
+              echo "✅ Found android14-6.1, checking out..."
+              git checkout -b android14-6.1 origin/android14-6.1 --force
+            elif git ls-remote --exit-code --heads origin android14-gki; then
+              echo "✅ Found android14-gki, checking out..."
+              git checkout -b android14-gki origin/android14-gki --force
+            else
+              echo "🔍 Available branches:"
+              git ls-remote --heads origin | head -10
+              echo "❌ No suitable branch found"
+              exit 1
+            fi
+          fi
+          
+          # Verify we're on the correct branch
+          CURRENT_BRANCH=$(git branch --show-current)
+          echo "✅ Kernel now on branch: $CURRENT_BRANCH"
+          echo "📊 Latest commit:"
+          git log --oneline -1
+
       - name: Patch setlocalversion Script
         run: |
           cd kernel

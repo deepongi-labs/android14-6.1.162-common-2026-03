@@ -10,9 +10,9 @@ on:
       - main
 
 env:
-  CCACHE_DIR: /tmp/ccache
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 5G
-  CCACHE_NOHASHDIR: 1   # Optional: improves cache hit accuracy
+  CCACHE_NOHASHDIR: 1
 
 jobs:
   build:
@@ -44,15 +44,12 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/toolchain
-            /tmp/ccache
-          key: ${{ runner.os }}-toolchains-ccache-${{ hashFiles('.github/workflows/*.yml') }}-v7
+            ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-toolchains-ccache-${{ github.ref }}-${{ hashFiles('.github/workflows/*.yml') }}-v8
           restore-keys: |
+            ${{ runner.os }}-toolchains-ccache-${{ github.ref }}-
             ${{ runner.os }}-toolchains-ccache-
-
-      - name: Setup ccache environment
-        run: |
-          echo "Using ccache cache directory: $CCACHE_DIR"
-          ccache --zero-stats
+            ${{ runner.os }}-
 
       - name: Setup Custom Toolchain
         id: toolchain
@@ -62,123 +59,111 @@ jobs:
           cd "${{ github.workspace }}/toolchain"
 
           echo "📥 Downloading toolchains..."
-          # Download GCC toolchains
+          
+          # Parallel download with retry logic
+          download_with_retry() {
+            local url="$1"
+            local output="$2"
+            local max_attempts=3
+            
+            for i in $(seq 1 $max_attempts); do
+              if wget -q --show-progress -O "$output" "$url"; then
+                echo "✅ Downloaded $output"
+                return 0
+              fi
+              echo "⚠️ Download attempt $i failed, retrying..."
+              sleep 5
+            done
+            echo "❌ Failed to download $output after $max_attempts attempts"
+            return 1
+          }
+          
+          # Download GCC toolchains in parallel
           if [ ! -f "gcc-arm64.tar.xz" ]; then
-            wget -q --show-progress -O gcc-arm64.tar.xz \
-              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+            download_with_retry \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz" \
+              "gcc-arm64.tar.xz" &
           fi
 
           if [ ! -f "gcc-arm32.tar.xz" ]; then
-            wget -q --show-progress -O gcc-arm32.tar.xz \
-              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz"
+            download_with_retry \
+              "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi.tar.xz" \
+              "gcc-arm32.tar.xz" &
           fi
 
-          # Handle ZyCromerZ Clang - it extracts files directly to current directory
+          # Download Clang
+          if [ ! -f "clang.tar.gz" ]; then
+            download_with_retry \
+              "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz" \
+              "clang.tar.gz" &
+          fi
+          
+          wait
+
+          # Handle ZyCromerZ Clang extraction
           if [ ! -d "clang" ]; then
             echo "📦 Setting up ZyCromerZ Clang..."
-            
-            # Download the Clang release if not already downloaded
-            if [ ! -f "clang.tar.gz" ]; then
-              wget -q --show-progress -O clang.tar.gz \
-                "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
-            fi
-            
-            # Extract and see what we get
-            echo "Extracting ZyCromerZ Clang..."
             tar -xzf clang.tar.gz
             
-            # The ZyCromerZ Clang extracts files directly to current directory
-            # Let's see what was extracted and organize it properly
-            echo "Contents after extraction:"
-            ls -la
-            
-            # Create clang directory and move all extracted files into it
             mkdir -p clang
             echo "Moving extracted files to clang/ directory..."
             
-            # Move all files and directories except what we don't want
             for item in *; do
               if [ "$item" != "clang" ] && [ "$item" != "clang.tar.gz" ] && \
-                 [ "$item" != "gcc-arm64.tar.xz" ] && [ "$item" != "gcc-arm32.tar.xz" ] && \
-                 [ "$item" != "." ] && [ "$item" != ".." ]; then
+                 [ "$item" != "gcc-arm64.tar.xz" ] && [ "$item" != "gcc-arm32.tar.xz" ]; then
                 mv "$item" clang/ 2>/dev/null || true
               fi
             done
             
-            echo "Final clang directory structure:"
-            ls -la clang/
-            
-            # Check if bin directory exists, if not create it and move binaries
             if [ ! -d "clang/bin" ]; then
-              echo "Creating bin directory and organizing binaries..."
               mkdir -p clang/bin
-              # Move any executable files to bin directory
               find clang -maxdepth 1 -type f -executable -exec mv {} clang/bin/ \; 2>/dev/null || true
             fi
           fi
 
           echo "📦 Extracting GCC toolchains..."
           if [ ! -d "aarch64-gcc" ]; then
-            tar -xf gcc-arm64.tar.xz
-            mv arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu aarch64-gcc
+            tar -xf gcc-arm64.tar.xz &
           fi
 
           if [ ! -d "arm-gcc" ]; then
-            tar -xf gcc-arm32.tar.xz
-            mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc
+            tar -xf gcc-arm32.tar.xz &
           fi
+          
+          wait
+          
+          # Rename if needed
+          [ -d "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu" ] && \
+            mv arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu aarch64-gcc
+          [ -d "arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi" ] && \
+            mv arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi arm-gcc
 
-          # Set paths - ZyCromerZ Clang might have different structure
+          # Set paths
           CLANG_BIN="$PWD/clang/bin"
           
-          # If bin directory doesn't exist, try to find where the binaries are
           if [ ! -d "$CLANG_BIN" ]; then
-            echo "🔍 Searching for Clang binaries..."
-            # Find clang binary and set path accordingly
             CLANG_PATH=$(find clang -name "clang" -type f | head -1)
             if [ -n "$CLANG_PATH" ]; then
               CLANG_BIN=$(dirname "$CLANG_PATH")
-              echo "Found Clang at: $CLANG_PATH"
-              echo "Setting CLANG_BIN to: $CLANG_BIN"
             else
-              # If we can't find clang, try using the clang directory directly
               CLANG_BIN="$PWD/clang"
-              echo "Using clang directory as CLANG_BIN: $CLANG_BIN"
             fi
           fi
 
           ARM64_TOOLCHAIN="$PWD/aarch64-gcc/bin/aarch64-none-linux-gnu-"
           ARM32_TOOLCHAIN="$PWD/arm-gcc/bin/arm-none-eabi-"
 
-          # Verify everything exists
-          echo "🔍 Checking toolchain setup..."
-          echo "CLANG_BIN: $CLANG_BIN"
-          echo "ARM64_TOOLCHAIN: $ARM64_TOOLCHAIN"
-          echo "ARM32_TOOLCHAIN: $ARM32_TOOLCHAIN"
-          
-          # List clang directory to see what we have
-          echo "Clang directory contents:"
-          ls -la clang/
-
-          # Check for clang binary
-          if [ -f "$CLANG_BIN/clang" ]; then
-            echo "✅ Clang binary found: $CLANG_BIN/clang"
-          else
-            # Try to find clang anywhere in the clang directory
+          # Verify toolchains
+          if [ ! -f "$CLANG_BIN/clang" ]; then
             FOUND_CLANG=$(find clang -name "clang" -type f | head -1)
             if [ -n "$FOUND_CLANG" ]; then
               CLANG_BIN=$(dirname "$FOUND_CLANG")
-              echo "✅ Found Clang at: $FOUND_CLANG"
-              echo "Updating CLANG_BIN to: $CLANG_BIN"
             else
-              echo "❌ Clang binary not found in expected locations"
-              echo "Searching for any executable files in clang directory:"
-              find clang -type f -executable | head -10
+              echo "❌ Clang binary not found"
               exit 1
             fi
           fi
 
-          # Verify other toolchains
           for tool in "${ARM64_TOOLCHAIN}gcc" "${ARM32_TOOLCHAIN}gcc"; do
             if [ ! -f "$tool" ]; then
               echo "::error::Toolchain binary not found: $tool"
@@ -190,21 +175,33 @@ jobs:
           echo "ARM64_TOOLCHAIN=$ARM64_TOOLCHAIN" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=$ARM32_TOOLCHAIN" >> $GITHUB_ENV
 
-          echo "✅ ZyCromerZ Clang setup complete!"
-          echo "clang version: $("$CLANG_BIN/clang" --version | head -1)"
+          echo "✅ Toolchain setup complete!"
+          echo "clang: $("$CLANG_BIN/clang" --version | head -1)"
           echo "aarch64-gcc: $("${ARM64_TOOLCHAIN}gcc" --version | head -1)"
           echo "arm-gcc: $("${ARM32_TOOLCHAIN}gcc" --version | head -1)"
 
       - name: Setup ccache
         run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
           echo "$(dirname $(which ccache))" >> $GITHUB_PATH
+          ccache --zero-stats
+          ccache --show-config
+          echo "📊 Initial CCACHE stats:"
           ccache --show-stats
 
       - name: Clone Kernel Source
         run: |
           if [ ! -d "kernel" ]; then
-            git clone --depth=1 --branch=android14-6.1-2025-09 \
-              https://android.googlesource.com/kernel/common kernel
+            for i in {1..3}; do
+              if git clone --depth=1 --branch=android14-6.1-2025-09 \
+                https://android.googlesource.com/kernel/common kernel; then
+                echo "✅ Kernel source cloned"
+                break
+              fi
+              echo "⚠️ Clone attempt $i failed, retrying..."
+              rm -rf kernel
+              sleep 10
+            done
           else
             cd kernel
             git fetch --depth=1 origin android14-6.1-2025-09
@@ -233,8 +230,16 @@ jobs:
       - name: Clone and Integrate SuSFS
         run: |
           if [ ! -d "susfs" ]; then
-            git clone --depth=1 --branch=gki-android14-6.1 \
-              https://gitlab.com/simonpunk/susfs4ksu.git susfs
+            for i in {1..3}; do
+              if git clone --depth=1 --branch=gki-android14-6.1 \
+                https://gitlab.com/simonpunk/susfs4ksu.git susfs; then
+                echo "✅ SuSFS cloned"
+                break
+              fi
+              echo "⚠️ Clone attempt $i failed, retrying..."
+              rm -rf susfs
+              sleep 10
+            done
           fi
           cd kernel
           cp ../susfs/kernel_patches/fs/susfs.c fs/
@@ -250,38 +255,35 @@ jobs:
 
           PATCH_BASE="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main"
 
-          echo "🔧 Applying patches in required order..."
-          
-          # Apply SuSFS patches FIRST
-          echo "📋 Step 1: Applying SuSFS patches..."
-          
-          echo "🔧 Applying 10_enable_susfs_for_ksu to KernelSU/"
-          curl -fsSL "$PATCH_BASE/10_enable_susfs_for_ksu.patch" -o /tmp/susfs1.patch
-          cd KernelSU
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/susfs1.patch || echo "⚠️ May already be applied"
-          cd ..
-          rm -f /tmp/susfs1.patch
+          apply_patch_with_retry() {
+            local url="$1"
+            local target_dir="$2"
+            local name=$(basename "$url")
+            
+            cd "$target_dir"
+            for i in {1..3}; do
+              if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
+                echo "✅ Applied $name"
+                cd "${{ github.workspace }}/kernel"
+                return 0
+              fi
+              echo "⚠️ Patch $name attempt $i failed, retrying..."
+              sleep 3
+            done
+            echo "⚠️ Patch $name may already be applied or failed"
+            cd "${{ github.workspace }}/kernel"
+            return 0
+          }
 
-          echo "🔧 Applying 50_add_susfs_in_gki-android14-6.1 to ./"
-          curl -fsSL "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" -o /tmp/susfs2.patch
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/susfs2.patch || echo "⚠️ May already be applied"
-          rm -f /tmp/susfs2.patch
-
-          # Apply fix patches AFTER SuSFS patches
-          echo "🔧 Step 2: Applying fix patches..."
+          echo "🔧 Applying patches..."
           
-          echo "🔧 Applying fix-clidr-uninitialized to ./"
-          curl -fsSL "$PATCH_BASE/fix-clidr-uninitialized.patch" -o /tmp/fix1.patch
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix1.patch || echo "⚠️ May already be applied"
-          rm -f /tmp/fix1.patch
-
-          echo "🔧 Applying fix_proc_base to ./"
-          curl -fsSL "$PATCH_BASE/fix_proc_base.patch" -o /tmp/fix2.patch
-          patch -p1 --forward --no-backup-if-mismatch < /tmp/fix2.patch || echo "⚠️ May already be applied"
-          rm -f /tmp/fix2.patch
+          apply_patch_with_retry "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "KernelSU"
+          apply_patch_with_retry "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
+          apply_patch_with_retry "$PATCH_BASE/fix-clidr-uninitialized.patch" "."
+          apply_patch_with_retry "$PATCH_BASE/fix_proc_base.patch" "."
 
           set -e
-          echo "🎉 All patches applied in correct order (SuSFS first, then fixes)!"
+          echo "🎉 All patches applied!"
 
       - name: Configure Kernel
         id: config
@@ -289,20 +291,13 @@ jobs:
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
-
-          # Setup environment
           export PATH="$CLANG_BIN:$PATH"
           export CROSS_COMPILE="$ARM64_TOOLCHAIN"
           export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
 
-          echo "⚙️ Setting up kernel configuration..."
-          
-          # First generate base GKI config
-          echo "🔧 Generating base GKI config..."
+          echo "⚙️ Configuring kernel..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
-          # Now append all your customizations directly to the .config file
-          echo "🔧 Applying custom configurations..."
           cat >> out/.config << 'EOF'
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
@@ -319,7 +314,6 @@ jobs:
           CONFIG_ENERGY_MODEL=y
           CONFIG_UCLAMP_TASK=y
           CONFIG_UCLAMP_TASK_GROUP=y
-          CONFIG_SCHEDUTIL=y
           CONFIG_CPU_FREQ=y
           CONFIG_CPUFREQ_DT=y
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
@@ -366,7 +360,6 @@ jobs:
           CONFIG_TCP_CONG_WESTWOOD=n
           CONFIG_TCP_CONG_HTCP=n
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CC_FLAGS="-O3 -flto -ffunction-sections -fdata-sections"
           CONFIG_CCACHE=y
           CONFIG_LTO=y
           CONFIG_LTO_CLANG=y
@@ -387,15 +380,10 @@ jobs:
           CONFIG_LOCALVERSION="-deepongi"
           EOF
 
-          # Remove ABI exports for WiFi fix
           rm -vf android/abi_gki_protected_exports_* || true
-
-          # Final config generation to resolve dependencies
-          echo "🔧 Resolving config dependencies..."
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-          echo "✅ Kernel configuration complete"
-          echo "📋 Final config summary:"
+          echo "✅ Kernel configured"
           grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -20
 
       - name: Build Kernel
@@ -405,28 +393,23 @@ jobs:
           cd kernel
           export ARCH=arm64
           export SUBARCH=arm64
-
-          # Setup build environment
           export PATH="$CLANG_BIN:$PATH"
           export CROSS_COMPILE="$ARM64_TOOLCHAIN" 
           export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
-
-          # Simple build timestamp
           export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           export KBUILD_BUILD_USER=github-actions
           export KBUILD_BUILD_HOST=github
+          
+          # Dynamic core count
+          NPROC=$(nproc || echo 8)
 
-          echo "🏗️ Starting kernel build with $(nproc) cores..."
+          echo "🏗️ Building kernel with $NPROC cores..."
           echo "📊 CCACHE stats before build:"
           ccache -s
 
           START_TIME=$SECONDS
 
-          # Build with normal output (shows file compilation progress)
-          echo "🔧 Building with full compilation output..."
-          export CCACHE_DIR=/tmp/ccache
-          export CCACHE_MAXSIZE=5G
-          make -j$(nproc) \
+          make -j"$NPROC" \
             LLVM_IAS=1 \
             LLVM=1 \
             ARCH=arm64 \
@@ -441,17 +424,23 @@ jobs:
 
           BUILD_STATUS=${PIPESTATUS[0]}
           BUILD_TIME=$((SECONDS - START_TIME))
+          BUILD_TIME_MIN=$((BUILD_TIME / 60))
+          BUILD_TIME_SEC=$((BUILD_TIME % 60))
 
           echo "📊 CCACHE stats after build:"
           ccache -s
 
           if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image ]; then
-            echo "✅ Kernel built successfully in ${BUILD_TIME}s"
+            echo "✅ Kernel built in ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
             echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+            echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
+            echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ Kernel build failed after ${BUILD_TIME}s"
-            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV  
+            echo "❌ Build failed after ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
+            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+            echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
+            echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             exit 1
           fi
@@ -469,22 +458,33 @@ jobs:
       - name: Prepare AnyKernel3
         if: success()
         run: |
-          git clone --depth=1 --branch=KernelSU \
-            https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          for i in {1..3}; do
+            if git clone --depth=1 --branch=KernelSU \
+              https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3; then
+              break
+            fi
+            echo "⚠️ Clone attempt $i failed, retrying..."
+            rm -rf AnyKernel3
+            sleep 5
+          done
+          
           cd AnyKernel3
           rm -rf .git .github
 
-          # Copy kernel artifacts - using Image instead of Image.gz
           cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
-          # Add build info
-          echo "build.date=$(date -u +%Y-%m-%d)" > build.info
-          echo "build.commit=${{ github.sha }}" >> build.info
-          echo "build.run=${{ github.run_number }}" >> build.info
+          # Build metadata
+          cat > build.info << EOF
+          build.date=$(date -u +%Y-%m-%d)
+          build.time=$(date -u +%H:%M:%S)
+          build.commit=${{ github.sha }}
+          build.run=${{ github.run_number }}
+          build.duration=${{ env.BUILD_TIME }}s
+          EOF
 
-          echo "✅ AnyKernel3 prepared with uncompressed Image"
+          echo "✅ AnyKernel3 prepared"
 
       - name: Package Kernel
         if: success()
@@ -494,17 +494,27 @@ jobs:
           TIMESTAMP=$(date +%Y%m%d_%H%M)
           ZIP_NAME="GKI-KernelSU-SuSFS-${KERNEL_VERSION}-${TIMESTAMP}.zip"
 
-          # Create flashable zip
-          zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
+          # Use pigz for parallel compression if available
+          if command -v pigz &> /dev/null; then
+            echo "Using pigz for faster compression..."
+            tar cf - . -X <(echo ".git"; echo ".github"; echo "README.md") | pigz -9 > "../${ZIP_NAME%.zip}.tar.gz"
+            # Convert to zip format for compatibility
+            cd ..
+            gunzip "${ZIP_NAME%.zip}.tar.gz"
+            zip -r9 "$ZIP_NAME" AnyKernel3/* -x "*.git*" ".github/*" "README.md"
+            rm -f "${ZIP_NAME%.zip}.tar"
+          else
+            zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
+            cd ..
+          fi
 
-          # Generate checksums
-          cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
 
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
           
-          echo "📦 Package created: $ZIP_NAME ($(du -h $ZIP_NAME | cut -f1))"
+          SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+          echo "📦 Package: $ZIP_NAME ($SIZE)"
           echo "📄 SHA256: $(cat ${ZIP_NAME}.sha256)"
           echo "📄 MD5: $(cat ${ZIP_NAME}.md5)"
 
@@ -527,10 +537,38 @@ jobs:
           name: "Kernel Build #${{ github.run_number }}"
           body: |
             ## 🚀 GKI Kernel with KernelSU & SuSFS
+            
             **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
+            
             ### 📊 Build Info
-            - **Duration:** ${{ env.BUILD_TIME }} seconds
-            - **Kernel:** 6.1.145
+            - **Duration:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s
+            - **Kernel:** 6.1.145-deepongi
+            - **Branch:** android14-6.1-2025-09
+            - **Commit:** ${{ github.sha }}
+            
+            ### 🔧 Components
+            - ✅ **KernelSU** (main branch)
+            - ✅ **SuSFS** (gki-android14-6.1)
+            - ✅ **Clang 22.0.0** (ZyCromerZ)
+            - ✅ **LTO:** ThinLTO
+            
+            ### 📥 Installation
+            1. Download the ZIP file
+            2. Verify checksums (SHA256/MD5)
+            3. Boot to recovery (TWRP/OrangeFox)
+            4. Flash the ZIP
+            5. Reboot
+            
+            ### 🔐 Checksums
+            **SHA256:**
+            ```
+            $(cat ${{ env.KERNEL_ZIP }}.sha256)
+            ```
+            
+            **MD5:**
+            ```
+            $(cat ${{ env.KERNEL_ZIP }}.md5)
+            ```
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256

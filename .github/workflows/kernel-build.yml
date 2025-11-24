@@ -12,7 +12,7 @@ on:
 env:
   CCACHE_DIR: /tmp/ccache
   CCACHE_MAXSIZE: 2G
-  MAKE_JOBS: ${{ github.runner_arch == 'x64' && 'all' || '2' }}
+  MAKE_JOBS: 16
 
 jobs:
   build:

@@ -8,6 +8,8 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly upstream sync
 
 env:
   # Use your local self-hosted toolchain paths
@@ -20,6 +22,38 @@ env:
   MAKE_JOBS: 8
 
 jobs:
+  sync-upstream:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Checkout Main Branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          
+      - name: Sync Kernel with Upstream
+        run: |
+          cd kernel
+          git remote add upstream https://android.googlesource.com/kernel/common 2>/dev/null || true
+          git fetch upstream android14-6.1-2025-09
+          
+          # Check if we're behind upstream
+          if ! git merge-base --is-ancestor HEAD upstream/android14-6.1-2025-09; then
+            echo "🔄 New upstream changes available, merging..."
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git merge upstream/android14-6.1-2025-09 --no-edit
+            cd ..
+            git add kernel
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git commit -m "chore: sync kernel with upstream changes" || echo "No changes to commit"
+            git push origin main
+          else
+            echo "✅ Kernel already up to date with upstream"
+          fi
+
   build-previous:
     runs-on: [self-hosted, Linux, X64]
     outputs:
@@ -41,12 +75,6 @@ jobs:
         with:
           fetch-depth: 20
 
-      - name: Clone Kernel Source
-        run: |
-          cd kernel
-          git reset --hard && git clean -fdx
-          cd ..
-
       - name: Patch setlocalversion Script
         run: |
           cd kernel
@@ -57,13 +85,15 @@ jobs:
         run: |
           cd kernel
           
-          # 1. Install KernelSU normally
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          # Install KernelSU if not already present
+          if [ ! -d "KernelSU" ]; then
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          fi
           
-          # 2. Enter the KernelSU folder
+          # Enter the KernelSU folder
           cd KernelSU
           
-          # 3. Unshallow only if it is actually shallow
+          # Unshallow only if it is actually shallow
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             echo "⚠️ KernelSU is shallow, unshallowing..."
             git fetch --unshallow
@@ -71,72 +101,87 @@ jobs:
             echo "✅ KernelSU is already deep cloned."
           fi
           
-          # 4. Count commits and calculate version
+          # Count commits and calculate version
           KSU_COUNT=$(git rev-list --count HEAD)
           echo "KernelSU Commit Count: $KSU_COUNT"
           
           # Add your offset (e.g., 20000 + commit count)
           KSU_VERSION=$((KSU_COUNT + 20000))
           
-          # 5. Export to ENV for the next steps
+          # Export to ENV for the next steps
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "✅ Calculated KernelSU Version: $KSU_VERSION"
 
-      - name: Clone and Integrate SuSFS
+      - name: Copy SuSFS Files from Local Folder
         run: |
-          if [ ! -d "susfs" ]; then
-            git clone --depth=1 --branch=gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+          echo "📁 Copying SuSFS files from local susfs4ksu folder to kernel..."
+          
+          # Copy SuSFS source files to kernel from kernel_patches
+          if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
+            cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
+            echo "✅ Copied susfs.c to kernel/fs/"
           fi
-          cd kernel
-          cp ../susfs/kernel_patches/fs/susfs.c fs/
-          cp ../susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp ../susfs/kernel_patches/include/linux/susfs_def.h include/linux/
-          echo "✅ SuSFS files integrated"
+          
+          if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
+            cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
+            echo "✅ Copied susfs.h to kernel/include/linux/"
+          fi
+          
+          if [ -f "susfs4ksu/kernel_patches/include/linux/susfs_def.h" ]; then
+            cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
+            echo "✅ Copied susfs_def.h to kernel/include/linux/"
+          fi
+          
+          echo "✅ SuSFS files integrated from local folder"
 
-      - name: Apply All Patches
+      - name: Apply Local Patches
         id: patches
         run: |
           set +e
-          cd kernel
+          echo "🔧 Applying patches from local susfs4ksu/kernel_patches folder..."
 
-          PATCH_BASE="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main"
-
-          apply_patch_url() {
-            url=$1
-            dir=$2
-            cd "$dir"
-            for i in {1..3}; do
-              if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
-                echo "✅ Applied $(basename $url) from URL"
-                cd "${{ github.workspace }}/kernel"
+          apply_patch() {
+            patch_file=$1
+            target_dir=$2
+            if [ -f "$patch_file" ]; then
+              echo "📋 Applying $(basename $patch_file) to $target_dir"
+              cd "$target_dir"
+              if patch -p1 --forward --no-backup-if-mismatch < "../$patch_file"; then
+                echo "✅ Applied $(basename $patch_file)"
+                cd ..
+                return 0
+              else
+                echo "⚠️ Patch $(basename $patch_file) may already be applied or partially applied"
+                cd ..
                 return 0
               fi
-              echo "⚠️ Patch $(basename $url) attempt $i failed, retrying..."
-              sleep 3
-            done
-            echo "⚠️ Patch $(basename $url) may already be applied or failed"
-            cd "${{ github.workspace }}/kernel"
-            return 0
+            else
+              echo "❌ Patch file not found: $patch_file"
+              return 1
+            fi
           }
 
-          echo "🔧 Applying 50_add_susfs_in_gki-android14-6.1.patch from infectedmushi..."
-          apply_patch_url "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
-
-          echo "🔧 Applying fix-clidr-uninitialized.patch from infectedmushi..."
-          apply_patch_url "$PATCH_BASE/fix-clidr-uninitialized.patch" "."
-
-          echo "🔧 Applying 10_enable_susfs_for_ksu.patch to KernelSU directory..."
-          if [ -d "KernelSU" ]; then
-            apply_patch_url "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "KernelSU"
+          # Apply main SuSFS integration patch to kernel
+          if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
+            apply_patch "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" "kernel"
           else
-            echo "❌ KernelSU directory not found, cannot apply KernelSU patch"
-            echo "📂 Current directory contents:"
-            ls -la
-            exit 1
+            echo "❌ Main SuSFS patch not found"
+          fi
+
+          # Apply CLIDR fix patch
+          if [ -f "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" ]; then
+            apply_patch "susfs4ksu/kernel_patches/fix-clidr-uninitialized.patch" "kernel"
+          fi
+
+          # Apply KernelSU SuSFS enablement patch
+          if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "kernel/KernelSU" ]; then
+            apply_patch "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "kernel/KernelSU"
+          else
+            echo "⚠️ KernelSU SuSFS patch not found or KernelSU directory missing"
           fi
 
           set -e
-          echo "🎉 All patches applied!"
+          echo "🎉 Local patches applied!"
 
       - name: Setup CCACHE Environment
         run: |
@@ -174,7 +219,7 @@ jobs:
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
 
           echo "⚙️ Generating kernel config..."
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lvd O=out gki_defconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
           echo "🔧 Applying custom configurations..."
           cat >> out/.config << 'EOF'
@@ -260,7 +305,7 @@ jobs:
           EOF
 
           rm -vf android/abi_gki_protected_exports_* || true
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lvd O=out olddefconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configured"
           grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -100
@@ -297,8 +342,8 @@ jobs:
             CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
             CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
             CC="$CC" \
-            LD=ld.lvd \
-            HOSTLD=ld.lvd \
+            LD=ld.lld \
+            HOSTLD=ld.lld \
             O=out 2>&1 | tee build.log
 
           BUILD_STATUS=${PIPESTATUS[0]}
@@ -374,9 +419,9 @@ jobs:
           echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
           
           # Try to get SuSFS version/commit
-          if [ -d "susfs" ]; then
-            cd susfs
-            SUSFS_VERSION=$(git log -1 --format="%h (%s)" 2>/dev/null || echo "gki-android14-6.1")
+          if [ -d "susfs4ksu" ]; then
+            cd susfs4ksu
+            SUSFS_VERSION=$(git log -1 --format="%h (%s)" 2>/dev/null || echo "local-gki-android14-6.1")
             echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
             cd ..
           fi
@@ -421,8 +466,9 @@ jobs:
           KERNEL_CHANGES=""
           if [ -d "kernel" ]; then
             cd kernel
-            if git fetch origin android14-6.1-2025-09 2>/dev/null; then
-              KERNEL_COMMITS=$(git log --oneline --pretty=format:"• Kernel: %s" origin/android14-6.1-2025-09..HEAD 2>/dev/null | head -8)
+            git remote add upstream https://android.googlesource.com/kernel/common 2>/dev/null || true
+            if git fetch upstream android14-6.1-2025-09 2>/dev/null; then
+              KERNEL_COMMITS=$(git log --oneline --pretty=format:"• Kernel: %s" upstream/android14-6.1-2025-09..HEAD 2>/dev/null | head -8)
               if [ -n "$KERNEL_COMMITS" ]; then
                 KERNEL_CHANGES="$KERNEL_COMMITS"
               else
@@ -474,6 +520,14 @@ jobs:
           cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
+
+          # Copy KSU SuSFS module if available
+          if [ -d "../susfs4ksu/ksu_module_susfs" ]; then
+            echo "📦 Adding KSU SuSFS module to AnyKernel3..."
+            mkdir -p modules
+            cp -r ../susfs4ksu/ksu_module_susfs/* modules/
+            echo "✅ KSU SuSFS module added"
+          fi
 
           cat > build.info << EOF
           build.date=$(date -u +%Y-%m-%d)
@@ -548,6 +602,7 @@ jobs:
             - **Optimization:** -O2 with performance tuning
             - **Architecture:** ARM64 with Cortex-X3/A715/A510 optimization
             - **Security:** KernelSU LSM hooks + SuSFS hiding
+            - **Includes:** KSU SuSFS module for root hiding
             
             ### 📦 Installation
             1. Download the ZIP file below

@@ -178,86 +178,86 @@ jobs:
 
           echo "🔧 Applying custom configurations..."
           cat >> out/.config << 'EOF'
-CONFIG_ARM64_CORTEX_X3=y
-CONFIG_ARM64_CORTEX_A715=y
-CONFIG_ARM64_CORTEX_A510=y
-CONFIG_ARM64_VA_BITS=48
-CONFIG_ARM64_PA_BITS=48
-CONFIG_ARM64_TAGGED_ADDR_ABI=y
-CONFIG_ARM64_SVE=y
-CONFIG_ARM64_BTI=y
-CONFIG_ARM64_PTR_AUTH=y
-CONFIG_ARM64_SME=y
-CONFIG_SCHED_MC=y
-CONFIG_SCHED_CORE=y
-CONFIG_ENERGY_MODEL=y
-CONFIG_UCLAMP_TASK=y
-CONFIG_UCLAMP_TASK_GROUP=y
-CONFIG_CPU_FREQ=y
-CONFIG_CPUFREQ_DT=y
-CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-CONFIG_OPP=y
-CONFIG_CPU_IDLE=y
-CONFIG_ARM_PSCI_CPUIDLE=y
-CONFIG_THERMAL=y
-CONFIG_CPU_THERMAL=y
-CONFIG_DEVFREQ_THERMAL=y
-CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-CONFIG_THERMAL_GOV_STEP_WISE=y
-CONFIG_THERMAL_GOV_FAIR_SHARE=y
-CONFIG_THERMAL_EMULATION=y
-CONFIG_THERMAL_WRITABLE_TRIPS=y
-CONFIG_POWER_CAP=y
-CONFIG_PERF_EVENTS=y
-CONFIG_NUMA_BALANCING=y
-CONFIG_CMA=y
-CONFIG_CMA_AREAS=7
-CONFIG_LOCALVERSION_AUTO=n
-CONFIG_KSU=y
-CONFIG_KSU_LSM_SECURITY_HOOKS=y
-CONFIG_KSU_SUSFS=y
-CONFIG_KSU_SUSFS_SUS_PATH=y
-CONFIG_KSU_SUSFS_SUS_MOUNT=y
-CONFIG_KSU_SUSFS_SUS_KSTAT=y
-CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-CONFIG_KSU_SUSFS_ENABLE_LOG=y
-CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-CONFIG_KSU_SUSFS_SUS_MAP=y
-CONFIG_TMPFS_XATTR=y
-CONFIG_TMPFS_POSIX_ACL=y
-CONFIG_IP_NF_TARGET_TTL=y
-CONFIG_IP6_NF_TARGET_HL=y
-CONFIG_IP6_NF_MATCH_HL=y
-CONFIG_TCP_CONG_ADVANCED=y
-CONFIG_TCP_CONG_BBR=y
-CONFIG_NET_SCH_FQ=y
-CONFIG_TCP_CONG_BIC=n
-CONFIG_TCP_CONG_WESTWOOD=n
-CONFIG_TCP_CONG_HTCP=n
-CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-CONFIG_CCACHE=y
-CONFIG_LTO=y
-CONFIG_LTO_CLANG=y
-CONFIG_LTO_CLANG_THIN=y
-CONFIG_IP_SET=y
-CONFIG_IP_SET_MAX=256
-CONFIG_IP_SET_BITMAP_IP=y
-CONFIG_IP_SET_BITMAP_IPMAC=y
-CONFIG_IP_SET_BITMAP_PORT=y
-CONFIG_IP_SET_HASH_IP=y
-CONFIG_IP_SET_HASH_IPPORT=y
-CONFIG_IP_SET_HASH_IPPORTIP=y
-CONFIG_IP_SET_HASH_IPPORTNET=y
-CONFIG_IP_SET_HASH_NET=y
-CONFIG_IP_SET_HASH_NETNET=y
-CONFIG_IP_SET_HASH_NETPORT=y
-CONFIG_IP_SET_HASH_NETIFACE=y
-CONFIG_LOCALVERSION="-deepongi+"
-EOF
+          CONFIG_ARM64_CORTEX_X3=y
+          CONFIG_ARM64_CORTEX_A715=y
+          CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_ARM64_VA_BITS=48
+          CONFIG_ARM64_PA_BITS=48
+          CONFIG_ARM64_TAGGED_ADDR_ABI=y
+          CONFIG_ARM64_SVE=y
+          CONFIG_ARM64_BTI=y
+          CONFIG_ARM64_PTR_AUTH=y
+          CONFIG_ARM64_SME=y
+          CONFIG_SCHED_MC=y
+          CONFIG_SCHED_CORE=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPUFREQ_DT=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_OPP=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_ARM_PSCI_CPUIDLE=y
+          CONFIG_THERMAL=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_DEVFREQ_THERMAL=y
+          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+          CONFIG_THERMAL_GOV_STEP_WISE=y
+          CONFIG_THERMAL_GOV_FAIR_SHARE=y
+          CONFIG_THERMAL_EMULATION=y
+          CONFIG_THERMAL_WRITABLE_TRIPS=y
+          CONFIG_POWER_CAP=y
+          CONFIG_PERF_EVENTS=y
+          CONFIG_NUMA_BALANCING=y
+          CONFIG_CMA=y
+          CONFIG_CMA_AREAS=7
+          CONFIG_LOCALVERSION_AUTO=n
+          CONFIG_KSU=y
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_TCP_CONG_BIC=n
+          CONFIG_TCP_CONG_WESTWOOD=n
+          CONFIG_TCP_CONG_HTCP=n
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_CCACHE=y
+          CONFIG_LTO=y
+          CONFIG_LTO_CLANG=y
+          CONFIG_LTO_CLANG_THIN=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=256
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_LOCALVERSION="-deepongi+"
+          EOF
 
           rm -vf android/abi_gki_protected_exports_* || true
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lvd O=out olddefconfig
@@ -387,24 +387,75 @@ EOF
         if: success()
         id: changes
         run: |
-          # Get the previous successful commit
-          PREVIOUS_COMMIT=$(git log --oneline -n 2 | tail -1 | cut -d' ' -f1 || echo "")
+          echo "📝 Fetching changes from upstream repositories..."
           
-          if [ ! -z "$PREVIOUS_COMMIT" ]; then
-            CHANGES=$(git log --oneline --pretty=format:"• %s" $PREVIOUS_COMMIT..HEAD 2>/dev/null || echo "• Changes not available")
+          # Initialize changes variable
+          ALL_CHANGES=""
+          
+          # Get KernelSU changes from tiann/KernelSU
+          echo "🔧 Fetching KernelSU changes from tiann/KernelSU main branch..."
+          KSU_CHANGES=""
+          if [ -d "kernel/KernelSU" ]; then
+            cd kernel/KernelSU
+            # Add upstream if not exists
+            git remote add upstream https://github.com/tiann/KernelSU.git 2>/dev/null || true
+            if git fetch upstream main 2>/dev/null; then
+              KSU_COMMITS=$(git log --oneline --pretty=format:"• KSU: %s" upstream/main..HEAD 2>/dev/null | head -8)
+              if [ -n "$KSU_COMMITS" ]; then
+                KSU_CHANGES="$KSU_COMMITS"
+              else
+                KSU_CHANGES="• KSU: Up to date with upstream"
+              fi
+            else
+              KSU_CHANGES="• KSU: Unable to fetch upstream changes"
+            fi
+            KSU_COUNT=$(echo "$KSU_CHANGES" | grep -c "• KSU:" || true)
+            KSU_CHANGES="### 🔧 KernelSU Changes ($KSU_COUNT commits)\n$KSU_CHANGES"
+            cd ../..
           else
-            CHANGES="• Initial build"
+            KSU_CHANGES="### 🔧 KernelSU Changes\n• KSU: Repository not available"
           fi
           
+          # Get Android kernel changes from common repo
+          echo "🐧 Fetching Android kernel changes from common android14-6.1-2025-09..."
+          KERNEL_CHANGES=""
+          if [ -d "kernel" ]; then
+            cd kernel
+            if git fetch origin android14-6.1-2025-09 2>/dev/null; then
+              KERNEL_COMMITS=$(git log --oneline --pretty=format:"• Kernel: %s" origin/android14-6.1-2025-09..HEAD 2>/dev/null | head -8)
+              if [ -n "$KERNEL_COMMITS" ]; then
+                KERNEL_CHANGES="$KERNEL_COMMITS"
+              else
+                KERNEL_CHANGES="• Kernel: Up to date with upstream"
+              fi
+            else
+              KERNEL_CHANGES="• Kernel: Unable to fetch upstream changes"
+            fi
+            KERNEL_COUNT=$(echo "$KERNEL_CHANGES" | grep -c "• Kernel:" || true)
+            KERNEL_CHANGES="### 🐧 Android Kernel Changes ($KERNEL_COUNT commits)\n$KERNEL_CHANGES"
+            cd ..
+          else
+            KERNEL_CHANGES="### 🐧 Android Kernel Changes\n• Kernel: Repository not available"
+          fi
+          
+          # Get local repository changes
+          echo "📁 Checking local repository changes..."
+          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• Local: %s" -n 5 2>/dev/null || echo "• Local: Changes not available")
+          LOCAL_COUNT=$(echo "$LOCAL_CHANGES" | grep -c "• Local:" || true)
+          LOCAL_CHANGES="### 📝 Local Repository Changes ($LOCAL_COUNT commits)\n$LOCAL_CHANGES"
+          
+          # Combine all changes
+          ALL_CHANGES=$(echo -e "$KSU_CHANGES\n\n$KERNEL_CHANGES\n\n$LOCAL_CHANGES")
+          
           # Format for GitHub output
-          CHANGES="${CHANGES//'%'/'%25'}"
-          CHANGES="${CHANGES//$'\n'/'%0A'}"
+          ALL_CHANGES="${ALL_CHANGES//'%'/'%25'}"
+          ALL_CHANGES="${ALL_CHANGES//$'\n'/'%0A'}"
           echo "CHANGES_SINCE_LAST_BUILD<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "$ALL_CHANGES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
-          echo "📝 Changes since last build:"
-          echo "$CHANGES"
+          echo "📝 Changes summary generated:"
+          echo "KSU: $KSU_COUNT commits | Kernel: $KERNEL_COUNT commits | Local: $LOCAL_COUNT commits"
 
       - name: Prepare AnyKernel3
         if: success()
@@ -485,6 +536,11 @@ EOF
             - **Toolchain:** Clang 22.0.0 + ARM GNU Toolchain 14.3
             
             ### 📈 Changes Since Last Build
+            **Sources:**
+            - 🔧 [KernelSU](https://github.com/tiann/KernelSU) (main branch)
+            - 🐧 [Android Common Kernel](https://android.googlesource.com/kernel/common/) (android14-6.1-2025-09)
+            - 📝 Local repository changes
+            
             ${{ steps.changes.outputs.CHANGES_SINCE_LAST_BUILD }}
             
             ### 🛠️ Build Configuration

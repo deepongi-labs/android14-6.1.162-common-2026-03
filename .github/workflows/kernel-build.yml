@@ -50,17 +50,34 @@ jobs:
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
           echo "✅ setlocalversion patched to prevent dirty flag"
 
-      - name: Integrate KernelSU
+      - name: Integrate KernelSU & Generate Version
         run: |
           cd kernel
-          for i in {1..3}; do
-            if curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main; then
-              echo "✅ KernelSU integrated successfully"
-              break
-            fi
-            echo "⚠️ KernelSU integration attempt $i failed, retrying..."
-            sleep 10
-          done
+          
+          # 1. Install KernelSU normally
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          
+          # 2. Enter the KernelSU folder
+          cd KernelSU
+          
+          # 3. Unshallow only if it is actually shallow
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            echo "⚠️ KernelSU is shallow, unshallowing..."
+            git fetch --unshallow
+          else
+            echo "✅ KernelSU is already deep cloned."
+          fi
+          
+          # 4. Count commits and calculate version
+          KSU_COUNT=$(git rev-list --count HEAD)
+          echo "KernelSU Commit Count: $KSU_COUNT"
+          
+          # Add your offset (e.g., 20000 + commit count)
+          KSU_VERSION=$((KSU_COUNT + 10000 + 200)) # Adjust this math as you like
+          
+          # 5. Export to ENV for the next steps
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "✅ Calculated KernelSU Version: $KSU_VERSION"
 
       - name: Clone and Integrate SuSFS
         run: |
@@ -102,8 +119,18 @@ jobs:
           echo "🔧 Applying 50_add_susfs_in_gki-android14-6.1.patch from infectedmushi..."
           apply_patch_url "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
 
-          echo "🔧 Applying 10_enable_susfs_for_ksu.patch from infectedmushi..."
-          apply_patch_url "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "."
+          echo "🔧 Applying fix-clidr-uninitialized.patch from infectedmushi..."
+          apply_patch_url "$PATCH_BASE/fix-clidr-uninitialized.patch" "."
+
+          echo "🔧 Applying 10_enable_susfs_for_ksu.patch to KernelSU directory..."
+          if [ -d "KernelSU" ]; then
+            apply_patch_url "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "KernelSU"
+          else
+            echo "❌ KernelSU directory not found, cannot apply KernelSU patch"
+            echo "📂 Current directory contents:"
+            ls -la
+            exit 1
+          fi
 
           set -e
           echo "🎉 All patches applied!"
@@ -308,7 +335,7 @@ jobs:
           cd AnyKernel3
           KERNEL_VERSION="6.1.145"
           TIMESTAMP=$(date +%Y%m%d_%H%M)
-          ZIP_NAME="GKI-KernelSU-SuSFS-${KERNEL_VERSION}-${TIMESTAMP}.zip"
+          ZIP_NAME="GKI-KernelSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
 
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
 

@@ -1,6 +1,6 @@
-From d03a090c27d9d9cf251069767d0d385eed684fbe Mon Sep 17 00:00:00 2001
+From 5e7aa69a809b21d87edda4dc80ceafc9faf7b6ca Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Mon, 24 Nov 2025 02:32:16 +0000
+Date: Mon, 24 Nov 2025 23:48:05 +0000
 Subject: [PATCH] 50_add_susfs_in_gki-android14-6.1
 
 ---

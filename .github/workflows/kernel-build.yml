@@ -43,7 +43,7 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          cd Kernel
+          cd kernel
           git reset --hard && git clean -fdx
           cd ..
 
@@ -260,7 +260,7 @@ jobs:
           EOF
 
           rm -vf android/abi_gki_protected_exports_* || true
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lvd O=out olddefconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configured"
           grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -100
@@ -297,8 +297,8 @@ jobs:
             CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
             CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
             CC="$CC" \
-            LD=ld.lvd \
-            HOSTLD=ld.lvd \
+            LD=ld.lld \
+            HOSTLD=ld.lld \
             O=out 2>&1 | tee build.log
 
           BUILD_STATUS=${PIPESTATUS[0]}

@@ -191,14 +191,14 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-        if [ ! -d "kernel" ]; then
-          git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
-        else
+          if [ ! -d "kernel" ]; then
+            git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
+          else
           cd kernel
           git fetch --depth=1 origin android14-6.1-2025-09
           git reset --hard origin/android14-6.1-2025-09
           cd ..
-        fi
+          fi
 
       - name: Patch setlocalversion Script
         run: |

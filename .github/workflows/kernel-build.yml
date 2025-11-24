@@ -15,7 +15,7 @@ env:
   ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
   ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
   CCACHE_DIR: ${{ github.workspace }}/.ccache
-  CCACHE_MAXSIZE: 5G
+  CCACHE_MAXSIZE: 10G
   CCACHE_NOHASHDIR: 1
   MAKE_JOBS: 8
 
@@ -29,16 +29,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Cache CCACHE
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-ccache-${{ github.ref }}-${{ hashFiles('.github/workflows/*.yml') }}-v1
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ github.ref }}-
-            ${{ runner.os }}-ccache-
-            ${{ runner.os }}-
 
       - name: Setup ccache
         run: |
@@ -109,39 +99,11 @@ jobs:
             return 0
           }
 
-          apply_patch_file() {
-            file=$1
-            dir=$2
-            cd "$dir"
-            for i in {1..3}; do
-              if patch -p1 --forward --no-backup-if-mismatch < "$file"; then
-                echo "✅ Applied $(basename $file) from file"
-                cd "${{ github.workspace }}/kernel"
-                return 0
-              fi
-              echo "⚠️ Patch $(basename $file) attempt $i failed, retrying..."
-              sleep 3
-            done
-            echo "⚠️ Patch $(basename $file) may already be applied or failed"
-            cd "${{ github.workspace }}/kernel"
-            return 0
-          }
-
           echo "🔧 Applying 50_add_susfs_in_gki-android14-6.1.patch from infectedmushi..."
           apply_patch_url "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
 
-          echo "🔧 Applying KernelSU patch from susfs4ksu..."
-          # Check if KernelSU directory exists and apply patch
-          if [ -d "KernelSU" ]; then
-            echo "📁 Found KernelSU directory, applying patch..."
-            apply_patch_file "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "KernelSU"
-          else
-            echo "❌ KernelSU directory not found at kernel/KernelSU/"
-            echo "📂 Current directory contents:"
-            ls -la
-            echo "📂 Looking for KernelSU..."
-            find . -name "KernelSU" -type d 2>/dev/null
-          fi
+          echo "🔧 Applying 10_enable_susfs_for_ksu.patch from infectedmushi..."
+          apply_patch_url "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "."
 
           set -e
           echo "🎉 All patches applied!"
@@ -161,92 +123,92 @@ jobs:
 
           echo "🔧 Applying custom configurations..."
           cat >> out/.config << 'EOF'
-          CONFIG_ARM64_CORTEX_X3=y
-          CONFIG_ARM64_CORTEX_A715=y
-          CONFIG_ARM64_CORTEX_A510=y
-          CONFIG_ARM64_VA_BITS=48
-          CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_TAGGED_ADDR_ABI=y
-          CONFIG_ARM64_SVE=y
-          CONFIG_ARM64_BTI=y
-          CONFIG_ARM64_PTR_AUTH=y
-          CONFIG_ARM64_SME=y
-          CONFIG_SCHED_MC=y
-          CONFIG_SCHED_CORE=y
-          CONFIG_ENERGY_MODEL=y
-          CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y
-          CONFIG_CPU_FREQ=y
-          CONFIG_CPUFREQ_DT=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-          CONFIG_OPP=y
-          CONFIG_CPU_IDLE=y
-          CONFIG_ARM_PSCI_CPUIDLE=y
-          CONFIG_THERMAL=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_DEVFREQ_THERMAL=y
-          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-          CONFIG_THERMAL_GOV_STEP_WISE=y
-          CONFIG_THERMAL_GOV_FAIR_SHARE=y
-          CONFIG_THERMAL_EMULATION=y
-          CONFIG_THERMAL_WRITABLE_TRIPS=y
-          CONFIG_POWER_CAP=y
-          CONFIG_PERF_EVENTS=y
-          CONFIG_NUMA_BALANCING=y
-          CONFIG_CMA=y
-          CONFIG_CMA_AREAS=7
-          CONFIG_LOCALVERSION_AUTO=n
-          CONFIG_KSU=y
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP6_NF_MATCH_HL=y
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_TCP_CONG_BIC=n
-          CONFIG_TCP_CONG_WESTWOOD=n
-          CONFIG_TCP_CONG_HTCP=n
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CCACHE=y
-          CONFIG_LTO=y
-          CONFIG_LTO_CLANG=y
-          CONFIG_LTO_CLANG_THIN=y
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=256
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_LOCALVERSION="-deepongi+"
-          EOF
+CONFIG_ARM64_CORTEX_X3=y
+CONFIG_ARM64_CORTEX_A715=y
+CONFIG_ARM64_CORTEX_A510=y
+CONFIG_ARM64_VA_BITS=48
+CONFIG_ARM64_PA_BITS=48
+CONFIG_ARM64_TAGGED_ADDR_ABI=y
+CONFIG_ARM64_SVE=y
+CONFIG_ARM64_BTI=y
+CONFIG_ARM64_PTR_AUTH=y
+CONFIG_ARM64_SME=y
+CONFIG_SCHED_MC=y
+CONFIG_SCHED_CORE=y
+CONFIG_ENERGY_MODEL=y
+CONFIG_UCLAMP_TASK=y
+CONFIG_UCLAMP_TASK_GROUP=y
+CONFIG_CPU_FREQ=y
+CONFIG_CPUFREQ_DT=y
+CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+CONFIG_OPP=y
+CONFIG_CPU_IDLE=y
+CONFIG_ARM_PSCI_CPUIDLE=y
+CONFIG_THERMAL=y
+CONFIG_CPU_THERMAL=y
+CONFIG_DEVFREQ_THERMAL=y
+CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+CONFIG_THERMAL_GOV_STEP_WISE=y
+CONFIG_THERMAL_GOV_FAIR_SHARE=y
+CONFIG_THERMAL_EMULATION=y
+CONFIG_THERMAL_WRITABLE_TRIPS=y
+CONFIG_POWER_CAP=y
+CONFIG_PERF_EVENTS=y
+CONFIG_NUMA_BALANCING=y
+CONFIG_CMA=y
+CONFIG_CMA_AREAS=7
+CONFIG_LOCALVERSION_AUTO=n
+CONFIG_KSU=y
+CONFIG_KSU_LSM_SECURITY_HOOKS=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_IP_NF_TARGET_TTL=y
+CONFIG_IP6_NF_TARGET_HL=y
+CONFIG_IP6_NF_MATCH_HL=y
+CONFIG_TCP_CONG_ADVANCED=y
+CONFIG_TCP_CONG_BBR=y
+CONFIG_NET_SCH_FQ=y
+CONFIG_TCP_CONG_BIC=n
+CONFIG_TCP_CONG_WESTWOOD=n
+CONFIG_TCP_CONG_HTCP=n
+CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+CONFIG_CCACHE=y
+CONFIG_LTO=y
+CONFIG_LTO_CLANG=y
+CONFIG_LTO_CLANG_THIN=y
+CONFIG_IP_SET=y
+CONFIG_IP_SET_MAX=256
+CONFIG_IP_SET_BITMAP_IP=y
+CONFIG_IP_SET_BITMAP_IPMAC=y
+CONFIG_IP_SET_BITMAP_PORT=y
+CONFIG_IP_SET_HASH_IP=y
+CONFIG_IP_SET_HASH_IPPORT=y
+CONFIG_IP_SET_HASH_IPPORTIP=y
+CONFIG_IP_SET_HASH_IPPORTNET=y
+CONFIG_IP_SET_HASH_NET=y
+CONFIG_IP_SET_HASH_NETNET=y
+CONFIG_IP_SET_HASH_NETPORT=y
+CONFIG_IP_SET_HASH_NETIFACE=y
+CONFIG_LOCALVERSION="-deepongi+"
+EOF
 
           rm -vf android/abi_gki_protected_exports_* || true
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
           echo "✅ Kernel configured"
-          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -20
+          grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config | head -100
 
       - name: Build Kernel
         id: build
@@ -331,12 +293,12 @@ jobs:
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
           cat > build.info << EOF
-          build.date=$(date -u +%Y-%m-%d)
-          build.time=$(date -u +%H:%M:%S)
-          build.commit=${{ github.sha }}
-          build.run=${{ github.run_number }}
-          build.duration=${{ env.BUILD_TIME }}s
-          EOF
+build.date=$(date -u +%Y-%m-%d)
+build.time=$(date -u +%H:%M:%S)
+build.commit=${{ github.sha }}
+build.run=${{ github.run_number }}
+build.duration=${{ env.BUILD_TIME }}s
+EOF
 
           echo "✅ AnyKernel3 prepared"
 

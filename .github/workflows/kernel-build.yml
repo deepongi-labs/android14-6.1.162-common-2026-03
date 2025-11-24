@@ -20,6 +20,19 @@ env:
   MAKE_JOBS: 8
 
 jobs:
+
+  build-previous:
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      previous_build_time: ${{ steps.previous-time.outputs.previous_build_time }}
+    steps:
+      - name: Get Previous Build Time
+        id: previous-time
+        run: |
+          # This would need to query your previous successful build
+          # For now, we'll set a placeholder
+          echo "previous_build_time=N/A" >> $GITHUB_OUTPUT
+  
   build:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 90
@@ -399,6 +412,59 @@ jobs:
             ${{ env.KERNEL_ZIP }}.md5
           retention-days: 30
 
+
+      - name: Extract Build Metadata
+        if: success()
+        run: |
+          # Get CCACHE hit rate
+          CCACHE_HIT_RATE=$(ccache -s | grep -E "hit rate|Hit rate" | head -1 | sed 's/.*://' | tr -d ' ' || echo "N/A")
+          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
+          
+          # Determine build speed status
+          if [ $BUILD_TIME -lt 300 ]; then
+            BUILD_SPEED="🚀 Very Fast"
+          elif [ $BUILD_TIME -lt 600 ]; then
+            BUILD_SPEED="⚡ Fast"
+          elif [ $BUILD_TIME -lt 900 ]; then
+            BUILD_SPEED="✅ Normal"
+          else
+            BUILD_SPEED="🐢 Slow"
+          fi
+          echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
+          
+          # Try to get SuSFS version/commit
+          if [ -d "susfs" ]; then
+            cd susfs
+            SUSFS_VERSION=$(git log -1 --format="%h (%s)" 2>/dev/null || echo "gki-android14-6.1")
+            echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
+            cd ..
+          fi
+          
+          echo "✅ Build metadata extracted"
+
+      - name: Get Changes Since Last Build
+        if: success()
+        id: changes
+        run: |
+          # Get the previous successful commit
+          PREVIOUS_COMMIT=$(git log --oneline -n 2 | tail -1 | cut -d' ' -f1 || echo "")
+          
+          if [ ! -z "$PREVIOUS_COMMIT" ]; then
+            CHANGES=$(git log --oneline --pretty=format:"• %s" $PREVIOUS_COMMIT..HEAD 2>/dev/null || echo "• Changes not available")
+          else
+            CHANGES="• Initial build"
+          fi
+          
+          # Format for GitHub output
+          CHANGES="${CHANGES//'%'/'%25'}"
+          CHANGES="${CHANGES//$'\n'/'%0A'}"
+          echo "CHANGES_SINCE_LAST_BUILD<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "📝 Changes since last build:"
+          echo "$CHANGES"
+
       - name: Create Release
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v1
@@ -410,26 +476,34 @@ jobs:
             
             **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
             
-            ### 📊 Build Info
-            - **Duration:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s
-            - **Kernel:** 6.1.145-deepongi
-            - **Branch:** android14-6.1-2025-09
-            - **Commit:** ${{ github.sha }}
+            ### 📊 Build Performance
+            - **Compilation Time:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s
+            - **Previous Build Time:** ${{ needs.build-previous.outputs.previous_build_time || 'N/A' }}
+            - **CCACHE Hit Rate:** ${{ env.CCACHE_HIT_RATE || 'N/A' }}
+            - **Build Speed:** ${{ env.BUILD_SPEED_STATUS || 'Normal' }}
             
-            ### 🔧 Components
-            - ✅ **KernelSU** (main branch)
-            - ✅ **SuSFS** (gki-android14-6.1)
-            - ✅ **Clang 22.0.0** (ZyCromerZ)
-            - ✅ **LTO:** ThinLTO
+            ### 🔧 Components Versions
+            - **KernelSU Version:** ${{ env.KSU_VERSION }} (r${{ env.KSU_VERSION }})
+            - **SuSFS Version:** ${{ env.SUSFS_VERSION || 'gki-android14-6.1' }}
+            - **Kernel Base:** 6.1.145-deepongi+
+            - **Toolchain:** Clang 22.0.0 + ARM GNU Toolchain 14.3
             
-            ### 📥 Installation
-            1. Download the ZIP file
+            ### 📈 Changes Since Last Build
+            ${{ env.CHANGES_SINCE_LAST_BUILD || '• Initial build or changes not available' }}
+            
+            ### 🛠️ Build Configuration
+            - **LTO:** ThinLTO enabled
+            - **Optimization:** -O2 with performance tuning
+            - **Architecture:** ARM64 with Cortex-X3/A715/A510 optimization
+            - **Security:** KernelSU LSM hooks + SuSFS hiding
+            
+            ### 📦 Installation
+            1. Download the ZIP file below
             2. Verify checksums (SHA256/MD5)
-            3. Boot to recovery (TWRP/OrangeFox)
-            4. Flash the ZIP
-            5. Reboot
+            4. Flash the ZIP file in Kernel Flasher 1.6
+            5. Reboot and enjoy!
             
-            ### 🔐 Checksums
+            ### 🔐 File Verification
             **SHA256:**
             ```
             $(cat ${{ env.KERNEL_ZIP }}.sha256)
@@ -439,6 +513,12 @@ jobs:
             ```
             $(cat ${{ env.KERNEL_ZIP }}.md5)
             ```
+            
+            ### 📋 Technical Details
+            - **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            - **Commit:** ${{ github.sha }}
+            - **Runner:** Self-hosted (${{ runner.os }})
+            - **Workflow Run:** ${{ github.run_id }}
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256

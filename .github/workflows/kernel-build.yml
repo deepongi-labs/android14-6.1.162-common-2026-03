@@ -43,8 +43,8 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          rm -rf kernel
-          git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
+          cd Kernel
+          git reset --hard && git clean -fdx
           cd ..
 
       - name: Patch setlocalversion Script

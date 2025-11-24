@@ -43,7 +43,6 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          cd kernel
           git reset --hard && git clean -fdx
           cd ..
 

@@ -16,7 +16,7 @@ env:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: [self-hosted, arch-linux]
     timeout-minutes: 90
 
     steps:
@@ -25,14 +25,19 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Build Environment
+      - name: Setup Build Environment (Arch Linux)
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses5-dev git wget curl lz4 zstd python3 python3-pip \
-            cpio kmod pahole pigz ninja-build patchelf xxd \
-            rsync file ccache
+          sudo pacman -Syu --noconfirm
+          sudo pacman -S --noconfirm --needed base-devel
+          
+          # Install available packages
+          sudo pacman -S --noconfirm --needed \
+            bc bison flex openssl libelf ncurses \
+            git wget curl lz4 zstd python3 python-pip \
+            cpio kmod pahole pigz ninja rsync file
+          
+          # Install ccache from AUR if needed
+          yay -S --noconfirm ccache patchelf xxd || true
 
       - name: Cache Toolchains and CCACHE
         uses: actions/cache@v4

@@ -60,15 +60,9 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          if [ ! -d "kernel" ]; then
-            git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
-          else
-            cd kernel
-            git fetch --depth=1 origin android14-6.1-2025-09
-            git reset --hard origin/android14-6.1-2025-09
-            git clean -fdx
-            cd ..
-          fi
+          rm -rf kernel
+          git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel
+          cd ..
 
       - name: Patch setlocalversion Script
         run: |
@@ -107,13 +101,13 @@ jobs:
 
           PATCH_BASE="https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main"
 
-          apply_patch() {
+          apply_patch_url() {
             url=$1
             dir=$2
             cd "$dir"
             for i in {1..3}; do
               if curl -fsSL "$url" | patch -p1 --forward --no-backup-if-mismatch; then
-                echo "✅ Applied $(basename $url)"
+                echo "✅ Applied $(basename $url) from URL"
                 cd "${{ github.workspace }}/kernel"
                 return 0
               fi
@@ -125,16 +119,33 @@ jobs:
             return 0
           }
 
-          echo "🔧 Applying SuSFS patches..."
-          apply_patch "$PATCH_BASE/10_enable_susfs_for_ksu.patch" "KernelSU"
-          apply_patch "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
+          apply_patch_file() {
+            file=$1
+            dir=$2
+            cd "$dir"
+            for i in {1..3}; do
+              if patch -p1 --forward --no-backup-if-mismatch < "$file"; then
+                echo "✅ Applied $(basename $file) from file"
+                cd "${{ github.workspace }}/kernel"
+                return 0
+              fi
+              echo "⚠️ Patch $(basename $file) attempt $i failed, retrying..."
+              sleep 3
+            done
+            echo "⚠️ Patch $(basename $file) may already be applied or failed"
+            cd "${{ github.workspace }}/kernel"
+            return 0
+          }
 
-          echo "🔧 Applying fix patches..."
-          apply_patch "$PATCH_BASE/fix-clidr-uninitialized.patch" "."
-          apply_patch "$PATCH_BASE/fix_proc_base.patch" "."
+          echo "🔧 Applying 50_add_susfs_in_gki-android14-6.1.patch from infectedmushi..."
+          apply_patch_url "$PATCH_BASE/50_add_susfs_in_gki-android14-6.1.patch" "."
+
+          echo "🔧 Applying KernelSU patch from susfs4ksu..."
+          apply_patch_file "../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" "KernelSU"
 
           set -e
           echo "🎉 All patches applied!"
+
 
       - name: Configure Kernel
         id: config

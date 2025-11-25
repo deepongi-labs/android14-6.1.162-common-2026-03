@@ -17,6 +17,11 @@ on:
   schedule:
     - cron: '0 0 * * 0'
 
+# Add permissions here
+permissions:
+  contents: write
+  packages: write
+
 env:
   CLANG_BIN: /mnt/Android/clang-22/bin
   ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-

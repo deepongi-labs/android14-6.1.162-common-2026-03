@@ -371,6 +371,11 @@ jobs:
         run: |
           echo "📦 Creating boot image with magiskboot..."
           
+          # Download and use fresh magiskboot binary
+          echo "📥 Downloading magiskboot binary..."
+          curl -LSs "https://github.com/topjohnwu/Magisk/releases/download/27.0/magisk-init" -o magiskboot
+          chmod +x magiskboot
+          
           # Download stock boot image
           echo "📥 Downloading stock boot image..."
           curl -LSs "https://filebin.net/7suxje8cpcay09va/boot.img" -o stock_boot.img
@@ -394,22 +399,21 @@ jobs:
             
             # Use magiskboot to unpack, replace kernel, and repack
             echo "🔧 Unpacking stock boot image..."
-            magiskboot unpack stock_boot.img
+            ./magiskboot unpack stock_boot.img
             
             echo "🔧 Cleaning ramdisk..."
-            magiskboot cpio ramdisk.cpio "exists .backup" && magiskboot cpio ramdisk.cpio "rm .backup"
-            magiskboot cpio ramdisk.cpio "exists magisk" && magiskboot cpio ramdisk.cpio "rm magisk"
-            magiskboot cpio ramdisk.cpio "exists overlay.d" && magiskboot cpio ramdisk.cpio "rm overlay.d"
+            ./magiskboot cpio ramdisk.cpio "exists .backup" && ./magiskboot cpio ramdisk.cpio "rm .backup"
+            ./magiskboot cpio ramdisk.cpio "exists magisk" && ./magiskboot cpio ramdisk.cpio "rm magisk"
+            ./magiskboot cpio ramdisk.cpio "exists overlay.d" && ./magiskboot cpio ramdisk.cpio "rm overlay.d"
             
-            # Replace kernel
+            # Replace kernel with Image file
             echo "🔧 Replacing kernel..."
             mv kernel_image kernel
-            rm -f Image.gz-dtb 2>/dev/null || true
             
             # Repack boot image
             echo "🔧 Repacking boot image..."
-            magiskboot repack stock_boot.img
-            magiskboot cleanup
+            ./magiskboot repack stock_boot.img
+            ./magiskboot cleanup
             
             # Move the new boot image
             if [ -f "new-boot.img" ]; then

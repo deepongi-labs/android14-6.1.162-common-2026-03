@@ -242,9 +242,25 @@ jobs:
             echo "❌ Failed to download CLIDR fix patch"
             exit 1
           fi
+          
+          # Download and apply the proc base fix patch (fourth patch)
+          echo "📋 Downloading and applying fix_proc_base.patch"
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix_proc_base.patch" -o fix_proc_base.patch
+          if [ -f "fix_proc_base.patch" ]; then
+            if patch -p1 --forward --no-backup-if-mismatch < "fix_proc_base.patch"; then
+              echo "✅ proc base fix patch applied successfully"
+              rm fix_proc_base.patch
+            else
+              echo "⚠️ proc base fix patch may already be applied"
+              rm fix_proc_base.patch
+            fi
+          else
+            echo "❌ Failed to download proc base fix patch"
+            exit 1
+          fi
           cd ..
           
-          echo "🎉 All patches applied in correct order"
+          echo "🎉 All 4 patches applied in correct order"
 
       - name: Setup CCACHE Environment
         run: |

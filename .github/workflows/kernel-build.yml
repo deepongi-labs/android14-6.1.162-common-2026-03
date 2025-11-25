@@ -2,6 +2,17 @@ name: Build GKI Kernel with KernelSU and SuSFS
 
 on:
   workflow_dispatch:
+    inputs:
+      susfs_version:
+        description: 'SuSFS Version'
+        required: true
+        default: '2.0.0'
+        type: string
+      enable_susfs:
+        description: 'Enable SuSFS features'
+        required: true
+        default: true
+        type: boolean
   push:
     branches:
       - main
@@ -57,70 +68,33 @@ jobs:
         with:
           fetch-depth: 20
 
-      - name: Get SuSFS Version from GitLab
-        id: susfs-version
+      - name: Set Build Configuration
+        id: build-config
         run: |
-          echo "🔍 Fetching SuSFS version from GitLab..."
+          echo "🔧 Setting build configuration..."
           
-          # Try multiple methods to get the version
-          SUSFS_VERSION="unknown"
-          
-          # Method 1: Check if we have local susfs4ksu directory with version info
-          if [ -d "susfs4ksu" ]; then
-            echo "📁 Checking local susfs4ksu directory for version..."
-            
-            # Look for version in README, docs, or any version files
-            if [ -f "susfs4ksu/README.md" ]; then
-              VERSION_FROM_README=$(grep -i "version" susfs4ksu/README.md | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
-              if [ -n "$VERSION_FROM_README" ]; then
-                SUSFS_VERSION="$VERSION_FROM_README"
-                echo "✅ Found version in README: $SUSFS_VERSION"
-              fi
-            fi
-            
-            # Check for version in any docs files
-            if [ "$SUSFS_VERSION" = "unknown" ] && [ -f "susfs4ksu/docs/CHANGELOG.md" ]; then
-              VERSION_FROM_CHANGELOG=$(grep -i "version" susfs4ksu/docs/CHANGELOG.md | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
-              if [ -n "$VERSION_FROM_CHANGELOG" ]; then
-                SUSFS_VERSION="$VERSION_FROM_CHANGELOG"
-                echo "✅ Found version in CHANGELOG: $SUSFS_VERSION"
-              fi
-            fi
-          fi
-          
-          # Method 2: Fetch from GitLab API
-          if [ "$SUSFS_VERSION" = "unknown" ]; then
-            echo "🌐 Fetching from GitLab API..."
-            GITLAB_URL="https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/tags"
-            
-            # Try to get the latest tag
-            if LATEST_TAG=$(curl -s "$GITLAB_URL" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4); then
-              if [ -n "$LATEST_TAG" ]; then
-                SUSFS_VERSION="$LATEST_TAG"
-                echo "✅ Found latest tag from GitLab API: $SUSFS_VERSION"
-              else
-                echo "⚠️ No tags found via GitLab API"
-              fi
-            else
-              echo "⚠️ Failed to fetch from GitLab API"
-            fi
-          fi
-          
-          # Method 3: Check the branch name or fallback
-          if [ "$SUSFS_VERSION" = "unknown" ]; then
-            echo "🔍 Checking branch/repo structure for version hints..."
-            # If we're using the gki-android14-6.1 branch, we can infer it's compatible with v2.0.0
-            # Based on the current known version
+          # Set SuSFS version
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SUSFS_VERSION="${{ github.event.inputs.susfs_version }}"
+            ENABLE_SUSFS="${{ github.event.inputs.enable_susfs }}"
+            echo "✅ Using manual configuration: SuSFS=$SUSFS_VERSION, Enabled=$ENABLE_SUSFS"
+          else
+            # For automatic builds, use defaults
             SUSFS_VERSION="2.0.0"
-            echo "ℹ️ Using default version: $SUSFS_VERSION"
+            ENABLE_SUSFS=true
+            echo "✅ Using default configuration: SuSFS=$SUSFS_VERSION, Enabled=$ENABLE_SUSFS"
           fi
           
-          # Clean up version string (remove 'v' prefix if present)
+          # Clean version string
           SUSFS_VERSION=$(echo "$SUSFS_VERSION" | sed 's/^v//')
+          echo "🎯 Build Configuration:"
+          echo "  SuSFS Version: $SUSFS_VERSION"
+          echo "  SuSFS Enabled: $ENABLE_SUSFS"
           
-          echo "🎯 Final SuSFS Version: $SUSFS_VERSION"
           echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
+          echo "ENABLE_SUSFS=$ENABLE_SUSFS" >> $GITHUB_ENV
           echo "susfs_version=$SUSFS_VERSION" >> $GITHUB_OUTPUT
+          echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
 
       - name: Clean Submodule Configuration
         run: |
@@ -198,6 +172,7 @@ jobs:
           echo "📊 Kernel source verified and ready"
 
       - name: Verify susfs4ksu Directory
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           echo "🔍 Verifying susfs4ksu directory..."
           if [ ! -d "susfs4ksu" ]; then
@@ -247,6 +222,7 @@ jobs:
           echo "✅ Calculated KernelSU Version: r$KSU_VERSION"
 
       - name: Copy SuSFS Files to Kernel
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           echo "📁 Copying SuSFS files to kernel..."
           
@@ -279,6 +255,7 @@ jobs:
           echo "✅ All SuSFS files copied successfully"
 
       - name: Apply SuSFS Patches
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           echo "🔧 Applying SuSFS patches..."
           
@@ -368,8 +345,9 @@ jobs:
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
           echo "🔧 Applying custom configurations..."
-          cat >> out/.config << 'EOF'
-          CONFIG_ARM64_CORTEX_X3=y
+          
+          # Base configuration (common to both with and without SuSFS)
+          BASE_CONFIG="CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_A510=y
           CONFIG_ARM64_VA_BITS=48
@@ -414,17 +392,6 @@ jobs:
           CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
           CONFIG_KSU_ALLOWLIST_WORKAROUND=n
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_IP_NF_TARGET_TTL=y
@@ -454,9 +421,30 @@ jobs:
           CONFIG_IP_SET_HASH_NETNET=y
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_LOCALVERSION="-deepongi+"
-          CONFIG_NET_SCH_CAKE=y
-          EOF
+          CONFIG_LOCALVERSION=\"-deepongi+\"
+          CONFIG_NET_SCH_CAKE=y"
+          
+          # Add SuSFS config only if enabled
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            echo "✅ Enabling SuSFS features in kernel config"
+            SUSFS_CONFIG="CONFIG_KSU_SUSFS=y
+            CONFIG_KSU_SUSFS_SUS_PATH=y
+            CONFIG_KSU_SUSFS_SUS_MOUNT=y
+            CONFIG_KSU_SUSFS_SUS_KSTAT=y
+            CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+            CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+            CONFIG_KSU_SUSFS_ENABLE_LOG=y
+            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+            CONFIG_KSU_SUSFS_SUS_MAP=y"
+            
+            echo "$BASE_CONFIG" >> out/.config
+            echo "$SUSFS_CONFIG" >> out/.config
+          else
+            echo "ℹ️ Building without SuSFS features"
+            echo "$BASE_CONFIG" >> out/.config
+          fi
 
           rm -vf android/abi_gki_protected_exports_* || true
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
@@ -464,197 +452,7 @@ jobs:
           echo "✅ Kernel configured successfully"
           echo "📋 Key configurations:"
           grep -E "CONFIG_(KSU|SUSFS|LTO|LOCALVERSION)" out/.config
-
-      - name: Build Kernel
-        run: |
-          cd kernel
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
-          export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
-          export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
-          export KBUILD_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          export KBUILD_BUILD_USER=github-actions
-          export KBUILD_BUILD_HOST=github
-          export CC="ccache clang"
-
-          NPROC=$(nproc || echo 8)
-
-          echo "🏗️ Building kernel using $NPROC cores..."
-          echo "📊 CCACHE stats before build:"
-          ccache -s
-
-          START_TIME=$SECONDS
-
-          make -j"$NPROC" \
-            LLVM_IAS=1 \
-            LLVM=1 \
-            ARCH=arm64 \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}" \
-            CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}" \
-            CC="$CC" \
-            LD=ld.lld \
-            HOSTLD=ld.lld \
-            O=out 2>&1 | tee build.log
-
-          BUILD_STATUS=${PIPESTATUS[0]}
-          BUILD_TIME=$((SECONDS - START_TIME))
-          BUILD_TIME_MIN=$((BUILD_TIME / 60))
-          BUILD_TIME_SEC=$((BUILD_TIME % 60))
-
-          echo "📊 CCACHE stats after build:"
-          ccache -s
-
-          if [ $BUILD_STATUS -eq 0 ] && [ -f out/arch/arm64/boot/Image ]; then
-            echo "✅ Kernel built successfully in ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
-            echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
-            echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
-            echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
-            
-            # Store build time for next run
-            echo "${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s" > /mnt/ccache/last_build_time || true
-          else
-            echo "❌ Kernel build failed after ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
-            exit 1
-          fi
-
-      - name: Upload Build Log on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-failure-logs-${{ github.run_number }}
-          path: |
-            kernel/build.log
-            kernel/out/.config
-          retention-days: 30
-
-      - name: Extract CCACHE Hit Rate
-        id: ccache-stats
-        if: success()
-        run: |
-          echo "📊 Extracting CCACHE hit rate..."
           
-          # Get full ccache stats for debugging
-          echo "=== FULL CCACHE STATS ===" > ccache_debug.txt
-          ccache -s >> ccache_debug.txt
-          echo "=== END STATS ===" >> ccache_debug.txt
-          
-          echo "🔍 Debug CCACHE output:"
-          cat ccache_debug.txt
-          
-          # Try multiple extraction methods
-          HIT_RATE="Unknown"
-          
-          # Method 1: Direct pattern matching
-          echo "🔄 Trying method 1 (direct cache hit)..."
-          if HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%"); then
-            echo "✅ Method 1 success: $HIT_RATE"
-          else
-            echo "❌ Method 1 failed"
-          fi
-          
-          # Method 2: Hit rate pattern
-          if [ "$HIT_RATE" = "Unknown" ]; then
-            echo "🔄 Trying method 2 (hit rate)..."
-            if HIT_RATE=$(ccache -s | grep -i "hit rate" | head -1 | grep -Eo "[0-9]+\.[0-9]+%"); then
-              echo "✅ Method 2 success: $HIT_RATE"
-            else
-              echo "❌ Method 2 failed"
-            fi
-          fi
-          
-          # Method 3: Look for any percentage in stats
-          if [ "$HIT_RATE" = "Unknown" ]; then
-            echo "🔄 Trying method 3 (any percentage)..."
-            if HIT_RATE=$(ccache -s | grep -E "[0-9]+\.[0-9]+%" | head -1 | grep -Eo "[0-9]+\.[0-9]+%"); then
-              echo "✅ Method 3 success: $HIT_RATE"
-            else
-              echo "❌ Method 3 failed"
-            fi
-          fi
-          
-          # Method 4: Manual calculation from raw numbers
-          if [ "$HIT_RATE" = "Unknown" ]; then
-            echo "🔄 Trying method 4 (manual calculation)..."
-            
-            # Extract raw numbers using more flexible patterns
-            HITS=$(ccache -s | grep -i "cache hit" | grep -Eo "[0-9]+" | head -1)
-            MISSES=$(ccache -s | grep -i "cache miss" | grep -Eo "[0-9]+" | head -1)
-            CALLS=$(ccache -s | grep -i "called" | grep -Eo "[0-9]+" | head -1)
-            
-            echo "📊 Raw numbers - Hits: $HITS, Misses: $MISSES, Calls: $CALLS"
-            
-            if [ -n "$HITS" ] && [ -n "$MISSES" ]; then
-              TOTAL=$((HITS + MISSES))
-              if [ $TOTAL -gt 0 ]; then
-                HIT_RATE_PERCENT=$(echo "scale=2; $HITS * 100 / $TOTAL" | bc)
-                HIT_RATE="${HIT_RATE_PERCENT}%"
-                echo "✅ Method 4 success: $HIT_RATE"
-              else
-                HIT_RATE="0%"
-                echo "⚠️ No cache calls made"
-              fi
-            else
-              echo "❌ Method 4 failed - couldn't extract numbers"
-            fi
-          fi
-          
-          # Final fallback
-          if [ "$HIT_RATE" = "Unknown" ] || [ -z "$HIT_RATE" ]; then
-            HIT_RATE="0%"
-            echo "⚠️ Using fallback hit rate: $HIT_RATE"
-          fi
-          
-          echo "🎯 Final CCACHE hit rate: $HIT_RATE"
-          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          
-          # Save final stats
-          echo "Final hit rate: $HIT_RATE" >> ccache_debug.txt
-
-      - name: Extract Build Metadata
-        if: success()
-        run: |
-          echo "🔧 Extracting build metadata..."
-          
-          if [ $BUILD_TIME -lt 300 ]; then
-            BUILD_SPEED="🚀 Very Fast"
-          elif [ $BUILD_TIME -lt 600 ]; then
-            BUILD_SPEED="⚡ Fast"
-          elif [ $BUILD_TIME -lt 900 ]; then
-            BUILD_SPEED="✅ Normal"
-          else
-            BUILD_SPEED="🐢 Slow"
-          fi
-          echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
-          
-          echo "✅ Build metadata extracted"
-
-      - name: Get Changes Since Last Build
-        id: changes
-        if: success()
-        run: |
-          echo "📝 Gathering build changes information..."
-          KSU_CHANGES="### 🔧 KernelSU Changes
-          • Built from latest main branch"
-          
-          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• %s" -n 5 2>/dev/null || echo "• Local: Initial build")
-          
-          ALL_CHANGES="$KSU_CHANGES
-
-          ### 📝 Repository Changes
-          $LOCAL_CHANGES"
-          
-          # Properly format for GitHub Actions output
-          ALL_CHANGES="${ALL_CHANGES//'%'/'%25'}"
-          ALL_CHANGES="${ALL_CHANGES//$'\n'/'%0A'}"
-          ALL_CHANGES="${ALL_CHANGES//$'\r'/'%0D'}"
-          
-          echo "CHANGES_SINCE_LAST_BUILD<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$ALL_CHANGES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "✅ Changes information gathered"
-
       - name: Prepare AnyKernel3
         if: success()
         run: |
@@ -667,7 +465,8 @@ jobs:
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
-          if [ -d "../susfs4ksu/ksu_module_susfs" ]; then
+          # Only include SuSFS module if enabled
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ -d "../susfs4ksu/ksu_module_susfs" ]; then
             echo "📦 Adding KSU SuSFS module..."
             mkdir -p modules
             cp -r ../susfs4ksu/ksu_module_susfs/* modules/
@@ -681,6 +480,7 @@ jobs:
           build.duration=${{ env.BUILD_TIME }}s
           build.ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}
           build.susfs_version=${{ env.SUSFS_VERSION }}
+          build.susfs_enabled=${{ env.ENABLE_SUSFS }}
           EOF
 
           echo "✅ AnyKernel3 prepared"
@@ -690,84 +490,15 @@ jobs:
         run: |
           cd AnyKernel3
           TIMESTAMP=$(date +%Y%m%d_%H%M)
-          ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+          # Include SuSFS status in filename
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-susfs.zip"
+          else
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-nosusfs.zip"
+          fi
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
           echo "📦 Package created: $ZIP_NAME ($(du -h $ZIP_NAME | cut -f1))"
-
-      - name: Upload Kernel Artifacts
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-build-${{ github.run_number }}
-          path: |
-            ${{ env.KERNEL_ZIP }}
-            ${{ env.KERNEL_ZIP }}.sha256
-            ${{ env.KERNEL_ZIP }}.md5
-            ccache_debug.txt
-          retention-days: 30
-
-      - name: Create Release
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: "Kernel Build #${{ github.run_number }}"
-          body: |
-            ## 🚀 GKI Kernel with KernelSU & SuSFS
-            
-            **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
-            
-            ### 📊 Build Performance
-            - **Compilation Time:** ${{ env.BUILD_TIME_MIN }}m ${{ env.BUILD_TIME_SEC }}s (${{ env.BUILD_SPEED_STATUS }})
-            - **Previous Build Time:** ${{ needs.build-previous.outputs.previous_build_time }}
-            - **CCACHE Hit Rate:** ${{ env.CCACHE_HIT_RATE }}
-            
-            ### 🔧 Components Versions
-            - **KernelSU Version:** r${{ env.KSU_VERSION }}
-            - **SuSFS Version:** ${{ env.SUSFS_VERSION }}
-            - **Kernel Base:** Android 14 6.1 GKI
-            - **Toolchain:** Clang 22.0.0 + ARM GNU Toolchain 14.3
-            
-            ### 📈 Changes Since Last Build
-            ${{ steps.changes.outputs.CHANGES_SINCE_LAST_BUILD }}
-            
-            ### 🛠️ Build Configuration
-            - **LTO:** ThinLTO enabled
-            - **Optimization:** -O2 with performance tuning
-            - **Architecture:** ARM64 with Cortex-X3/A715/A510 optimization
-            - **Security:** KernelSU LSM hooks + SuSFS hiding
-            - **Includes:** KSU SuSFS module for root hiding
-            
-            ### 📦 Installation
-            1. Download the ZIP file below
-            2. Verify checksums (SHA256/MD5)
-            3. Boot to custom recovery (TWRP/OrangeFox)
-            4. Flash the ZIP file
-            5. Reboot and enjoy!
-            
-            ### 🔐 File Verification
-            **SHA256:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.sha256)
-            ```
-            
-            **MD5:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.md5)
-            ```
-            
-            ### 📋 Technical Details
-            - **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-            - **Commit:** ${{ github.sha }}
-            - **Runner:** Self-hosted (${{ runner.os }})
-            - **Workflow Run:** ${{ github.run_id }}
-          files: |
-            ${{ env.KERNEL_ZIP }}
-            ${{ env.KERNEL_ZIP }}.sha256
-            ${{ env.KERNEL_ZIP }}.md5
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}

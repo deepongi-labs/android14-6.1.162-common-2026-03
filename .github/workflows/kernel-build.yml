@@ -58,29 +58,27 @@ jobs:
 
       - name: Ensure Correct Kernel Source
         run: |
-          echo "🔄 Ensuring correct Android 14 6.1 kernel source..."
+          echo "🔄 Ensuring correct Android 14 6.1 2025-09 kernel source..."
           
           # Remove existing kernel directory
           rm -rf kernel
           
-          # Clone the correct kernel branch
-          echo "🔍 Cloning Android Common Kernel..."
-          if git clone --depth=1 --branch=android14-6.1 https://android.googlesource.com/kernel/common kernel; then
-            echo "✅ Successfully cloned android14-6.1 branch"
-          elif git clone --depth=1 --branch=android14-gki https://android.googlesource.com/kernel/common kernel; then
-            echo "✅ Successfully cloned android14-gki branch"
-          elif git clone --depth=1 --branch=main https://android.googlesource.com/kernel/common kernel; then
-            echo "✅ Successfully cloned main branch"
+          # Clone ONLY the specific kernel branch - no fallbacks
+          echo "🔍 Cloning Android Common Kernel - android14-6.1-2025-09 branch..."
+          if git clone --depth=1 --branch=android14-6.1-2025-09 https://android.googlesource.com/kernel/common kernel; then
+            echo "✅ Successfully cloned android14-6.1-2025-09 branch"
+            
+            # Remove .git to make it a regular directory
+            rm -rf kernel/.git
+            
+            echo "📊 Kernel source verified:"
+            ls -la kernel/ | head -5
           else
-            echo "❌ Failed to clone kernel source"
+            echo "❌ CRITICAL: Failed to clone android14-6.1-2025-09 branch"
+            echo "💡 This branch might not exist or the name might be different"
+            echo "🔍 Available branches can be checked at: https://android.googlesource.com/kernel/common/+refs"
             exit 1
           fi
-          
-          # Remove .git to make it a regular directory
-          rm -rf kernel/.git
-          
-          echo "📊 Kernel source verified:"
-          ls -la kernel/ | head -5
 
       - name: Verify susfs4ksu Directory
         run: |

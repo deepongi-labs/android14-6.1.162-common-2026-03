@@ -635,13 +635,23 @@ jobs:
         if: success()
         run: |
           echo "📝 Gathering build changes information..."
-          KSU_CHANGES="### 🔧 KernelSU Changes\n• Built from latest main branch"
-          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• %s" -n 3 2>/dev/null || echo "• Local: Initial build")
-          ALL_CHANGES="$KSU_CHANGES\n\n### 📝 Repository Changes\n$LOCAL_CHANGES"
+          KSU_CHANGES="### 🔧 KernelSU Changes
+          • Built from latest main branch"
+          
+          LOCAL_CHANGES=$(git log --oneline --pretty=format:"• %s" -n 5 2>/dev/null || echo "• Local: Initial build")
+          
+          ALL_CHANGES="$KSU_CHANGES
+
+          ### 📝 Repository Changes
+          $LOCAL_CHANGES"
+          
+          # Properly format for GitHub Actions output
           ALL_CHANGES="${ALL_CHANGES//'%'/'%25'}"
           ALL_CHANGES="${ALL_CHANGES//$'\n'/'%0A'}"
+          ALL_CHANGES="${ALL_CHANGES//$'\r'/'%0D'}"
+          
           echo "CHANGES_SINCE_LAST_BUILD<<EOF" >> $GITHUB_OUTPUT
-          echo "$ALL_CHANGES" >> $GITHUB_OUTPUT
+          echo -e "$ALL_CHANGES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "✅ Changes information gathered"
 

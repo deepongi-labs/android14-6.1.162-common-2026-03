@@ -163,42 +163,37 @@ jobs:
 
       - name: Apply SuSFS Patches
         run: |
-          echo "🔧 Applying SuSFS patches..."
+          echo "🔧 Applying SuSFS patches from remote sources..."
           
-          # Apply main SuSFS integration patch
-          if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" ]; then
-            echo "📋 Applying 50_add_susfs_in_gki-android14-6.1.patch"
-            cd kernel
-            if patch -p1 --forward --no-backup-if-mismatch < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"; then
-              echo "✅ Main SuSFS patch applied"
+          # Download and apply main SuSFS integration patch
+          echo "📋 Downloading and applying 50_add_susfs_in_gki-android14-6.1.patch"
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/50_add_susfs_in_gki-android14-6.1.patch" -o susfs_main.patch
+          if [ -f "susfs_main.patch" ]; then
+            if patch -p1 --forward --no-backup-if-mismatch < "susfs_main.patch"; then
+              echo "✅ Main SuSFS patch applied successfully"
+              rm susfs_main.patch
             else
               echo "⚠️ Main SuSFS patch may already be applied"
+              rm susfs_main.patch
             fi
-            cd ..
           else
-            echo "❌ Main SuSFS patch not found"
+            echo "❌ Failed to download main SuSFS patch"
             exit 1
           fi
+          cd ..
           
-          # Apply KernelSU SuSFS enablement patch
-          if [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "kernel/KernelSU" ]; then
-            echo "📋 Applying 10_enable_susfs_for_ksu.patch to KernelSU"
-            cd kernel/KernelSU
-            patch -p1 --forward --no-backup-if-mismatch < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || echo "⚠️ KernelSU patch may already be applied"
-            cd ../..
-          fi
-          
-          # Download and apply the CLIDR fix patch from external source
+          # Download and apply the CLIDR fix patch
           echo "📋 Downloading and applying fix-clidr-uninitialized.patch"
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o fix-clidr-uninitialized.patch
-          if [ -f "fix-clidr-uninitialized.patch" ]; then
-            if patch -p1 --forward --no-backup-if-mismatch < "fix-clidr-uninitialized.patch"; then
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/fix-clidr-uninitialized.patch" -o clidr_fix.patch
+          if [ -f "clidr_fix.patch" ]; then
+            if patch -p1 --forward --no-backup-if-mismatch < "clidr_fix.patch"; then
               echo "✅ CLIDR fix patch applied successfully"
-              rm fix-clidr-uninitialized.patch
+              rm clidr_fix.patch
             else
               echo "⚠️ CLIDR fix patch may already be applied"
-              rm fix-clidr-uninitialized.patch
+              rm clidr_fix.patch
             fi
           else
             echo "❌ Failed to download CLIDR fix patch"
@@ -206,7 +201,25 @@ jobs:
           fi
           cd ..
           
-          echo "🎉 All patches applied in correct order"
+          # Download and apply KernelSU SuSFS enablement patch to KernelSU directory
+          echo "📋 Downloading and applying 10_enable_susfs_for_ksu.patch to KernelSU"
+          cd kernel/KernelSU
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/refs/heads/main/10_enable_susfs_for_ksu.patch" -o susfs_ksu.patch
+          if [ -f "susfs_ksu.patch" ]; then
+            if patch -p1 --forward --no-backup-if-mismatch < "susfs_ksu.patch"; then
+              echo "✅ KernelSU SuSFS patch applied successfully"
+              rm susfs_ksu.patch
+            else
+              echo "⚠️ KernelSU SuSFS patch may already be applied"
+              rm susfs_ksu.patch
+            fi
+          else
+            echo "❌ Failed to download KernelSU SuSFS patch"
+            exit 1
+          fi
+          cd ../..
+          
+          echo "🎉 All remote patches applied successfully in correct locations"
 
       - name: Setup CCACHE Environment
         run: |

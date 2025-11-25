@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 
 /*
- * resolve_btfids scans ELF object for .BTF_ids section and resolves
+ * resolve_btfids scans Elf object for .BTF_ids section and resolves
  * its symbols with BTF ID values.
  *
  * Each symbol points to 4 bytes data and is expected to have
@@ -141,7 +141,6 @@ struct object {
 };
 
 static int verbose;
-static int warnings;
 
 static int eprintf(int level, int var, const char *fmt, ...)
 {
@@ -410,14 +409,6 @@ static int elf_collect(struct object *obj)
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
 			obj->efile.idlist_addr  = sh.sh_addr;
-		} else if (!strcmp(name, BTF_BASE_ELF_SEC)) {
-			/* If a .BTF.base section is found, do not resolve
-			 * BTF ids relative to vmlinux; resolve relative
-			 * to the .BTF.base section instead.  btf__parse_split()
-			 * will take care of this once the base BTF it is
-			 * passed is NULL.
-			 */
-			obj->base_btf_path = NULL;
 		}
 
 		if (compressed_section_fix(elf, scn, &sh))
@@ -605,7 +596,6 @@ static int symbols_resolve(struct object *obj)
 			if (id->id) {
 				pr_info("WARN: multiple IDs found for '%s': %d, %d - using %d\n",
 					str, id->id, type_id, id->id);
-				warnings++;
 			} else {
 				id->id = type_id;
 				(*nr)--;
@@ -627,10 +617,8 @@ static int id_patch(struct object *obj, struct btf_id *id)
 	int i;
 
 	/* For set, set8, id->id may be 0 */
-	if (!id->id && !id->is_set && !id->is_set8) {
+	if (!id->id && !id->is_set && !id->is_set8)
 		pr_err("WARN: resolve_btfids: unresolved symbol %s\n", id->name);
-		warnings++;
-	}
 
 	for (i = 0; i < id->addr_cnt; i++) {
 		unsigned long addr = id->addr[i];
@@ -683,8 +671,8 @@ static int sets_patch(struct object *obj)
 
 	next = rb_first(&obj->sets);
 	while (next) {
-		struct btf_id_set8 *set8 = NULL;
-		struct btf_id_set *set = NULL;
+		struct btf_id_set8 *set8;
+		struct btf_id_set *set;
 		unsigned long addr, off;
 		struct btf_id *id;
 
@@ -786,7 +774,6 @@ int main(int argc, const char **argv)
 		.funcs    = RB_ROOT,
 		.sets     = RB_ROOT,
 	};
-	bool fatal_warnings = false;
 	struct option btfid_options[] = {
 		OPT_INCR('v', "verbose", &verbose,
 			 "be more verbose (show errors, etc)"),
@@ -794,8 +781,6 @@ int main(int argc, const char **argv)
 			   "BTF data"),
 		OPT_STRING('b', "btf_base", &obj.base_btf_path, "file",
 			   "path of file providing base BTF"),
-		OPT_BOOLEAN(0, "fatal_warnings", &fatal_warnings,
-			    "turn warnings into errors"),
 		OPT_END()
 	};
 	int err = -1;
@@ -830,8 +815,7 @@ int main(int argc, const char **argv)
 	if (symbols_patch(&obj))
 		goto out;
 
-	if (!(fatal_warnings && warnings))
-		err = 0;
+	err = 0;
 out:
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);

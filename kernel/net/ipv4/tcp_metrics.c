@@ -166,11 +166,11 @@ static struct tcp_metrics_block *tcpm_new(struct dst_entry *dst,
 					  unsigned int hash)
 {
 	struct tcp_metrics_block *tm;
-	bool reclaim = false;
 	struct net *net;
+	bool reclaim = false;
 
 	spin_lock_bh(&tcp_metrics_lock);
-	net = dst_dev_net_rcu(dst);
+	net = dev_net(dst->dev);
 
 	/* While waiting for the spin-lock the cache might have been populated
 	 * with this entry and so we have to check again.
@@ -273,7 +273,7 @@ static struct tcp_metrics_block *__tcp_get_metrics_req(struct request_sock *req,
 		return NULL;
 	}
 
-	net = dst_dev_net_rcu(dst);
+	net = dev_net(dst->dev);
 	hash ^= net_hash_mix(net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 
@@ -318,7 +318,7 @@ static struct tcp_metrics_block *tcp_get_metrics(struct sock *sk,
 	else
 		return NULL;
 
-	net = dst_dev_net_rcu(dst);
+	net = dev_net(dst->dev);
 	hash ^= net_hash_mix(net);
 	hash = hash_32(hash, tcp_metrics_hash_log);
 
@@ -617,13 +617,9 @@ static struct genl_family tcp_metrics_nl_family;
 
 static const struct nla_policy tcp_metrics_nl_policy[TCP_METRICS_ATTR_MAX + 1] = {
 	[TCP_METRICS_ATTR_ADDR_IPV4]	= { .type = NLA_U32, },
-	[TCP_METRICS_ATTR_ADDR_IPV6]	=
-		NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
-
+	[TCP_METRICS_ATTR_ADDR_IPV6]	= { .type = NLA_BINARY,
+					    .len = sizeof(struct in6_addr), },
 	[TCP_METRICS_ATTR_SADDR_IPV4]	= { .type = NLA_U32, },
-	[TCP_METRICS_ATTR_SADDR_IPV6]	=
-		NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
-
 	/* Following attributes are not received for GET/DEL,
 	 * we keep them for reference
 	 */
@@ -771,7 +767,6 @@ static int tcp_metrics_nl_dump(struct sk_buff *skb,
 	unsigned int max_rows = 1U << tcp_metrics_hash_log;
 	unsigned int row, s_row = cb->args[0];
 	int s_col = cb->args[1], col = s_col;
-	int res = 0;
 
 	for (row = s_row; row < max_rows; row++, s_col = 0) {
 		struct tcp_metrics_block *tm;
@@ -784,8 +779,7 @@ static int tcp_metrics_nl_dump(struct sk_buff *skb,
 				continue;
 			if (col < s_col)
 				continue;
-			res = tcp_metrics_dump_info(skb, cb, tm);
-			if (res < 0) {
+			if (tcp_metrics_dump_info(skb, cb, tm) < 0) {
 				rcu_read_unlock();
 				goto done;
 			}
@@ -796,7 +790,7 @@ static int tcp_metrics_nl_dump(struct sk_buff *skb,
 done:
 	cb->args[0] = row;
 	cb->args[1] = col;
-	return res;
+	return skb->len;
 }
 
 static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
@@ -815,6 +809,8 @@ static int __parse_nl_addr(struct genl_info *info, struct inetpeer_addr *addr,
 	if (a) {
 		struct in6_addr in6;
 
+		if (nla_len(a) != sizeof(struct in6_addr))
+			return -EINVAL;
 		in6 = nla_get_in6_addr(a);
 		inetpeer_set_addr_v6(addr, &in6);
 		if (hash)
@@ -903,16 +899,14 @@ static void tcp_metrics_flush_all(struct net *net)
 	unsigned int row;
 
 	for (row = 0; row < max_rows; row++, hb++) {
-		struct tcp_metrics_block __rcu **pp = &hb->chain;
+		struct tcp_metrics_block __rcu **pp;
 		bool match;
 
-		if (!rcu_access_pointer(*pp))
-			continue;
-
 		spin_lock_bh(&tcp_metrics_lock);
+		pp = &hb->chain;
 		for (tm = deref_locked(*pp); tm; tm = deref_locked(*pp)) {
 			match = net ? net_eq(tm_net(tm), net) :
-				!check_net(tm_net(tm));
+				!refcount_read(&tm_net(tm)->ns.count);
 			if (match) {
 				rcu_assign_pointer(*pp, tm->tcpm_next);
 				kfree_rcu(tm, rcu_head);
@@ -921,7 +915,6 @@ static void tcp_metrics_flush_all(struct net *net)
 			}
 		}
 		spin_unlock_bh(&tcp_metrics_lock);
-		cond_resched();
 	}
 }
 
@@ -991,14 +984,13 @@ static struct genl_family tcp_metrics_nl_family __ro_after_init = {
 	.maxattr	= TCP_METRICS_ATTR_MAX,
 	.policy = tcp_metrics_nl_policy,
 	.netnsok	= true,
-	.parallel_ops	= true,
 	.module		= THIS_MODULE,
 	.small_ops	= tcp_metrics_nl_ops,
 	.n_small_ops	= ARRAY_SIZE(tcp_metrics_nl_ops),
 	.resv_start_op	= TCP_METRICS_CMD_DEL + 1,
 };
 
-static unsigned int tcpmhash_entries __initdata;
+static unsigned int tcpmhash_entries;
 static int __init set_tcpmhash_entries(char *str)
 {
 	ssize_t ret;
@@ -1014,11 +1006,15 @@ static int __init set_tcpmhash_entries(char *str)
 }
 __setup("tcpmhash_entries=", set_tcpmhash_entries);
 
-static void __init tcp_metrics_hash_alloc(void)
+static int __net_init tcp_net_metrics_init(struct net *net)
 {
-	unsigned int slots = tcpmhash_entries;
 	size_t size;
+	unsigned int slots;
 
+	if (!net_eq(net, &init_net))
+		return 0;
+
+	slots = tcpmhash_entries;
 	if (!slots) {
 		if (totalram_pages() >= 128 * 1024)
 			slots = 16 * 1024;
@@ -1031,7 +1027,9 @@ static void __init tcp_metrics_hash_alloc(void)
 
 	tcp_metrics_hash = kvzalloc(size, GFP_KERNEL);
 	if (!tcp_metrics_hash)
-		panic("Could not allocate the tcp_metrics hash table\n");
+		return -ENOMEM;
+
+	return 0;
 }
 
 static void __net_exit tcp_net_metrics_exit_batch(struct list_head *net_exit_list)
@@ -1040,6 +1038,7 @@ static void __net_exit tcp_net_metrics_exit_batch(struct list_head *net_exit_lis
 }
 
 static __net_initdata struct pernet_operations tcp_net_metrics_ops = {
+	.init		=	tcp_net_metrics_init,
 	.exit_batch	=	tcp_net_metrics_exit_batch,
 };
 
@@ -1047,11 +1046,9 @@ void __init tcp_metrics_init(void)
 {
 	int ret;
 
-	tcp_metrics_hash_alloc();
-
 	ret = register_pernet_subsys(&tcp_net_metrics_ops);
 	if (ret < 0)
-		panic("Could not register tcp_net_metrics_ops\n");
+		panic("Could not allocate the tcp_metrics hash table\n");
 
 	ret = genl_register_family(&tcp_metrics_nl_family);
 	if (ret < 0)

@@ -86,7 +86,6 @@ static int connlimit_mt_check(const struct xt_mtchk_param *par)
 {
 	struct xt_connlimit_info *info = par->matchinfo;
 	unsigned int keylen;
-	int ret;
 
 	keylen = sizeof(u32);
 	if (par->family == NFPROTO_IPV6)
@@ -94,17 +93,8 @@ static int connlimit_mt_check(const struct xt_mtchk_param *par)
 	else
 		keylen += sizeof(struct in_addr);
 
-	ret = nf_ct_netns_get(par->net, par->family);
-	if (ret < 0) {
-		pr_info_ratelimited("cannot load conntrack support for proto=%u\n",
-				    par->family);
-		return ret;
-	}
-
 	/* init private data */
-	info->data = nf_conncount_init(par->net, keylen);
-	if (IS_ERR(info->data))
-		nf_ct_netns_put(par->net, par->family);
+	info->data = nf_conncount_init(par->net, par->family, keylen);
 
 	return PTR_ERR_OR_ZERO(info->data);
 }
@@ -113,8 +103,7 @@ static void connlimit_mt_destroy(const struct xt_mtdtor_param *par)
 {
 	const struct xt_connlimit_info *info = par->matchinfo;
 
-	nf_conncount_destroy(par->net, info->data);
-	nf_ct_netns_put(par->net, par->family);
+	nf_conncount_destroy(par->net, par->family, info->data);
 }
 
 static struct xt_match connlimit_mt_reg[] __read_mostly = {

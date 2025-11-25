@@ -43,7 +43,6 @@ extern void __static_call_return(void);
 
 asm (".global __static_call_return\n\t"
      ".type __static_call_return, @function\n\t"
-     ASM_FUNC_ALIGN "\n\t"
      "__static_call_return:\n\t"
      ANNOTATE_NOENDBR
      ANNOTATE_RETPOLINE_SAFE
@@ -63,7 +62,6 @@ static void __ref __static_call_transform(void *insn, enum insn_type type,
 
 	switch (type) {
 	case CALL:
-		func = callthunks_translate_call_dest(func);
 		code = text_gen_insn(CALL_INSN_OPCODE, insn, func);
 		if (func == &__static_call_return0) {
 			emulate = code;
@@ -90,8 +88,8 @@ static void __ref __static_call_transform(void *insn, enum insn_type type,
 	case JCC:
 		if (!func) {
 			func = __static_call_return;
-			if (cpu_wants_rethunk())
-				func = x86_return_thunk;
+			if (cpu_feature_enabled(X86_FEATURE_RETHUNK))
+				func = __x86_return_thunk;
 		}
 
 		buf[0] = 0x0f;
@@ -108,7 +106,7 @@ static void __ref __static_call_transform(void *insn, enum insn_type type,
 	if (system_state == SYSTEM_BOOTING || modinit)
 		return text_poke_early(insn, code, size);
 
-	smp_text_poke_single(insn, code, size, emulate);
+	text_poke_bp(insn, code, size, emulate);
 }
 
 static void __static_call_validate(u8 *insn, bool tail, bool tramp)
@@ -158,7 +156,7 @@ void arch_static_call_transform(void *site, void *tramp, void *func, bool tail)
 {
 	mutex_lock(&text_mutex);
 
-	if (tramp && !site) {
+	if (tramp) {
 		__static_call_validate(tramp, true, true);
 		__static_call_transform(tramp, __sc_insn(!func, true), func, false);
 	}
@@ -180,7 +178,7 @@ noinstr void __static_call_update_early(void *tramp, void *func)
 	sync_core();
 }
 
-#ifdef CONFIG_MITIGATION_RETHUNK
+#ifdef CONFIG_RETHUNK
 /*
  * This is called by apply_returns() to fix up static call trampolines,
  * specifically ARCH_DEFINE_STATIC_CALL_NULL_TRAMP which is recorded as

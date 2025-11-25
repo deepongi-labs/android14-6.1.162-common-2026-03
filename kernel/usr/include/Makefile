@@ -59,8 +59,10 @@ ifeq ($(SRCARCH),arc)
 no-header-test += linux/bpf_perf_event.h
 endif
 
-ifeq ($(SRCARCH),openrisc)
-no-header-test += linux/bpf_perf_event.h
+ifeq ($(SRCARCH),ia64)
+no-header-test += asm/setup.h
+no-header-test += asm/sigcontext.h
+no-header-test += linux/if_bonding.h
 endif
 
 ifeq ($(SRCARCH),powerpc)
@@ -80,12 +82,12 @@ always-y := $(patsubst $(obj)/%.h,%.hdrtest, $(shell find $(obj) -name '*.h' 2>/
 # Include the header twice to detect missing include guard.
 quiet_cmd_hdrtest = HDRTEST $<
       cmd_hdrtest = \
-		$(CC) $(c_flags) -fsyntax-only -Werror -x c /dev/null \
+		$(CC) $(c_flags) -fsyntax-only -x c /dev/null \
 			$(if $(filter-out $(no-header-test), $*.h), -include $< -include $<); \
-		$(PERL) $(src)/headers_check.pl $(obj) $<; \
+		$(PERL) $(srctree)/$(src)/headers_check.pl $(obj) $(SRCARCH) $<; \
 		touch $@
 
-$(obj)/%.hdrtest: $(obj)/%.h $(src)/headers_check.pl FORCE
+$(obj)/%.hdrtest: $(obj)/%.h FORCE
 	$(call if_changed_dep,hdrtest)
 
 # Since GNU Make 4.3, $(patsubst $(obj)/%/,%,$(wildcard $(obj)/*/)) works.

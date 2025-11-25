@@ -14,7 +14,7 @@
 #include <asm/page_32.h>
 #endif	/* CONFIG_X86_64 */
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 struct page;
 
@@ -34,8 +34,9 @@ static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
 	copy_page(to, from);
 }
 
-#define vma_alloc_zeroed_movable_folio(vma, vaddr) \
-	vma_alloc_folio(GFP_HIGHUSER_MOVABLE | __GFP_ZERO, 0, vma, vaddr)
+#define alloc_zeroed_user_highpage_movable(vma, vaddr) \
+	alloc_page_vma(GFP_HIGHUSER_MOVABLE | __GFP_ZERO | __GFP_CMA, vma, vaddr)
+#define __HAVE_ARCH_ALLOC_ZEROED_USER_HIGHPAGE_MOVABLE
 
 #ifndef __pa
 #define __pa(x)		__phys_addr((unsigned long)(x))
@@ -66,13 +67,9 @@ static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
  * virt_addr_valid(kaddr) returns true.
  */
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
+#define pfn_to_kaddr(pfn)      __va((pfn) << PAGE_SHIFT)
 extern bool __virt_addr_valid(unsigned long kaddr);
 #define virt_addr_valid(kaddr)	__virt_addr_valid((unsigned long) (kaddr))
-
-static __always_inline void *pfn_to_kaddr(unsigned long pfn)
-{
-	return __va(pfn << PAGE_SHIFT);
-}
 
 static __always_inline u64 __canonical_address(u64 vaddr, u8 vaddr_bits)
 {
@@ -84,7 +81,7 @@ static __always_inline u64 __is_canonical_address(u64 vaddr, u8 vaddr_bits)
 	return __canonical_address(vaddr, vaddr_bits) == vaddr;
 }
 
-#endif	/* __ASSEMBLER__ */
+#endif	/* __ASSEMBLY__ */
 
 #include <asm-generic/memory_model.h>
 #include <asm-generic/getorder.h>

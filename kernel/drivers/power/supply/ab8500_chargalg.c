@@ -844,9 +844,10 @@ static void handle_maxim_chg_curr(struct ab8500_chargalg *di)
 	}
 }
 
-static int ab8500_chargalg_get_ext_psy_data(struct power_supply *ext, void *data)
+static int ab8500_chargalg_get_ext_psy_data(struct device *dev, void *data)
 {
 	struct power_supply *psy;
+	struct power_supply *ext = dev_get_drvdata(dev);
 	const char **supplicants = (const char **)ext->supplied_to;
 	struct ab8500_chargalg *di;
 	union power_supply_propval ret;
@@ -1224,13 +1225,14 @@ static bool ab8500_chargalg_time_to_restart(struct ab8500_chargalg *di)
  */
 static void ab8500_chargalg_algorithm(struct ab8500_chargalg *di)
 {
-	const struct power_supply_maintenance_charge_table *mt;
 	struct power_supply_battery_info *bi = di->bm->bi;
+	struct power_supply_maintenance_charge_table *mt;
 	int charger_status;
 	int ret;
 
 	/* Collect data from all power_supply class devices */
-	power_supply_for_each_psy(di->chargalg_psy, ab8500_chargalg_get_ext_psy_data);
+	class_for_each_device(power_supply_class, NULL,
+		di->chargalg_psy, ab8500_chargalg_get_ext_psy_data);
 
 	ab8500_chargalg_end_of_charge(di);
 	ab8500_chargalg_check_temp(di);
@@ -1787,12 +1789,13 @@ static int ab8500_chargalg_probe(struct platform_device *pdev)
 	psy_cfg.drv_data = di;
 
 	/* Initilialize safety timer */
-	hrtimer_setup(&di->safety_timer, ab8500_chargalg_safety_timer_expired, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&di->safety_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	di->safety_timer.function = ab8500_chargalg_safety_timer_expired;
 
 	/* Initilialize maintenance timer */
-	hrtimer_setup(&di->maintenance_timer, ab8500_chargalg_maintenance_timer_expired,
-		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&di->maintenance_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	di->maintenance_timer.function =
+		ab8500_chargalg_maintenance_timer_expired;
 
 	/* Init work for chargalg */
 	INIT_DEFERRABLE_WORK(&di->chargalg_periodic_work,
@@ -1821,9 +1824,11 @@ static int ab8500_chargalg_probe(struct platform_device *pdev)
 	return component_add(dev, &ab8500_chargalg_component_ops);
 }
 
-static void ab8500_chargalg_remove(struct platform_device *pdev)
+static int ab8500_chargalg_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &ab8500_chargalg_component_ops);
+
+	return 0;
 }
 
 static SIMPLE_DEV_PM_OPS(ab8500_chargalg_pm_ops, ab8500_chargalg_suspend, ab8500_chargalg_resume);

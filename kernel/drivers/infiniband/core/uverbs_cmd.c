@@ -42,7 +42,6 @@
 
 #include <rdma/uverbs_types.h>
 #include <rdma/uverbs_std_types.h>
-#include <rdma/ib_ucaps.h>
 #include "rdma_core.h"
 
 #include "uverbs.h"
@@ -193,7 +192,7 @@ _ib_uverbs_lookup_comp_file(s32 fd, struct uverbs_attr_bundle *attrs)
 					       fd, attrs);
 
 	if (IS_ERR(uobj))
-		return ERR_CAST(uobj);
+		return (void *)uobj;
 
 	uverbs_uobject_get(uobj);
 	uobj_put_read(uobj);
@@ -233,8 +232,6 @@ int ib_init_ucontext(struct uverbs_attr_bundle *attrs)
 {
 	struct ib_ucontext *ucontext = attrs->context;
 	struct ib_uverbs_file *file = attrs->ufile;
-	int *fd_array;
-	int fd_count;
 	int ret;
 
 	if (!down_read_trylock(&file->hw_destroy_rwsem))
@@ -249,22 +246,6 @@ int ib_init_ucontext(struct uverbs_attr_bundle *attrs)
 				   RDMACG_RESOURCE_HCA_HANDLE);
 	if (ret)
 		goto err;
-
-	if (uverbs_attr_is_valid(attrs, UVERBS_ATTR_GET_CONTEXT_FD_ARR)) {
-		fd_count = uverbs_attr_ptr_get_array_size(attrs,
-							  UVERBS_ATTR_GET_CONTEXT_FD_ARR,
-							  sizeof(int));
-		if (fd_count < 0) {
-			ret = fd_count;
-			goto err_uncharge;
-		}
-
-		fd_array = uverbs_attr_get_alloced_ptr(attrs,
-						       UVERBS_ATTR_GET_CONTEXT_FD_ARR);
-		ret = ib_get_ucaps(fd_array, fd_count, &ucontext->enabled_caps);
-		if (ret)
-			goto err_uncharge;
-	}
 
 	ret = ucontext->device->ops.alloc_ucontext(ucontext,
 						   &attrs->driver_udata);
@@ -591,7 +572,7 @@ static int ib_uverbs_open_xrcd(struct uverbs_attr_bundle *attrs)
 	struct inode                   *inode = NULL;
 	int				new_xrcd = 0;
 	struct ib_device *ib_dev;
-	struct fd f = EMPTY_FD;
+	struct fd f = {};
 	int ret;
 
 	ret = uverbs_request(attrs, &cmd, sizeof(cmd));
@@ -603,12 +584,12 @@ static int ib_uverbs_open_xrcd(struct uverbs_attr_bundle *attrs)
 	if (cmd.fd != -1) {
 		/* search for file descriptor */
 		f = fdget(cmd.fd);
-		if (fd_empty(f)) {
+		if (!f.file) {
 			ret = -EBADF;
 			goto err_tree_mutex_unlock;
 		}
 
-		inode = file_inode(fd_file(f));
+		inode = file_inode(f.file);
 		xrcd = find_xrcd(ibudev, inode);
 		if (!xrcd && !(cmd.oflags & O_CREAT)) {
 			/* no file descriptor. Need CREATE flag */
@@ -651,7 +632,8 @@ static int ib_uverbs_open_xrcd(struct uverbs_attr_bundle *attrs)
 		atomic_inc(&xrcd->usecnt);
 	}
 
-	fdput(f);
+	if (f.file)
+		fdput(f);
 
 	mutex_unlock(&ibudev->xrcd_tree_mutex);
 	uobj_finalize_uobj_create(&obj->uobject, attrs);
@@ -666,7 +648,8 @@ err:
 	uobj_alloc_abort(&obj->uobject, attrs);
 
 err_tree_mutex_unlock:
-	fdput(f);
+	if (f.file)
+		fdput(f);
 
 	mutex_unlock(&ibudev->xrcd_tree_mutex);
 
@@ -741,7 +724,7 @@ static int ib_uverbs_reg_mr(struct uverbs_attr_bundle *attrs)
 	}
 
 	mr = pd->device->ops.reg_user_mr(pd, cmd.start, cmd.length, cmd.hca_va,
-					 cmd.access_flags, NULL,
+					 cmd.access_flags,
 					 &attrs->driver_udata);
 	if (IS_ERR(mr)) {
 		ret = PTR_ERR(mr);
@@ -1068,7 +1051,7 @@ static int create_cq(struct uverbs_attr_bundle *attrs,
 	rdma_restrack_new(&cq->res, RDMA_RESTRACK_CQ);
 	rdma_restrack_set_name(&cq->res, NULL);
 
-	ret = ib_dev->ops.create_cq(cq, &attr, attrs);
+	ret = ib_dev->ops.create_cq(cq, &attr, &attrs->driver_udata);
 	if (ret)
 		goto err_free;
 	rdma_restrack_add(&cq->res);
@@ -1312,9 +1295,9 @@ static int create_qp(struct uverbs_attr_bundle *attrs,
 
 	switch (cmd->qp_type) {
 	case IB_QPT_RAW_PACKET:
-		if (!rdma_uattrs_has_raw_cap(attrs))
+		if (!capable(CAP_NET_RAW))
 			return -EPERM;
-		fallthrough;
+		break;
 	case IB_QPT_RC:
 	case IB_QPT_UC:
 	case IB_QPT_UD:
@@ -1451,7 +1434,7 @@ static int create_qp(struct uverbs_attr_bundle *attrs,
 	}
 
 	if (attr.create_flags & IB_QP_CREATE_SOURCE_QPN) {
-		if (!rdma_uattrs_has_raw_cap(attrs)) {
+		if (!capable(CAP_NET_RAW)) {
 			ret = -EPERM;
 			goto err_put;
 		}
@@ -1876,9 +1859,7 @@ static int modify_qp(struct uverbs_attr_bundle *attrs,
 	if (cmd->base.attr_mask & IB_QP_PATH_MIG_STATE)
 		attr->path_mig_state = cmd->base.path_mig_state;
 	if (cmd->base.attr_mask & IB_QP_QKEY) {
-		if (cmd->base.qkey & IB_QP_SET_QKEY &&
-		    !(rdma_nl_get_privileged_qkey() ||
-		      rdma_uattrs_has_raw_cap(attrs))) {
+		if (cmd->base.qkey & IB_QP_SET_QKEY && !capable(CAP_NET_RAW)) {
 			ret = -EPERM;
 			goto release_qp;
 		}
@@ -2765,7 +2746,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 
 	switch (ib_spec->type & ~IB_FLOW_SPEC_INNER) {
 	case IB_FLOW_SPEC_ETH:
-		ib_filter_sz = sizeof(struct ib_flow_eth_filter);
+		ib_filter_sz = offsetof(struct ib_flow_eth_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2776,7 +2757,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		memcpy(&ib_spec->eth.mask, kern_spec_mask, actual_filter_sz);
 		break;
 	case IB_FLOW_SPEC_IPV4:
-		ib_filter_sz = sizeof(struct ib_flow_ipv4_filter);
+		ib_filter_sz = offsetof(struct ib_flow_ipv4_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2787,7 +2768,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		memcpy(&ib_spec->ipv4.mask, kern_spec_mask, actual_filter_sz);
 		break;
 	case IB_FLOW_SPEC_IPV6:
-		ib_filter_sz = sizeof(struct ib_flow_ipv6_filter);
+		ib_filter_sz = offsetof(struct ib_flow_ipv6_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2803,7 +2784,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		break;
 	case IB_FLOW_SPEC_TCP:
 	case IB_FLOW_SPEC_UDP:
-		ib_filter_sz = sizeof(struct ib_flow_tcp_udp_filter);
+		ib_filter_sz = offsetof(struct ib_flow_tcp_udp_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2814,7 +2795,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		memcpy(&ib_spec->tcp_udp.mask, kern_spec_mask, actual_filter_sz);
 		break;
 	case IB_FLOW_SPEC_VXLAN_TUNNEL:
-		ib_filter_sz = sizeof(struct ib_flow_tunnel_filter);
+		ib_filter_sz = offsetof(struct ib_flow_tunnel_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2829,7 +2810,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 			return -EINVAL;
 		break;
 	case IB_FLOW_SPEC_ESP:
-		ib_filter_sz = sizeof(struct ib_flow_esp_filter);
+		ib_filter_sz = offsetof(struct ib_flow_esp_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2840,7 +2821,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		memcpy(&ib_spec->esp.mask, kern_spec_mask, actual_filter_sz);
 		break;
 	case IB_FLOW_SPEC_GRE:
-		ib_filter_sz = sizeof(struct ib_flow_gre_filter);
+		ib_filter_sz = offsetof(struct ib_flow_gre_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -2851,7 +2832,7 @@ int ib_uverbs_kern_spec_to_ib_spec_filter(enum ib_flow_spec_type type,
 		memcpy(&ib_spec->gre.mask, kern_spec_mask, actual_filter_sz);
 		break;
 	case IB_FLOW_SPEC_MPLS:
-		ib_filter_sz = sizeof(struct ib_flow_mpls_filter);
+		ib_filter_sz = offsetof(struct ib_flow_mpls_filter, real_sz);
 		actual_filter_sz = spec_filter_size(kern_spec_mask,
 						    kern_filter_sz,
 						    ib_filter_sz);
@@ -3226,7 +3207,7 @@ static int ib_uverbs_ex_create_flow(struct uverbs_attr_bundle *attrs)
 	if (cmd.comp_mask)
 		return -EINVAL;
 
-	if (!rdma_uattrs_has_raw_cap(attrs))
+	if (!capable(CAP_NET_RAW))
 		return -EPERM;
 
 	if (cmd.flow_attr.flags >= IB_FLOW_ATTR_FLAGS_RESERVED)

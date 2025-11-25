@@ -7,7 +7,6 @@
 #include <linux/uaccess.h>
 #include <linux/compat.h>
 #include <asm/unistd.h>
-#include <linux/filelock.h>
 
 static bool nsec_valid(long nsec)
 {
@@ -63,7 +62,7 @@ int vfs_utimes(const struct path *path, struct timespec64 *times)
 	}
 retry_deleg:
 	inode_lock(inode);
-	error = notify_change(mnt_idmap(path->mnt), path->dentry, &newattrs,
+	error = notify_change(mnt_user_ns(path->mnt), path->dentry, &newattrs,
 			      &delegated_inode);
 	inode_unlock(inode);
 	if (delegated_inode) {
@@ -108,13 +107,18 @@ retry:
 
 static int do_utimes_fd(int fd, struct timespec64 *times, int flags)
 {
+	struct fd f;
+	int error;
+
 	if (flags)
 		return -EINVAL;
 
-	CLASS(fd, f)(fd);
-	if (fd_empty(f))
+	f = fdget(fd);
+	if (!f.file)
 		return -EBADF;
-	return vfs_utimes(&fd_file(f)->f_path, times);
+	error = vfs_utimes(&f.file->f_path, times);
+	fdput(f);
+	return error;
 }
 
 /*

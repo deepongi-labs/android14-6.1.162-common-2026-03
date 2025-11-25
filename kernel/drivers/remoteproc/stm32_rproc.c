@@ -12,9 +12,9 @@
 #include <linux/mailbox_client.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/of_reserved_mem.h>
-#include <linux/platform_device.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/regmap.h>
 #include <linux/remoteproc.h>
@@ -79,7 +79,6 @@ struct stm32_mbox {
 
 struct stm32_rproc {
 	struct reset_control *rst;
-	struct reset_control *hold_boot_rst;
 	struct stm32_syscon hold_boot;
 	struct stm32_syscon pdds;
 	struct stm32_syscon m4_state;
@@ -89,7 +88,7 @@ struct stm32_rproc {
 	struct stm32_rproc_mem *rmems;
 	struct stm32_mbox mb[MBOX_NB_MBX];
 	struct workqueue_struct *workqueue;
-	bool hold_boot_smc;
+	bool secured_soc;
 	void __iomem *rsc_va;
 };
 
@@ -414,28 +413,13 @@ static int stm32_rproc_set_hold_boot(struct rproc *rproc, bool hold)
 	struct arm_smccc_res smc_res;
 	int val, err;
 
-	/*
-	 * Three ways to manage the hold boot
-	 * - using SCMI: the hold boot is managed as a reset,
-	 * - using Linux(no SCMI): the hold boot is managed as a syscon register
-	 * - using SMC call (deprecated): use SMC reset interface
-	 */
-
 	val = hold ? HOLD_BOOT : RELEASE_BOOT;
 
-	if (ddata->hold_boot_rst) {
-		/* Use the SCMI reset controller */
-		if (!hold)
-			err = reset_control_deassert(ddata->hold_boot_rst);
-		else
-			err =  reset_control_assert(ddata->hold_boot_rst);
-	} else if (IS_ENABLED(CONFIG_HAVE_ARM_SMCCC) && ddata->hold_boot_smc) {
-		/* Use the SMC call */
+	if (IS_ENABLED(CONFIG_HAVE_ARM_SMCCC) && ddata->secured_soc) {
 		arm_smccc_smc(STM32_SMC_RCC, STM32_SMC_REG_WRITE,
 			      hold_boot.reg, val, 0, 0, 0, 0, &smc_res);
 		err = smc_res.a0;
 	} else {
-		/* Use syscon */
 		err = regmap_update_bits(hold_boot.map, hold_boot.reg,
 					 hold_boot.mask, val);
 	}
@@ -712,9 +696,9 @@ static int stm32_rproc_parse_dt(struct platform_device *pdev,
 	unsigned int tzen;
 	int err, irq;
 
-	irq = platform_get_irq_optional(pdev, 0);
+	irq = platform_get_irq(pdev, 0);
 	if (irq == -EPROBE_DEFER)
-		return irq;
+		return dev_err_probe(dev, irq, "failed to get interrupt\n");
 
 	if (irq > 0) {
 		err = devm_request_irq(dev, irq, stm32_rproc_wdg, 0,
@@ -733,52 +717,34 @@ static int stm32_rproc_parse_dt(struct platform_device *pdev,
 		dev_info(dev, "wdg irq registered\n");
 	}
 
-	ddata->rst = devm_reset_control_get_optional(dev, "mcu_rst");
-	if (!ddata->rst) {
-		/* Try legacy fallback method: get it by index */
-		ddata->rst = devm_reset_control_get_by_index(dev, 0);
-	}
+	ddata->rst = devm_reset_control_get_by_index(dev, 0);
 	if (IS_ERR(ddata->rst))
 		return dev_err_probe(dev, PTR_ERR(ddata->rst),
 				     "failed to get mcu_reset\n");
 
 	/*
-	 * Three ways to manage the hold boot
-	 * - using SCMI: the hold boot is managed as a reset
-	 *    The DT "reset-mames" property should be defined with 2 items:
-	 *        reset-names = "mcu_rst", "hold_boot";
-	 * - using SMC call (deprecated): use SMC reset interface
-	 *    The DT "reset-mames" property is optional, "st,syscfg-tz" is required
-	 * - default(no SCMI, no SMC): the hold boot is managed as a syscon register
-	 *    The DT "reset-mames" property is optional, "st,syscfg-holdboot" is required
+	 * if platform is secured the hold boot bit must be written by
+	 * smc call and read normally.
+	 * if not secure the hold boot bit could be read/write normally
 	 */
-
-	ddata->hold_boot_rst = devm_reset_control_get_optional(dev, "hold_boot");
-	if (IS_ERR(ddata->hold_boot_rst))
-		return dev_err_probe(dev, PTR_ERR(ddata->hold_boot_rst),
-				     "failed to get hold_boot reset\n");
-
-	if (!ddata->hold_boot_rst && IS_ENABLED(CONFIG_HAVE_ARM_SMCCC)) {
-		/* Manage the MCU_BOOT using SMC call */
-		err = stm32_rproc_get_syscon(np, "st,syscfg-tz", &tz);
-		if (!err) {
-			err = regmap_read(tz.map, tz.reg, &tzen);
-			if (err) {
-				dev_err(dev, "failed to read tzen\n");
-				return err;
-			}
-			ddata->hold_boot_smc = tzen & tz.mask;
-		}
+	err = stm32_rproc_get_syscon(np, "st,syscfg-tz", &tz);
+	if (err) {
+		dev_err(dev, "failed to get tz syscfg\n");
+		return err;
 	}
 
-	if (!ddata->hold_boot_rst && !ddata->hold_boot_smc) {
-		/* Default: hold boot manage it through the syscon controller */
-		err = stm32_rproc_get_syscon(np, "st,syscfg-holdboot",
-					     &ddata->hold_boot);
-		if (err) {
-			dev_err(dev, "failed to get hold boot\n");
-			return err;
-		}
+	err = regmap_read(tz.map, tz.reg, &tzen);
+	if (err) {
+		dev_err(dev, "failed to read tzen\n");
+		return err;
+	}
+	ddata->secured_soc = tzen & tz.mask;
+
+	err = stm32_rproc_get_syscon(np, "st,syscfg-holdboot",
+				     &ddata->hold_boot);
+	if (err) {
+		dev_err(dev, "failed to get hold boot\n");
+		return err;
 	}
 
 	err = stm32_rproc_get_syscon(np, "st,syscfg-pdds", &ddata->pdds);
@@ -835,7 +801,6 @@ static int stm32_rproc_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct stm32_rproc *ddata;
 	struct device_node *np = dev->of_node;
-	const char *fw_name;
 	struct rproc *rproc;
 	unsigned int state;
 	int ret;
@@ -844,12 +809,7 @@ static int stm32_rproc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	/* Look for an optional firmware name */
-	ret = rproc_of_parse_firmware(dev, 0, &fw_name);
-	if (ret < 0 && ret != -EINVAL)
-		return ret;
-
-	rproc = devm_rproc_alloc(dev, np->name, &st_rproc_ops, fw_name, sizeof(*ddata));
+	rproc = rproc_alloc(dev, np->name, &st_rproc_ops, NULL, sizeof(*ddata));
 	if (!rproc)
 		return -ENOMEM;
 
@@ -903,10 +863,11 @@ free_rproc:
 		dev_pm_clear_wake_irq(dev);
 		device_init_wakeup(dev, false);
 	}
+	rproc_free(rproc);
 	return ret;
 }
 
-static void stm32_rproc_remove(struct platform_device *pdev)
+static int stm32_rproc_remove(struct platform_device *pdev)
 {
 	struct rproc *rproc = platform_get_drvdata(pdev);
 	struct stm32_rproc *ddata = rproc->priv;
@@ -923,6 +884,9 @@ static void stm32_rproc_remove(struct platform_device *pdev)
 		dev_pm_clear_wake_irq(dev);
 		device_init_wakeup(dev, false);
 	}
+	rproc_free(rproc);
+
+	return 0;
 }
 
 static int stm32_rproc_suspend(struct device *dev)

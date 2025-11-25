@@ -65,11 +65,9 @@ lookup_cipher(const char *cipher_string)
 static void default_key_dtr(struct dm_target *ti)
 {
 	struct default_key_c *dkc = ti->private;
-	struct blk_crypto_key *blk_key = &dkc->key;
 
 	if (dkc->dev) {
-		if (blk_key->size > 0)
-			blk_crypto_evict_key(dkc->dev->bdev, blk_key);
+		blk_crypto_evict_key(dkc->dev->bdev, &dkc->key);
 		dm_put_device(ti, dkc->dev);
 	}
 	kfree_sensitive(dkc->cipher_string);
@@ -144,8 +142,8 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	struct default_key_c *dkc;
 	const struct dm_default_key_cipher *cipher;
-	u8 key_bytes[BLK_CRYPTO_MAX_ANY_KEY_SIZE];
-	unsigned int key_size;
+	u8 raw_key[BLK_CRYPTO_MAX_ANY_KEY_SIZE];
+	unsigned int raw_key_size;
 	unsigned int dun_bytes;
 	unsigned long long tmpll;
 	char dummy;
@@ -162,7 +160,7 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return -ENOMEM;
 	}
 	ti->private = dkc;
-	dkc->key_type = BLK_CRYPTO_KEY_TYPE_RAW;
+	dkc->key_type = BLK_CRYPTO_KEY_TYPE_STANDARD;
 
 	/* <cipher> */
 	dkc->cipher_string = kstrdup(argv[0], GFP_KERNEL);
@@ -179,14 +177,15 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	/* <key> */
-	key_size = strlen(argv[1]);
-	if (key_size > 2 * BLK_CRYPTO_MAX_ANY_KEY_SIZE || key_size % 2) {
+	raw_key_size = strlen(argv[1]);
+	if (raw_key_size > 2 * BLK_CRYPTO_MAX_ANY_KEY_SIZE ||
+	    raw_key_size % 2) {
 		ti->error = "Invalid keysize";
 		err = -EINVAL;
 		goto bad;
 	}
-	key_size /= 2;
-	if (hex2bin(key_bytes, argv[1], key_size) != 0) {
+	raw_key_size /= 2;
+	if (hex2bin(raw_key, argv[1], raw_key_size) != 0) {
 		ti->error = "Malformed key string";
 		err = -EINVAL;
 		goto bad;
@@ -216,22 +215,6 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	dkc->start = tmpll;
 
-	if (bdev_is_zoned(dkc->dev->bdev)) {
-		/*
-		 * All zone append writes to a zone of a zoned block device will
-		 * have the same BIO sector, the start of the zone. When the
-		 * cypher IV mode uses sector values, all data targeting a
-		 * zone will be encrypted using the first sector numbers of the
-		 * zone. This will not result in write errors but will
-		 * cause most reads to fail as reads will use the sector values
-		 * for the actual data locations, resulting in IV mismatch.
-		 * To avoid this problem, ask DM core to emulate zone append
-		 * operations with regular writes.
-		 */
-		DMDEBUG("Zone append operations will be emulated");
-		ti->emulate_zone_append = true;
-	}
-
 	/* optional arguments */
 	dkc->sector_size = SECTOR_SIZE;
 	if (argc > 5) {
@@ -250,7 +233,7 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		       (dkc->sector_bits - SECTOR_SHIFT);
 	dun_bytes = DIV_ROUND_UP(fls64(dkc->max_dun), 8);
 
-	err = blk_crypto_init_key(&dkc->key, key_bytes, key_size,
+	err = blk_crypto_init_key(&dkc->key, raw_key, raw_key_size,
 				  dkc->key_type, cipher->mode_num,
 				  dun_bytes, dkc->sector_size);
 	if (err) {
@@ -272,7 +255,7 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 bad:
 	default_key_dtr(ti);
 out:
-	memzero_explicit(key_bytes, sizeof(key_bytes));
+	memzero_explicit(raw_key, sizeof(raw_key));
 	return err;
 }
 
@@ -368,9 +351,7 @@ static void default_key_status(struct dm_target *ti, status_type_t type,
 }
 
 static int default_key_prepare_ioctl(struct dm_target *ti,
-				     struct block_device **bdev,
-				     unsigned int cmd, unsigned long arg,
-				     bool *forward)
+				     struct block_device **bdev)
 {
 	const struct default_key_c *dkc = ti->private;
 	const struct dm_dev *dev = dkc->dev;
@@ -379,7 +360,7 @@ static int default_key_prepare_ioctl(struct dm_target *ti,
 
 	/* Only pass ioctls through if the device sizes match exactly. */
 	if (dkc->start != 0 ||
-	    ti->len != bdev_nr_sectors(dev->bdev))
+	    ti->len != i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT)
 		return 1;
 	return 0;
 }

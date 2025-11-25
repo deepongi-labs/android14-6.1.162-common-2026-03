@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/eventfd.h>
+#include <linux/msi.h>
 
 #include "linux/fsl/mc.h"
 #include "vfio_fsl_mc_private.h"
@@ -29,7 +30,7 @@ static int vfio_fsl_mc_irqs_allocate(struct vfio_fsl_mc_device *vdev)
 
 	irq_count = mc_dev->obj_desc.irq_count;
 
-	mc_irq = kcalloc(irq_count, sizeof(*mc_irq), GFP_KERNEL_ACCOUNT);
+	mc_irq = kcalloc(irq_count, sizeof(*mc_irq), GFP_KERNEL);
 	if (!mc_irq)
 		return -ENOMEM;
 
@@ -54,7 +55,7 @@ static irqreturn_t vfio_fsl_mc_irq_handler(int irq_num, void *arg)
 {
 	struct vfio_fsl_mc_irq *mc_irq = (struct vfio_fsl_mc_irq *)arg;
 
-	eventfd_signal(mc_irq->trigger);
+	eventfd_signal(mc_irq->trigger, 1);
 	return IRQ_HANDLED;
 }
 
@@ -77,7 +78,7 @@ static int vfio_set_trigger(struct vfio_fsl_mc_device *vdev,
 	if (fd < 0) /* Disable only */
 		return 0;
 
-	irq->name = kasprintf(GFP_KERNEL_ACCOUNT, "vfio-irq[%d](%s)",
+	irq->name = kasprintf(GFP_KERNEL, "vfio-irq[%d](%s)",
 			    hwirq, dev_name(&vdev->mc_dev->dev));
 	if (!irq->name)
 		return -ENOMEM;
@@ -108,10 +109,10 @@ static int vfio_fsl_mc_set_irq_trigger(struct vfio_fsl_mc_device *vdev,
 				       void *data)
 {
 	struct fsl_mc_device *mc_dev = vdev->mc_dev;
+	int ret, hwirq;
 	struct vfio_fsl_mc_irq *irq;
 	struct device *cont_dev = fsl_mc_cont_dev(&mc_dev->dev);
 	struct fsl_mc_device *mc_cont = to_fsl_mc_device(cont_dev);
-	int ret;
 
 	if (!count && (flags & VFIO_IRQ_SET_DATA_NONE))
 		return vfio_set_trigger(vdev, index, -1);
@@ -136,17 +137,19 @@ static int vfio_fsl_mc_set_irq_trigger(struct vfio_fsl_mc_device *vdev,
 		return vfio_set_trigger(vdev, index, fd);
 	}
 
+	hwirq = vdev->mc_dev->irqs[index]->virq;
+
 	irq = &vdev->mc_irqs[index];
 
 	if (flags & VFIO_IRQ_SET_DATA_NONE) {
 		if (irq->trigger)
-			eventfd_signal(irq->trigger);
+			eventfd_signal(irq->trigger, 1);
 
 	} else if (flags & VFIO_IRQ_SET_DATA_BOOL) {
 		u8 trigger = *(u8 *)data;
 
 		if (trigger && irq->trigger)
-			eventfd_signal(irq->trigger);
+			eventfd_signal(irq->trigger, 1);
 	}
 
 	return 0;

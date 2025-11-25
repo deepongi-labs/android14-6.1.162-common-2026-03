@@ -1032,8 +1032,8 @@ static void ar9003_hw_configpcipowersave(struct ath_hw *ah,
 	/* Nothing to do on restore for 11N */
 	if (!power_off /* !restore */) {
 		/* set bit 19 to allow forcing of pcie core into L1 state */
-		REG_SET_BIT(ah, AR_PCIE_PM_CTRL(ah), AR_PCIE_PM_CTRL_ENA);
-		REG_WRITE(ah, AR_WA(ah), ah->WARegVal);
+		REG_SET_BIT(ah, AR_PCIE_PM_CTRL, AR_PCIE_PM_CTRL_ENA);
+		REG_WRITE(ah, AR_WA, ah->WARegVal);
 	}
 
 	/*
@@ -1170,7 +1170,7 @@ exit:
 	return false;
 }
 
-/* Sets up the AR9003 hardware family callbacks */
+/* Sets up the AR9003 hardware familiy callbacks */
 void ar9003_hw_attach_ops(struct ath_hw *ah)
 {
 	struct ath_hw_private_ops *priv_ops = ath9k_hw_private_ops(ah);

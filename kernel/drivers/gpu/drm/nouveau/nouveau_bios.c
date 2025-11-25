@@ -28,8 +28,6 @@
 #include "dispnv04/hw.h"
 #include "nouveau_encoder.h"
 
-#include <subdev/gsp.h>
-
 #include <linux/io-mapping.h>
 #include <linux/firmware.h>
 
@@ -42,6 +40,11 @@
 
 #define BIOSLOG(sip, fmt, arg...) NV_DEBUG(sip->dev, fmt, ##arg)
 #define LOG_OLD_VALUE(x)
+
+struct init_exec {
+	bool execute;
+	bool repeat;
+};
 
 static bool nv_cksum(const uint8_t *data, unsigned int length)
 {
@@ -2015,7 +2018,7 @@ uint8_t *nouveau_bios_embedded_edid(struct drm_device *dev)
 static bool NVInitVBIOS(struct drm_device *dev)
 {
 	struct nouveau_drm *drm = nouveau_drm(dev);
-	struct nvkm_bios *bios = nvxx_bios(drm);
+	struct nvkm_bios *bios = nvxx_bios(&drm->client.device);
 	struct nvbios *legacy = &drm->vbios;
 
 	memset(legacy, 0, sizeof(struct nvbios));
@@ -2085,18 +2088,15 @@ nouveau_bios_init(struct drm_device *dev)
 	int ret;
 
 	/* only relevant for PCI devices */
-	if (!dev_is_pci(dev->dev) ||
-	    nvkm_gsp_rm(nvxx_device(drm)->gsp))
+	if (!dev_is_pci(dev->dev))
 		return 0;
 
 	if (!NVInitVBIOS(dev))
 		return -ENODEV;
 
-	if (drm->client.device.info.family < NV_DEVICE_INFO_V0_TESLA) {
-		ret = parse_dcb_table(dev, bios);
-		if (ret)
-			return ret;
-	}
+	ret = parse_dcb_table(dev, bios);
+	if (ret)
+		return ret;
 
 	if (!bios->major_version)	/* we don't run version 0 bios */
 		return 0;

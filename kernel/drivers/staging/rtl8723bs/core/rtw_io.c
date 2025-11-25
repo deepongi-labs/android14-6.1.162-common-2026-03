@@ -26,6 +26,7 @@ jackson@realtek.com.tw
 */
 
 #include <drv_types.h>
+#include <rtw_debug.h>
 
 u8 rtw_read8(struct adapter *adapter, u32 addr)
 {
@@ -141,12 +142,12 @@ int rtw_init_io_priv(struct adapter *padapter, void (*set_intf_ops)(struct adapt
 */
 int rtw_inc_and_chk_continual_io_error(struct dvobj_priv *dvobj)
 {
-	int error_count = atomic_inc_return(&dvobj->continual_io_error);
+	int ret = false;
+	int value = atomic_inc_return(&dvobj->continual_io_error);
+	if (value > MAX_CONTINUAL_IO_ERR)
+		ret = true;
 
-	if (error_count > MAX_CONTINUAL_IO_ERR)
-		return true;
-
-	return false;
+	return ret;
 }
 
 /*

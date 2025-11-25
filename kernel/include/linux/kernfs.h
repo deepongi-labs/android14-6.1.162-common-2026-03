@@ -19,6 +19,7 @@
 #include <linux/wait.h>
 #include <linux/rwsem.h>
 #include <linux/cache.h>
+#include <linux/android_kabi.h>
 
 struct file;
 struct dentry;
@@ -147,11 +148,6 @@ enum kernfs_root_flag {
 	 * Support user xattrs to be written to nodes rooted at this root.
 	 */
 	KERNFS_ROOT_SUPPORT_USER_XATTR		= 0x0008,
-
-	/*
-	 * Renames must not change the parent node.
-	 */
-	KERNFS_ROOT_INVARIANT_PARENT		= 0x0010,
 };
 
 /* type-specific structures for kernfs_node union members */
@@ -204,21 +200,20 @@ struct kernfs_node {
 	 * never moved to a different parent, it is safe to access the
 	 * parent directly.
 	 */
-	struct kernfs_node	__rcu *__parent;
-	const char		__rcu *name;
+	struct kernfs_node	*parent;
+	const char		*name;
 
 	struct rb_node		rb;
 
 	const void		*ns;	/* namespace tag */
 	unsigned int		hash;	/* ns + name hash */
-	unsigned short		flags;
-	umode_t			mode;
-
 	union {
 		struct kernfs_elem_dir		dir;
 		struct kernfs_elem_symlink	symlink;
 		struct kernfs_elem_attr		attr;
 	};
+
+	void			*priv;
 
 	/*
 	 * 64bit unique ID.  On 64bit ino setups, id is the ino.  On 32bit,
@@ -226,10 +221,11 @@ struct kernfs_node {
 	 */
 	u64			id;
 
-	void			*priv;
+	unsigned short		flags;
+	umode_t			mode;
 	struct kernfs_iattrs	*iattr;
 
-	struct rcu_head		rcu;
+	ANDROID_KABI_RESERVE(1);
 };
 
 /*
@@ -249,6 +245,11 @@ struct kernfs_syscall_ops {
 		      const char *new_name);
 	int (*show_path)(struct seq_file *sf, struct kernfs_node *kn,
 			 struct kernfs_root *root);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 struct kernfs_node *kernfs_root_to_node(struct kernfs_root *root);
@@ -271,6 +272,8 @@ struct kernfs_open_file {
 	bool			mmapped:1;
 	bool			released:1;
 	const struct vm_operations_struct *vm_ops;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct kernfs_ops {
@@ -323,7 +326,9 @@ struct kernfs_ops {
 			 struct poll_table_struct *pt);
 
 	int (*mmap)(struct kernfs_open_file *of, struct vm_area_struct *vma);
-	loff_t (*llseek)(struct kernfs_open_file *of, loff_t offset, int whence);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /*
@@ -400,7 +405,7 @@ static inline bool kernfs_ns_enabled(struct kernfs_node *kn)
 }
 
 int kernfs_name(struct kernfs_node *kn, char *buf, size_t buflen);
-int kernfs_path_from_node(struct kernfs_node *kn_to, struct kernfs_node *kn_from,
+int kernfs_path_from_node(struct kernfs_node *root_kn, struct kernfs_node *kn,
 			  char *buf, size_t buflen);
 void pr_cont_kernfs_name(struct kernfs_node *kn);
 void pr_cont_kernfs_path(struct kernfs_node *kn);
@@ -421,7 +426,6 @@ struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
 struct kernfs_root *kernfs_create_root(struct kernfs_syscall_ops *scops,
 				       unsigned int flags, void *priv);
 void kernfs_destroy_root(struct kernfs_root *root);
-unsigned int kernfs_root_flags(struct kernfs_node *kn);
 
 struct kernfs_node *kernfs_create_dir_ns(struct kernfs_node *parent,
 					 const char *name, umode_t mode,
@@ -520,8 +524,6 @@ kernfs_create_root(struct kernfs_syscall_ops *scops, unsigned int flags,
 { return ERR_PTR(-ENOSYS); }
 
 static inline void kernfs_destroy_root(struct kernfs_root *root) { }
-static inline unsigned int kernfs_root_flags(struct kernfs_node *kn)
-{ return 0; }
 
 static inline struct kernfs_node *
 kernfs_create_dir_ns(struct kernfs_node *parent, const char *name,

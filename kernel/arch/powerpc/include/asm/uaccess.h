@@ -75,7 +75,7 @@ __pu_failed:							\
 /* -mprefixed can generate offsets beyond range, fall back hack */
 #ifdef CONFIG_PPC_KERNEL_PREFIXED
 #define __put_user_asm_goto(x, addr, label, op)			\
-	asm goto(					\
+	asm_volatile_goto(					\
 		"1:	" op " %0,0(%1)	# put_user\n"		\
 		EX_TABLE(1b, %l2)				\
 		:						\
@@ -94,10 +94,6 @@ __pu_failed:							\
 #endif
 
 #ifdef __powerpc64__
-#ifdef CONFIG_PPC_KERNEL_PREFIXED
-#define __put_user_asm2_goto(x, ptr, label)			\
-	__put_user_asm_goto(x, ptr, label, "std")
-#else
 #define __put_user_asm2_goto(x, addr, label)			\
 	asm goto ("1: std%U1%X1 %0,%1	# put_user\n"		\
 		EX_TABLE(1b, %l2)				\
@@ -105,7 +101,6 @@ __pu_failed:							\
 		: "r" (x), DS_FORM_CONSTRAINT (*addr)		\
 		:						\
 		: label)
-#endif // CONFIG_PPC_KERNEL_PREFIXED
 #else /* __powerpc64__ */
 #define __put_user_asm2_goto(x, addr, label)			\
 	asm goto(					\
@@ -157,7 +152,7 @@ do {								\
 /* -mprefixed can generate offsets beyond range, fall back hack */
 #ifdef CONFIG_PPC_KERNEL_PREFIXED
 #define __get_user_asm_goto(x, addr, label, op)			\
-	asm_goto_output(					\
+	asm_volatile_goto(					\
 		"1:	"op" %0,0(%1)	# get_user\n"		\
 		EX_TABLE(1b, %l2)				\
 		: "=r" (x)					\
@@ -176,19 +171,8 @@ do {								\
 #endif
 
 #ifdef __powerpc64__
-#ifdef CONFIG_PPC_KERNEL_PREFIXED
 #define __get_user_asm2_goto(x, addr, label)			\
 	__get_user_asm_goto(x, addr, label, "ld")
-#else
-#define __get_user_asm2_goto(x, addr, label)			\
-	asm_goto_output(					\
-		"1:	ld%U1%X1 %0, %1	# get_user\n"		\
-		EX_TABLE(1b, %l2)				\
-		: "=r" (x)					\
-		: DS_FORM_CONSTRAINT (*addr)			\
-		:						\
-		: label)
-#endif // CONFIG_PPC_KERNEL_PREFIXED
 #else /* __powerpc64__ */
 #define __get_user_asm2_goto(x, addr, label)			\
 	asm_goto_output(					\
@@ -396,7 +380,7 @@ copy_mc_to_user(void __user *to, const void *from, unsigned long n)
 	if (check_copy_size(from, n, true)) {
 		if (access_ok(to, n)) {
 			allow_write_to_user(to, n);
-			n = copy_mc_generic((void __force *)to, from, n);
+			n = copy_mc_generic((void *)to, from, n);
 			prevent_write_to_user(to, n);
 		}
 	}
@@ -407,8 +391,10 @@ copy_mc_to_user(void __user *to, const void *from, unsigned long n)
 
 extern long __copy_from_user_flushcache(void *dst, const void __user *src,
 		unsigned size);
+extern void memcpy_page_flushcache(char *to, struct page *page, size_t offset,
+			   size_t len);
 
-static __must_check __always_inline bool user_access_begin(const void __user *ptr, size_t len)
+static __must_check inline bool user_access_begin(const void __user *ptr, size_t len)
 {
 	if (unlikely(!access_ok(ptr, len)))
 		return false;
@@ -423,7 +409,7 @@ static __must_check __always_inline bool user_access_begin(const void __user *pt
 #define user_access_save	prevent_user_access_return
 #define user_access_restore	restore_user_access
 
-static __must_check __always_inline bool
+static __must_check inline bool
 user_read_access_begin(const void __user *ptr, size_t len)
 {
 	if (unlikely(!access_ok(ptr, len)))
@@ -437,7 +423,7 @@ user_read_access_begin(const void __user *ptr, size_t len)
 #define user_read_access_begin	user_read_access_begin
 #define user_read_access_end		prevent_current_read_from_user
 
-static __must_check __always_inline bool
+static __must_check inline bool
 user_write_access_begin(const void __user *ptr, size_t len)
 {
 	if (unlikely(!access_ok(ptr, len)))

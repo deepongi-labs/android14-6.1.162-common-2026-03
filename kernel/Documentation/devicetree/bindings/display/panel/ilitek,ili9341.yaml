@@ -16,7 +16,6 @@ description: |
 
 allOf:
   - $ref: panel-common.yaml#
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
 
 properties:
   compatible:
@@ -28,8 +27,7 @@ properties:
           - canaan,kd233-tft
       - const: ilitek,ili9341
 
-  reg:
-    maxItems: 1
+  reg: true
 
   dc-gpios:
     maxItems: 1

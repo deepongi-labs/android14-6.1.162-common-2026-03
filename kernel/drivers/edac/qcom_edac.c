@@ -128,7 +128,7 @@ static int qcom_llcc_core_setup(struct llcc_drv_data *drv, struct regmap *llcc_b
 static int
 qcom_llcc_clear_error_status(int err_type, struct llcc_drv_data *drv)
 {
-	int ret;
+	int ret = 0;
 
 	switch (err_type) {
 	case LLCC_DRAM_CE:
@@ -342,15 +342,14 @@ static int qcom_llcc_edac_probe(struct platform_device *pdev)
 	int ecc_irq;
 	int rc;
 
-	if (!llcc_driv_data->ecc_irq_configured) {
-		rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
-		if (rc)
-			return rc;
-	}
+	rc = qcom_llcc_core_setup(llcc_driv_data, llcc_driv_data->bcast_regmap);
+	if (rc)
+		return rc;
 
 	/* Allocate edac control info */
 	edev_ctl = edac_device_alloc_ctl_info(0, "qcom-llcc", 1, "bank",
 					      llcc_driv_data->num_banks, 1,
+					      NULL, 0,
 					      edac_device_alloc_index());
 
 	if (!edev_ctl)
@@ -391,19 +390,15 @@ irq_done:
 	return rc;
 }
 
-static void qcom_llcc_edac_remove(struct platform_device *pdev)
+static int qcom_llcc_edac_remove(struct platform_device *pdev)
 {
 	struct edac_device_ctl_info *edev_ctl = dev_get_drvdata(&pdev->dev);
 
 	edac_device_del_device(edev_ctl->dev);
 	edac_device_free_ctl_info(edev_ctl);
-}
 
-static const struct platform_device_id qcom_llcc_edac_id_table[] = {
-	{ .name = "qcom_llcc_edac" },
-	{}
-};
-MODULE_DEVICE_TABLE(platform, qcom_llcc_edac_id_table);
+	return 0;
+}
 
 static struct platform_driver qcom_llcc_edac_driver = {
 	.probe = qcom_llcc_edac_probe,
@@ -411,7 +406,6 @@ static struct platform_driver qcom_llcc_edac_driver = {
 	.driver = {
 		.name = "qcom_llcc_edac",
 	},
-	.id_table = qcom_llcc_edac_id_table,
 };
 module_platform_driver(qcom_llcc_edac_driver);
 

@@ -14,15 +14,12 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/platform_device.h>
-#include <linux/property.h>
-#include <linux/regmap.h>
-#include <linux/seq_file.h>
-#include <linux/slab.h>
-
-#include <linux/pinctrl/pinconf-generic.h>
+#include <linux/of_device.h>
 #include <linux/pinctrl/pinconf.h>
+#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinctrl.h>
+#include <linux/regmap.h>
+#include <linux/slab.h>
 
 #include "../core.h"
 #include "../devicetree.h"
@@ -82,7 +79,7 @@ struct ti_iodelay_reg_data {
 	u32 reg_start_offset;
 	u32 reg_nr_per_pin;
 
-	const struct regmap_config *regmap_config;
+	struct regmap_config *regmap_config;
 };
 
 /**
@@ -274,22 +271,6 @@ static int ti_iodelay_pinconf_set(struct ti_iodelay_device *iod,
 }
 
 /**
- * ti_iodelay_pinconf_deinit_dev() - deinit the iodelay device
- * @data:	IODelay device
- *
- * Deinitialize the IODelay device (basically just lock the region back up.
- */
-static void ti_iodelay_pinconf_deinit_dev(void *data)
-{
-	struct ti_iodelay_device *iod = data;
-	const struct ti_iodelay_reg_data *reg = iod->reg_data;
-
-	/* lock the iodelay region back again */
-	regmap_update_bits(iod->regmap, reg->reg_global_lock_offset,
-			   reg->global_lock_mask, reg->global_lock_val);
-}
-
-/**
  * ti_iodelay_pinconf_init_dev() - Initialize IODelay device
  * @iod: iodelay device
  *
@@ -308,11 +289,6 @@ static int ti_iodelay_pinconf_init_dev(struct ti_iodelay_device *iod)
 	/* unlock the iodelay region */
 	r = regmap_update_bits(iod->regmap, reg->reg_global_lock_offset,
 			       reg->global_lock_mask, reg->global_unlock_val);
-	if (r)
-		return r;
-
-	r = devm_add_action_or_reset(iod->dev, ti_iodelay_pinconf_deinit_dev,
-				     iod);
 	if (r)
 		return r;
 
@@ -372,6 +348,21 @@ static int ti_iodelay_pinconf_init_dev(struct ti_iodelay_device *iod)
 		ival->fine_ref_count, ival->fine_delay_count, ival->fdpe);
 
 	return 0;
+}
+
+/**
+ * ti_iodelay_pinconf_deinit_dev() - deinit the iodelay device
+ * @iod:	IODelay device
+ *
+ * Deinitialize the IODelay device (basically just lock the region back up.
+ */
+static void ti_iodelay_pinconf_deinit_dev(struct ti_iodelay_device *iod)
+{
+	const struct ti_iodelay_reg_data *reg = iod->reg_data;
+
+	/* lock the iodelay region back again */
+	regmap_update_bits(iod->regmap, reg->reg_global_lock_offset,
+			   reg->global_lock_mask, reg->global_lock_val);
 }
 
 /**
@@ -776,14 +767,14 @@ static int ti_iodelay_alloc_pins(struct device *dev,
 	return 0;
 }
 
-static const struct regmap_config dra7_iodelay_regmap_config = {
+static struct regmap_config dra7_iodelay_regmap_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
 	.max_register = 0xd1c,
 };
 
-static const struct ti_iodelay_reg_data dra7_iodelay_data = {
+static struct ti_iodelay_reg_data dra7_iodelay_data = {
 	.signature_mask = 0x0003f000,
 	.signature_value = 0x29,
 	.lock_mask = 0x00000400,
@@ -828,48 +819,63 @@ MODULE_DEVICE_TABLE(of, ti_iodelay_of_match);
 static int ti_iodelay_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *np __free(device_node) = of_node_get(dev->of_node);
+	struct device_node *np = of_node_get(dev->of_node);
+	const struct of_device_id *match;
 	struct resource *res;
 	struct ti_iodelay_device *iod;
-	int ret;
+	int ret = 0;
 
 	if (!np) {
+		ret = -EINVAL;
 		dev_err(dev, "No OF node\n");
-		return -EINVAL;
+		goto exit_out;
+	}
+
+	match = of_match_device(ti_iodelay_of_match, dev);
+	if (!match) {
+		ret = -EINVAL;
+		dev_err(dev, "No DATA match\n");
+		goto exit_out;
 	}
 
 	iod = devm_kzalloc(dev, sizeof(*iod), GFP_KERNEL);
-	if (!iod)
-		return -ENOMEM;
-
-	iod->dev = dev;
-	iod->reg_data = device_get_match_data(dev);
-	if (!iod->reg_data) {
-		dev_err(dev, "No DATA match\n");
-		return -EINVAL;
+	if (!iod) {
+		ret = -ENOMEM;
+		goto exit_out;
 	}
+	iod->dev = dev;
+	iod->reg_data = match->data;
 
 	/* So far We can assume there is only 1 bank of registers */
-	iod->reg_base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(iod->reg_base))
-		return PTR_ERR(iod->reg_base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(dev, "Missing MEM resource\n");
+		ret = -ENODEV;
+		goto exit_out;
+	}
 
 	iod->phys_base = res->start;
+	iod->reg_base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(iod->reg_base)) {
+		ret = PTR_ERR(iod->reg_base);
+		goto exit_out;
+	}
 
 	iod->regmap = devm_regmap_init_mmio(dev, iod->reg_base,
 					    iod->reg_data->regmap_config);
 	if (IS_ERR(iod->regmap)) {
 		dev_err(dev, "Regmap MMIO init failed.\n");
-		return PTR_ERR(iod->regmap);
+		ret = PTR_ERR(iod->regmap);
+		goto exit_out;
 	}
 
 	ret = ti_iodelay_pinconf_init_dev(iod);
 	if (ret)
-		return ret;
+		goto exit_out;
 
 	ret = ti_iodelay_alloc_pins(dev, iod, res->start);
 	if (ret)
-		return ret;
+		goto exit_out;
 
 	iod->desc.pctlops = &ti_iodelay_pinctrl_ops;
 	/* no pinmux ops - we are pinconf */
@@ -880,14 +886,42 @@ static int ti_iodelay_probe(struct platform_device *pdev)
 	ret = devm_pinctrl_register_and_init(dev, &iod->desc, iod, &iod->pctl);
 	if (ret) {
 		dev_err(dev, "Failed to register pinctrl\n");
-		return ret;
+		goto exit_out;
 	}
 
-	return pinctrl_enable(iod->pctl);
+	platform_set_drvdata(pdev, iod);
+
+	ret = pinctrl_enable(iod->pctl);
+	if (ret)
+		goto exit_out;
+
+	return 0;
+
+exit_out:
+	of_node_put(np);
+	return ret;
+}
+
+/**
+ * ti_iodelay_remove() - standard remove
+ * @pdev: platform device
+ *
+ * Return: 0 if all went fine, else appropriate error value.
+ */
+static int ti_iodelay_remove(struct platform_device *pdev)
+{
+	struct ti_iodelay_device *iod = platform_get_drvdata(pdev);
+
+	ti_iodelay_pinconf_deinit_dev(iod);
+
+	/* Expect other allocations to be freed by devm */
+
+	return 0;
 }
 
 static struct platform_driver ti_iodelay_driver = {
 	.probe = ti_iodelay_probe,
+	.remove = ti_iodelay_remove,
 	.driver = {
 		   .name = DRIVER_NAME,
 		   .of_match_table = ti_iodelay_of_match,

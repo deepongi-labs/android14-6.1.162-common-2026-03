@@ -10,14 +10,12 @@
 
 #include <linux/atomic.h>
 #include <linux/user_namespace.h>
-#include <linux/iommu.h>
+#include <linux/ioasid.h>
 #include <asm/mmu.h>
 
 #ifndef INIT_MM_CONTEXT
 #define INIT_MM_CONTEXT(name)
 #endif
-
-const struct vm_operations_struct vma_dummy_vm_ops;
 
 /*
  * For dynamically allocated mm_structs, there is a dynamically sized cpumask
@@ -40,11 +38,13 @@ struct mm_struct init_mm = {
 	.arg_lock	=  __SPIN_LOCK_UNLOCKED(init_mm.arg_lock),
 	.mmlist		= LIST_HEAD_INIT(init_mm.mmlist),
 #ifdef CONFIG_PER_VMA_LOCK
-	.vma_writer_wait = __RCUWAIT_INITIALIZER(init_mm.vma_writer_wait),
-	.mm_lock_seq	= SEQCNT_ZERO(init_mm.mm_lock_seq),
+	.mm_lock_seq	= 0,
 #endif
 	.user_ns	= &init_user_ns,
 	.cpu_bitmap	= CPU_BITS_NONE,
+#ifdef CONFIG_IOMMU_SVA
+	.pasid		= INVALID_IOASID,
+#endif
 	INIT_MM_CONTEXT(init_mm)
 };
 

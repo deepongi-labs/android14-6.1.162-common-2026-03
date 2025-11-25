@@ -9,7 +9,7 @@
 #include <linux/list.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -250,28 +250,27 @@ static void vpu_core_get_vpu(struct vpu_core *core)
 static int vpu_core_register(struct device *dev, struct vpu_core *core)
 {
 	struct vpu_dev *vpu = dev_get_drvdata(dev);
-	unsigned int buffer_size;
 	int ret = 0;
 
 	dev_dbg(core->dev, "register core %s\n", vpu_core_type_desc(core->type));
 	if (vpu_core_is_exist(vpu, core))
 		return 0;
 
-	core->workqueue = alloc_ordered_workqueue("vpu", WQ_MEM_RECLAIM);
+	core->workqueue = alloc_workqueue("vpu", WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
 	if (!core->workqueue) {
 		dev_err(core->dev, "fail to alloc workqueue\n");
 		return -ENOMEM;
 	}
 	INIT_WORK(&core->msg_work, vpu_msg_run_work);
 	INIT_DELAYED_WORK(&core->msg_delayed_work, vpu_msg_delayed_work);
-	buffer_size = roundup_pow_of_two(VPU_MSG_BUFFER_SIZE);
-	core->msg_buffer = vzalloc(buffer_size);
+	core->msg_buffer_size = roundup_pow_of_two(VPU_MSG_BUFFER_SIZE);
+	core->msg_buffer = vzalloc(core->msg_buffer_size);
 	if (!core->msg_buffer) {
 		dev_err(core->dev, "failed allocate buffer for fifo\n");
 		ret = -ENOMEM;
 		goto error;
 	}
-	ret = kfifo_init(&core->msg_fifo, core->msg_buffer, buffer_size);
+	ret = kfifo_init(&core->msg_fifo, core->msg_buffer, core->msg_buffer_size);
 	if (ret) {
 		dev_err(core->dev, "failed init kfifo\n");
 		goto error;
@@ -712,7 +711,7 @@ err_runtime_disable:
 	return ret;
 }
 
-static void vpu_core_remove(struct platform_device *pdev)
+static int vpu_core_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct vpu_core *core = platform_get_drvdata(pdev);
@@ -731,6 +730,8 @@ static void vpu_core_remove(struct platform_device *pdev)
 	memunmap(core->rpc.virt);
 	mutex_destroy(&core->lock);
 	mutex_destroy(&core->cmd_lock);
+
+	return 0;
 }
 
 static int __maybe_unused vpu_core_runtime_resume(struct device *dev)

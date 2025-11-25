@@ -14,11 +14,11 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/of_device.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
 #include <linux/phy/phy.h>
 #include <linux/regulator/consumer.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 
 #include "pcie-designware.h"
@@ -54,10 +54,42 @@
 struct exynos_pcie {
 	struct dw_pcie			pci;
 	void __iomem			*elbi_base;
-	struct clk_bulk_data		*clks;
+	struct clk			*clk;
+	struct clk			*bus_clk;
 	struct phy			*phy;
 	struct regulator_bulk_data	supplies[2];
 };
+
+static int exynos_pcie_init_clk_resources(struct exynos_pcie *ep)
+{
+	struct device *dev = ep->pci.dev;
+	int ret;
+
+	ret = clk_prepare_enable(ep->clk);
+	if (ret) {
+		dev_err(dev, "cannot enable pcie rc clock");
+		return ret;
+	}
+
+	ret = clk_prepare_enable(ep->bus_clk);
+	if (ret) {
+		dev_err(dev, "cannot enable pcie bus clock");
+		goto err_bus_clk;
+	}
+
+	return 0;
+
+err_bus_clk:
+	clk_disable_unprepare(ep->clk);
+
+	return ret;
+}
+
+static void exynos_pcie_deinit_clk_resources(struct exynos_pcie *ep)
+{
+	clk_disable_unprepare(ep->bus_clk);
+	clk_disable_unprepare(ep->clk);
+}
 
 static void exynos_pcie_writel(void __iomem *base, u32 val, u32 reg)
 {
@@ -209,12 +241,12 @@ static struct pci_ops exynos_pci_ops = {
 	.write = exynos_pcie_wr_own_conf,
 };
 
-static bool exynos_pcie_link_up(struct dw_pcie *pci)
+static int exynos_pcie_link_up(struct dw_pcie *pci)
 {
 	struct exynos_pcie *ep = to_exynos_pcie(pci);
 	u32 val = exynos_pcie_readl(ep->elbi_base, PCIE_ELBI_RDLH_LINKUP);
 
-	return val & PCIE_ELBI_XMLH_LINKUP;
+	return (val & PCIE_ELBI_XMLH_LINKUP);
 }
 
 static int exynos_pcie_host_init(struct dw_pcie_rp *pp)
@@ -236,7 +268,7 @@ static int exynos_pcie_host_init(struct dw_pcie_rp *pp)
 }
 
 static const struct dw_pcie_host_ops exynos_pcie_host_ops = {
-	.init = exynos_pcie_host_init,
+	.host_init = exynos_pcie_host_init,
 };
 
 static int exynos_add_pcie_port(struct exynos_pcie *ep,
@@ -300,14 +332,26 @@ static int exynos_pcie_probe(struct platform_device *pdev)
 	if (IS_ERR(ep->elbi_base))
 		return PTR_ERR(ep->elbi_base);
 
-	ret = devm_clk_bulk_get_all_enabled(dev, &ep->clks);
-	if (ret < 0)
-		return ret;
+	ep->clk = devm_clk_get(dev, "pcie");
+	if (IS_ERR(ep->clk)) {
+		dev_err(dev, "Failed to get pcie rc clock\n");
+		return PTR_ERR(ep->clk);
+	}
+
+	ep->bus_clk = devm_clk_get(dev, "pcie_bus");
+	if (IS_ERR(ep->bus_clk)) {
+		dev_err(dev, "Failed to get pcie bus clock\n");
+		return PTR_ERR(ep->bus_clk);
+	}
 
 	ep->supplies[0].supply = "vdd18";
 	ep->supplies[1].supply = "vdd10";
 	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(ep->supplies),
 				      ep->supplies);
+	if (ret)
+		return ret;
+
+	ret = exynos_pcie_init_clk_resources(ep);
 	if (ret)
 		return ret;
 
@@ -325,12 +369,13 @@ static int exynos_pcie_probe(struct platform_device *pdev)
 
 fail_probe:
 	phy_exit(ep->phy);
+	exynos_pcie_deinit_clk_resources(ep);
 	regulator_bulk_disable(ARRAY_SIZE(ep->supplies), ep->supplies);
 
 	return ret;
 }
 
-static void exynos_pcie_remove(struct platform_device *pdev)
+static int exynos_pcie_remove(struct platform_device *pdev)
 {
 	struct exynos_pcie *ep = platform_get_drvdata(pdev);
 
@@ -338,7 +383,10 @@ static void exynos_pcie_remove(struct platform_device *pdev)
 	exynos_pcie_assert_core_reset(ep);
 	phy_power_off(ep->phy);
 	phy_exit(ep->phy);
+	exynos_pcie_deinit_clk_resources(ep);
 	regulator_bulk_disable(ARRAY_SIZE(ep->supplies), ep->supplies);
+
+	return 0;
 }
 
 static int exynos_pcie_suspend_noirq(struct device *dev)
@@ -391,6 +439,5 @@ static struct platform_driver exynos_pcie_driver = {
 	},
 };
 module_platform_driver(exynos_pcie_driver);
-MODULE_DESCRIPTION("Samsung Exynos PCIe host controller driver");
 MODULE_LICENSE("GPL v2");
 MODULE_DEVICE_TABLE(of, exynos_pcie_of_match);

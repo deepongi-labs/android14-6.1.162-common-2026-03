@@ -76,7 +76,7 @@ TEST(abi_version)
 	const struct landlock_ruleset_attr ruleset_attr = {
 		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
 	};
-	ASSERT_EQ(7, landlock_create_ruleset(NULL, 0,
+	ASSERT_EQ(2, landlock_create_ruleset(NULL, 0,
 					     LANDLOCK_CREATE_RULESET_VERSION));
 
 	ASSERT_EQ(-1, landlock_create_ruleset(&ruleset_attr, 0,
@@ -277,88 +277,6 @@ TEST(restrict_self_checks_ordering)
 	ASSERT_EQ(0, close(ruleset_fd));
 }
 
-TEST(restrict_self_fd)
-{
-	int fd;
-
-	fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-	ASSERT_LE(0, fd);
-
-	EXPECT_EQ(-1, landlock_restrict_self(fd, 0));
-	EXPECT_EQ(EBADFD, errno);
-}
-
-TEST(restrict_self_fd_flags)
-{
-	int fd;
-
-	fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-	ASSERT_LE(0, fd);
-
-	/*
-	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF accepts -1 but not any file
-	 * descriptor.
-	 */
-	EXPECT_EQ(-1, landlock_restrict_self(
-			      fd, LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF));
-	EXPECT_EQ(EBADFD, errno);
-}
-
-TEST(restrict_self_flags)
-{
-	const __u32 last_flag = LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF;
-
-	/* Tests invalid flag combinations. */
-
-	EXPECT_EQ(-1, landlock_restrict_self(-1, last_flag << 1));
-	EXPECT_EQ(EINVAL, errno);
-
-	EXPECT_EQ(-1, landlock_restrict_self(-1, -1));
-	EXPECT_EQ(EINVAL, errno);
-
-	/* Tests valid flag combinations. */
-
-	EXPECT_EQ(-1, landlock_restrict_self(-1, 0));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(-1, landlock_restrict_self(
-			      -1, LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(-1,
-		  landlock_restrict_self(
-			  -1,
-			  LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
-				  LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(-1,
-		  landlock_restrict_self(
-			  -1,
-			  LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-				  LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(-1, landlock_restrict_self(
-			      -1, LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(-1,
-		  landlock_restrict_self(
-			  -1, LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
-				      LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON));
-	EXPECT_EQ(EBADF, errno);
-
-	/* Tests with an invalid ruleset_fd. */
-
-	EXPECT_EQ(-1, landlock_restrict_self(
-			      -2, LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF));
-	EXPECT_EQ(EBADF, errno);
-
-	EXPECT_EQ(0, landlock_restrict_self(
-			     -1, LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF));
-}
-
 TEST(ruleset_fd_io)
 {
 	struct landlock_ruleset_attr ruleset_attr = {
@@ -390,6 +308,23 @@ TEST(ruleset_fd_transfer)
 		.allowed_access = LANDLOCK_ACCESS_FS_READ_DIR,
 	};
 	int ruleset_fd_tx, dir_fd;
+	union {
+		/* Aligned ancillary data buffer. */
+		char buf[CMSG_SPACE(sizeof(ruleset_fd_tx))];
+		struct cmsghdr _align;
+	} cmsg_tx = {};
+	char data_tx = '.';
+	struct iovec io = {
+		.iov_base = &data_tx,
+		.iov_len = sizeof(data_tx),
+	};
+	struct msghdr msg = {
+		.msg_iov = &io,
+		.msg_iovlen = 1,
+		.msg_control = &cmsg_tx.buf,
+		.msg_controllen = sizeof(cmsg_tx.buf),
+	};
+	struct cmsghdr *cmsg;
 	int socket_fds[2];
 	pid_t child;
 	int status;
@@ -408,20 +343,33 @@ TEST(ruleset_fd_transfer)
 				    &path_beneath_attr, 0));
 	ASSERT_EQ(0, close(path_beneath_attr.parent_fd));
 
+	cmsg = CMSG_FIRSTHDR(&msg);
+	ASSERT_NE(NULL, cmsg);
+	cmsg->cmsg_len = CMSG_LEN(sizeof(ruleset_fd_tx));
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_RIGHTS;
+	memcpy(CMSG_DATA(cmsg), &ruleset_fd_tx, sizeof(ruleset_fd_tx));
+
 	/* Sends the ruleset FD over a socketpair and then close it. */
 	ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0,
 				socket_fds));
-	ASSERT_EQ(0, send_fd(socket_fds[0], ruleset_fd_tx));
+	ASSERT_EQ(sizeof(data_tx), sendmsg(socket_fds[0], &msg, 0));
 	ASSERT_EQ(0, close(socket_fds[0]));
 	ASSERT_EQ(0, close(ruleset_fd_tx));
 
 	child = fork();
 	ASSERT_LE(0, child);
 	if (child == 0) {
-		const int ruleset_fd_rx = recv_fd(socket_fds[1]);
+		int ruleset_fd_rx;
 
-		ASSERT_LE(0, ruleset_fd_rx);
+		*(char *)msg.msg_iov->iov_base = '\0';
+		ASSERT_EQ(sizeof(data_tx),
+			  recvmsg(socket_fds[1], &msg, MSG_CMSG_CLOEXEC));
+		ASSERT_EQ('.', *(char *)msg.msg_iov->iov_base);
 		ASSERT_EQ(0, close(socket_fds[1]));
+		cmsg = CMSG_FIRSTHDR(&msg);
+		ASSERT_EQ(cmsg->cmsg_len, CMSG_LEN(sizeof(ruleset_fd_tx)));
+		memcpy(&ruleset_fd_rx, CMSG_DATA(cmsg), sizeof(ruleset_fd_tx));
 
 		/* Enforces the received ruleset on the child. */
 		ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
@@ -434,7 +382,7 @@ TEST(ruleset_fd_transfer)
 		dir_fd = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 		ASSERT_LE(0, dir_fd);
 		ASSERT_EQ(0, close(dir_fd));
-		_exit(_metadata->exit_code);
+		_exit(_metadata->passed ? EXIT_SUCCESS : EXIT_FAILURE);
 		return;
 	}
 
@@ -513,7 +461,7 @@ TEST(cred_transfer)
 		EXPECT_EQ(-1, open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
 		EXPECT_EQ(EACCES, errno);
 
-		_exit(_metadata->exit_code);
+		_exit(_metadata->passed ? EXIT_SUCCESS : EXIT_FAILURE);
 		return;
 	}
 

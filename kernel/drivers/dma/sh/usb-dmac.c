@@ -57,7 +57,7 @@ struct usb_dmac_desc {
 	u32 residue;
 	struct list_head node;
 	dma_cookie_t done_cookie;
-	struct usb_dmac_sg sg[] __counted_by(sg_allocated_len);
+	struct usb_dmac_sg sg[];
 };
 
 #define to_usb_dmac_desc(vd)	container_of(vd, struct usb_dmac_desc, vd)
@@ -301,7 +301,7 @@ static struct usb_dmac_desc *usb_dmac_desc_get(struct usb_dmac_chan *chan,
 	struct usb_dmac_desc *desc = NULL;
 	unsigned long flags;
 
-	/* Get a freed descriptor */
+	/* Get a freed descritpor */
 	spin_lock_irqsave(&chan->vc.lock, flags);
 	list_for_each_entry(desc, &chan->desc_freed, node) {
 		if (sg_len <= desc->sg_allocated_len) {
@@ -706,10 +706,10 @@ static const struct dev_pm_ops usb_dmac_pm = {
 
 static int usb_dmac_chan_probe(struct usb_dmac *dmac,
 			       struct usb_dmac_chan *uchan,
-			       u8 index)
+			       unsigned int index)
 {
 	struct platform_device *pdev = to_platform_device(dmac->dev);
-	char pdev_irqname[6];
+	char pdev_irqname[5];
 	char *irqname;
 	int ret;
 
@@ -717,7 +717,7 @@ static int usb_dmac_chan_probe(struct usb_dmac *dmac,
 	uchan->iomem = dmac->iomem + USB_DMAC_CHAN_OFFSET(index);
 
 	/* Request the channel interrupt. */
-	scnprintf(pdev_irqname, sizeof(pdev_irqname), "ch%u", index);
+	sprintf(pdev_irqname, "ch%u", index);
 	uchan->irq = platform_get_irq_byname(pdev, pdev_irqname);
 	if (uchan->irq < 0)
 		return -ENODEV;
@@ -768,8 +768,9 @@ static int usb_dmac_probe(struct platform_device *pdev)
 	const enum dma_slave_buswidth widths = USB_DMAC_SLAVE_BUSWIDTH;
 	struct dma_device *engine;
 	struct usb_dmac *dmac;
+	struct resource *mem;
+	unsigned int i;
 	int ret;
-	u8 i;
 
 	dmac = devm_kzalloc(&pdev->dev, sizeof(*dmac), GFP_KERNEL);
 	if (!dmac)
@@ -788,7 +789,8 @@ static int usb_dmac_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* Request resources. */
-	dmac->iomem = devm_platform_ioremap_resource(pdev, 0);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dmac->iomem = devm_ioremap_resource(&pdev->dev, mem);
 	if (IS_ERR(dmac->iomem))
 		return PTR_ERR(dmac->iomem);
 
@@ -866,10 +868,10 @@ static void usb_dmac_chan_remove(struct usb_dmac *dmac,
 	devm_free_irq(dmac->dev, uchan->irq, uchan);
 }
 
-static void usb_dmac_remove(struct platform_device *pdev)
+static int usb_dmac_remove(struct platform_device *pdev)
 {
 	struct usb_dmac *dmac = platform_get_drvdata(pdev);
-	u8 i;
+	int i;
 
 	for (i = 0; i < dmac->n_channels; ++i)
 		usb_dmac_chan_remove(dmac, &dmac->channels[i]);
@@ -877,6 +879,8 @@ static void usb_dmac_remove(struct platform_device *pdev)
 	dma_async_device_unregister(&dmac->engine);
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static void usb_dmac_shutdown(struct platform_device *pdev)

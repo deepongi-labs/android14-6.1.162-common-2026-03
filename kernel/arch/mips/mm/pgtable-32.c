@@ -13,9 +13,9 @@
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 
-void pgd_init(void *addr)
+void pgd_init(unsigned long page)
 {
-	unsigned long *p = (unsigned long *)addr;
+	unsigned long *p = (unsigned long *) page;
 	int i;
 
 	for (i = 0; i < USER_PTRS_PER_PGD; i+=8) {
@@ -31,6 +31,16 @@ void pgd_init(void *addr)
 }
 
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE)
+pmd_t mk_pmd(struct page *page, pgprot_t prot)
+{
+	pmd_t pmd;
+
+	pmd_val(pmd) = (page_to_pfn(page) << _PFN_SHIFT) | pgprot_val(prot);
+
+	return pmd;
+}
+
+
 void set_pmd_at(struct mm_struct *mm, unsigned long addr,
 		pmd_t *pmdp, pmd_t pmd)
 {
@@ -51,8 +61,9 @@ void __init pagetable_init(void)
 #endif
 
 	/* Initialize the entire pgd.  */
-	pgd_init(swapper_pg_dir);
-	pgd_init(&swapper_pg_dir[USER_PTRS_PER_PGD]);
+	pgd_init((unsigned long)swapper_pg_dir);
+	pgd_init((unsigned long)swapper_pg_dir
+		 + sizeof(pgd_t) * USER_PTRS_PER_PGD);
 
 	pgd_base = swapper_pg_dir;
 

@@ -422,7 +422,7 @@ static int max44009_write_event_config(struct iio_dev *indio_dev,
 				       const struct iio_chan_spec *chan,
 				       enum iio_event_type type,
 				       enum iio_event_direction dir,
-				       bool state)
+				       int state)
 {
 	struct max44009_data *data = iio_priv(indio_dev);
 	int ret;
@@ -487,7 +487,8 @@ static irqreturn_t max44009_threaded_irq_handler(int irq, void *p)
 	return IRQ_NONE;
 }
 
-static int max44009_probe(struct i2c_client *client)
+static int max44009_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct max44009_data *data;
 	struct iio_dev *indio_dev;
@@ -534,7 +535,7 @@ static const struct of_device_id max44009_of_match[] = {
 MODULE_DEVICE_TABLE(of, max44009_of_match);
 
 static const struct i2c_device_id max44009_id[] = {
-	{ "max44009" },
+	{ "max44009", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, max44009_id);

@@ -67,8 +67,7 @@
  * __boot_cpu_mode records what mode CPUs were booted in.
  * A correctly-implemented bootloader must start all CPUs in the same mode:
  * In this case, both 32bit halves of __boot_cpu_mode will contain the
- * same value (either BOOT_CPU_MODE_EL1 if booted in EL1, BOOT_CPU_MODE_EL2 if
- * booted in EL2).
+ * same value (either 0 if booted in EL1, BOOT_CPU_MODE_EL2 if booted in EL2).
  *
  * Should the bootloader fail to do this, the two values will be different.
  * This allows the kernel to flag an error when the secondaries have come up.
@@ -79,7 +78,6 @@ extern u32 __boot_cpu_mode[2];
 
 void __hyp_set_vectors(phys_addr_t phys_vector_base);
 void __hyp_reset_vectors(void);
-bool is_kvm_arm_initialised(void);
 
 DECLARE_STATIC_KEY_FALSE(kvm_protected_mode_initialized);
 
@@ -116,10 +114,8 @@ static inline bool is_hyp_mode_mismatched(void)
 	return __boot_cpu_mode[0] != __boot_cpu_mode[1];
 }
 
-static __always_inline bool is_kernel_in_hyp_mode(void)
+static inline bool is_kernel_in_hyp_mode(void)
 {
-	BUILD_BUG_ON(__is_defined(__KVM_NVHE_HYPERVISOR__) ||
-		     __is_defined(__KVM_VHE_HYPERVISOR__));
 	return read_sysreg(CurrentEL) == CurrentEL_EL2;
 }
 
@@ -146,14 +142,6 @@ static __always_inline bool is_protected_kvm_enabled(void)
 		return false;
 	else
 		return cpus_have_final_cap(ARM64_KVM_PROTECTED_MODE);
-}
-
-static __always_inline bool has_hvhe(void)
-{
-	if (is_vhe_hyp_code())
-		return false;
-
-	return cpus_have_final_cap(ARM64_KVM_HVHE);
 }
 
 static inline bool is_hyp_nvhe(void)

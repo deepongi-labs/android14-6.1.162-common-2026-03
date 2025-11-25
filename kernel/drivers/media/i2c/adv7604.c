@@ -42,7 +42,7 @@ module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-2)");
 
 MODULE_DESCRIPTION("Analog Devices ADV7604/10/11/12 video decoder driver");
-MODULE_AUTHOR("Hans Verkuil <hverkuil@kernel.org>");
+MODULE_AUTHOR("Hans Verkuil <hans.verkuil@cisco.com>");
 MODULE_AUTHOR("Mats Randgaard <mats.randgaard@cisco.com>");
 MODULE_LICENSE("GPL");
 
@@ -192,9 +192,6 @@ struct adv76xx_state {
 	u32 rgb_quantization_range;
 	struct delayed_work delayed_work_enable_hotplug;
 	bool restart_stdi_once;
-
-	struct dentry *debugfs_dir;
-	struct v4l2_debugfs_if *infoframes;
 
 	/* CEC */
 	struct cec_adapter *cec_adap;
@@ -1561,8 +1558,8 @@ static unsigned int adv76xx_read_hdmi_pixelclock(struct v4l2_subdev *sd)
 	return freq;
 }
 
-static int adv76xx_query_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
-				    struct v4l2_dv_timings *timings)
+static int adv76xx_query_dv_timings(struct v4l2_subdev *sd,
+			struct v4l2_dv_timings *timings)
 {
 	struct adv76xx_state *state = to_state(sd);
 	const struct adv76xx_chip_info *info = state->info;
@@ -1691,8 +1688,8 @@ found:
 	return 0;
 }
 
-static int adv76xx_s_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
-				struct v4l2_dv_timings *timings)
+static int adv76xx_s_dv_timings(struct v4l2_subdev *sd,
+		struct v4l2_dv_timings *timings)
 {
 	struct adv76xx_state *state = to_state(sd);
 	struct v4l2_bt_timings *bt;
@@ -1734,8 +1731,8 @@ static int adv76xx_s_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
 	return 0;
 }
 
-static int adv76xx_g_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
-				struct v4l2_dv_timings *timings)
+static int adv76xx_g_dv_timings(struct v4l2_subdev *sd,
+		struct v4l2_dv_timings *timings)
 {
 	struct adv76xx_state *state = to_state(sd);
 
@@ -1809,9 +1806,6 @@ static void select_input(struct v4l2_subdev *sd)
 		v4l2_dbg(2, debug, sd, "%s: Unknown port %d selected\n",
 				__func__, state->selected_input);
 	}
-
-	/* Enable video adjustment (contrast, saturation, brightness and hue) */
-	cp_write_clr_set(sd, 0x3e, 0x80, 0x80);
 }
 
 static int adv76xx_s_routing(struct v4l2_subdev *sd,
@@ -1933,7 +1927,7 @@ static int adv76xx_get_format(struct v4l2_subdev *sd,
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
 		struct v4l2_mbus_framefmt *fmt;
 
-		fmt = v4l2_subdev_state_get_format(sd_state, format->pad);
+		fmt = v4l2_subdev_get_try_format(sd, sd_state, format->pad);
 		format->format.code = fmt->code;
 	} else {
 		format->format.code = state->format->code;
@@ -1982,7 +1976,7 @@ static int adv76xx_set_format(struct v4l2_subdev *sd,
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
 		struct v4l2_mbus_framefmt *fmt;
 
-		fmt = v4l2_subdev_state_get_format(sd_state, format->pad);
+		fmt = v4l2_subdev_get_try_format(sd, sd_state, format->pad);
 		fmt->code = format->format.code;
 	} else {
 		state->format = info;
@@ -2448,8 +2442,8 @@ static int adv76xx_set_edid(struct v4l2_subdev *sd, struct v4l2_edid *edid)
 	}
 	cec_s_phys_addr(state->cec_adap, parent_pa, false);
 
-	/* enable hotplug after 143 ms */
-	schedule_delayed_work(&state->delayed_work_enable_hotplug, HZ / 7);
+	/* enable hotplug after 100 ms */
+	schedule_delayed_work(&state->delayed_work_enable_hotplug, HZ / 10);
 	return 0;
 }
 
@@ -2462,9 +2456,10 @@ static const struct adv76xx_cfg_read_infoframe adv76xx_cri[] = {
 	{ "Vendor", 0x10, 0xec, 0x54 }
 };
 
-static int adv76xx_read_infoframe_buf(struct v4l2_subdev *sd, int index,
-				      u8 buf[V4L2_DEBUGFS_IF_MAX_LEN])
+static int adv76xx_read_infoframe(struct v4l2_subdev *sd, int index,
+				  union hdmi_infoframe *frame)
 {
+	uint8_t buffer[32];
 	u8 len;
 	int i;
 
@@ -2475,20 +2470,27 @@ static int adv76xx_read_infoframe_buf(struct v4l2_subdev *sd, int index,
 	}
 
 	for (i = 0; i < 3; i++)
-		buf[i] = infoframe_read(sd, adv76xx_cri[index].head_addr + i);
+		buffer[i] = infoframe_read(sd,
+					   adv76xx_cri[index].head_addr + i);
 
-	len = buf[2] + 1;
+	len = buffer[2] + 1;
 
-	if (len + 3 > V4L2_DEBUGFS_IF_MAX_LEN) {
+	if (len + 3 > sizeof(buffer)) {
 		v4l2_err(sd, "%s: invalid %s infoframe length %d\n", __func__,
 			 adv76xx_cri[index].desc, len);
 		return -ENOENT;
 	}
 
 	for (i = 0; i < len; i++)
-		buf[i + 3] = infoframe_read(sd,
-					    adv76xx_cri[index].payload_addr + i);
-	return len + 3;
+		buffer[i + 3] = infoframe_read(sd,
+				       adv76xx_cri[index].payload_addr + i);
+
+	if (hdmi_infoframe_unpack(frame, buffer, len + 3) < 0) {
+		v4l2_err(sd, "%s: unpack of %s infoframe failed\n", __func__,
+			 adv76xx_cri[index].desc);
+		return -ENOENT;
+	}
+	return 0;
 }
 
 static void adv76xx_log_infoframes(struct v4l2_subdev *sd)
@@ -2501,19 +2503,10 @@ static void adv76xx_log_infoframes(struct v4l2_subdev *sd)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(adv76xx_cri); i++) {
-		struct i2c_client *client = v4l2_get_subdevdata(sd);
-		u8 buffer[V4L2_DEBUGFS_IF_MAX_LEN] = {};
 		union hdmi_infoframe frame;
-		int len;
+		struct i2c_client *client = v4l2_get_subdevdata(sd);
 
-		len = adv76xx_read_infoframe_buf(sd, i, buffer);
-		if (len < 0)
-			continue;
-
-		if (hdmi_infoframe_unpack(&frame, buffer, len) < 0)
-			v4l2_err(sd, "%s: unpack of %s infoframe failed\n",
-				 __func__, adv76xx_cri[i].desc);
-		else
+		if (!adv76xx_read_infoframe(sd, i, &frame))
 			hdmi_infoframe_log(KERN_INFO, &client->dev, &frame);
 	}
 }
@@ -2612,7 +2605,7 @@ static int adv76xx_log_status(struct v4l2_subdev *sd)
 				stdi.lcf, stdi.bl, stdi.lcvs,
 				stdi.interlaced ? "interlaced" : "progressive",
 				stdi.hs_pol, stdi.vs_pol);
-	if (adv76xx_query_dv_timings(sd, 0, &timings))
+	if (adv76xx_query_dv_timings(sd, &timings))
 		v4l2_info(sd, "No video detected\n");
 	else
 		v4l2_print_dv_timings(sd->name, "Detected format: ",
@@ -2699,41 +2692,6 @@ static int adv76xx_subscribe_event(struct v4l2_subdev *sd,
 	}
 }
 
-static ssize_t
-adv76xx_debugfs_if_read(u32 type, void *priv, struct file *filp,
-			char __user *ubuf, size_t count, loff_t *ppos)
-{
-	u8 buf[V4L2_DEBUGFS_IF_MAX_LEN] = {};
-	struct v4l2_subdev *sd = priv;
-	int index;
-	int len;
-
-	if (!is_hdmi(sd))
-		return 0;
-
-	switch (type) {
-	case V4L2_DEBUGFS_IF_AVI:
-		index = 0;
-		break;
-	case V4L2_DEBUGFS_IF_AUDIO:
-		index = 1;
-		break;
-	case V4L2_DEBUGFS_IF_SPD:
-		index = 2;
-		break;
-	case V4L2_DEBUGFS_IF_HDMI:
-		index = 3;
-		break;
-	default:
-		return 0;
-	}
-
-	len = adv76xx_read_infoframe_buf(sd, index, buf);
-	if (len > 0)
-		len = simple_read_from_buffer(ubuf, count, ppos, buf, len);
-	return len < 0 ? 0 : len;
-}
-
 static int adv76xx_registered(struct v4l2_subdev *sd)
 {
 	struct adv76xx_state *state = to_state(sd);
@@ -2741,16 +2699,9 @@ static int adv76xx_registered(struct v4l2_subdev *sd)
 	int err;
 
 	err = cec_register_adapter(state->cec_adap, &client->dev);
-	if (err) {
+	if (err)
 		cec_delete_adapter(state->cec_adap);
-		return err;
-	}
-	state->debugfs_dir = debugfs_create_dir(sd->name, v4l2_debugfs_root());
-	state->infoframes = v4l2_debugfs_if_alloc(state->debugfs_dir,
-		V4L2_DEBUGFS_IF_AVI | V4L2_DEBUGFS_IF_AUDIO |
-		V4L2_DEBUGFS_IF_SPD | V4L2_DEBUGFS_IF_HDMI, sd,
-		adv76xx_debugfs_if_read);
-	return 0;
+	return err;
 }
 
 static void adv76xx_unregistered(struct v4l2_subdev *sd)
@@ -2758,10 +2709,6 @@ static void adv76xx_unregistered(struct v4l2_subdev *sd)
 	struct adv76xx_state *state = to_state(sd);
 
 	cec_unregister_adapter(state->cec_adap);
-	v4l2_debugfs_if_free(state->infoframes);
-	state->infoframes = NULL;
-	debugfs_remove_recursive(state->debugfs_dir);
-	state->debugfs_dir = NULL;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -2785,6 +2732,9 @@ static const struct v4l2_subdev_core_ops adv76xx_core_ops = {
 static const struct v4l2_subdev_video_ops adv76xx_video_ops = {
 	.s_routing = adv76xx_s_routing,
 	.g_input_status = adv76xx_g_input_status,
+	.s_dv_timings = adv76xx_s_dv_timings,
+	.g_dv_timings = adv76xx_g_dv_timings,
+	.query_dv_timings = adv76xx_query_dv_timings,
 };
 
 static const struct v4l2_subdev_pad_ops adv76xx_pad_ops = {
@@ -2794,9 +2744,6 @@ static const struct v4l2_subdev_pad_ops adv76xx_pad_ops = {
 	.set_fmt = adv76xx_set_format,
 	.get_edid = adv76xx_get_edid,
 	.set_edid = adv76xx_set_edid,
-	.s_dv_timings = adv76xx_s_dv_timings,
-	.g_dv_timings = adv76xx_g_dv_timings,
-	.query_dv_timings = adv76xx_query_dv_timings,
 	.dv_timings_cap = adv76xx_dv_timings_cap,
 	.enum_dv_timings = adv76xx_enum_dv_timings,
 };
@@ -3263,8 +3210,8 @@ static int adv76xx_parse_dt(struct adv76xx_state *state)
 
 	np = state->i2c_clients[ADV76XX_PAGE_IO]->dev.of_node;
 
-	/* FIXME: Parse the endpoint. */
-	endpoint = of_graph_get_endpoint_by_regs(np, -1, -1);
+	/* Parse the endpoint. */
+	endpoint = of_graph_get_next_endpoint(np, NULL);
 	if (!endpoint)
 		return -EINVAL;
 
@@ -3463,9 +3410,9 @@ static void adv76xx_reset(struct adv76xx_state *state)
 	}
 }
 
-static int adv76xx_probe(struct i2c_client *client)
+static int adv76xx_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	static const struct v4l2_dv_timings cea640x480 =
 		V4L2_DV_BT_CEA_640X480P59_94;
 	struct adv76xx_state *state;
@@ -3607,7 +3554,7 @@ static int adv76xx_probe(struct i2c_client *client)
 	v4l2_ctrl_new_std(hdl, &adv76xx_ctrl_ops,
 			V4L2_CID_SATURATION, 0, 255, 1, 128);
 	v4l2_ctrl_new_std(hdl, &adv76xx_ctrl_ops,
-			V4L2_CID_HUE, 0, 255, 1, 0);
+			V4L2_CID_HUE, 0, 128, 1, 0);
 	ctrl = v4l2_ctrl_new_std_menu(hdl, &adv76xx_ctrl_ops,
 			V4L2_CID_DV_RX_IT_CONTENT_TYPE, V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
 			0, V4L2_DV_IT_CONTENT_TYPE_NO_ITC);

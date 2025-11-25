@@ -34,7 +34,6 @@
 
 #define SC_IRQ_WDOG			1
 #define SC_IRQ_GROUP_WDOG		1
-#define SC_TIMER_ERR_BUSY		10
 
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0000);
@@ -56,34 +55,13 @@ static int imx_sc_wdt_ping(struct watchdog_device *wdog)
 	return 0;
 }
 
-static bool imx_sc_wdt_is_running(void)
-{
-	struct arm_smccc_res res;
-
-	arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_START_WDOG,
-		      0, 0, 0, 0, 0, 0, &res);
-
-	/* Already enabled (SC_TIMER_ERR_BUSY)? */
-	if (res.a0 == SC_TIMER_ERR_BUSY)
-		return true;
-
-	/* Undo only if that was us who has (successfully) enabled the WDT */
-	if (!res.a0)
-		arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_STOP_WDOG,
-			      0, 0, 0, 0, 0, 0, &res);
-
-	return false;
-}
-
 static int imx_sc_wdt_start(struct watchdog_device *wdog)
 {
 	struct arm_smccc_res res;
 
 	arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_START_WDOG,
 		      0, 0, 0, 0, 0, 0, &res);
-
-	/* Ignore if already enabled(SC_TIMER_ERR_BUSY) */
-	if (res.a0 && res.a0 != SC_TIMER_ERR_BUSY)
+	if (res.a0)
 		return -EACCES;
 
 	arm_smccc_smc(IMX_SIP_TIMER, IMX_SIP_TIMER_SET_WDOG_ACT,
@@ -201,9 +179,6 @@ static int imx_sc_wdt_probe(struct platform_device *pdev)
 	ret = imx_sc_wdt_set_timeout(wdog, wdog->timeout);
 	if (ret)
 		return ret;
-
-	if (imx_sc_wdt_is_running())
-		set_bit(WDOG_HW_RUNNING, &wdog->status);
 
 	watchdog_stop_on_reboot(wdog);
 	watchdog_stop_on_unregister(wdog);

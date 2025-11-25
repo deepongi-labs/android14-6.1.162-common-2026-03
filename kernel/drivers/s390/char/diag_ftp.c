@@ -16,7 +16,7 @@
 #include <linux/wait.h>
 #include <linux/string.h>
 #include <asm/asm-extable.h>
-#include <asm/ctlreg.h>
+#include <asm/ctl_reg.h>
 #include <asm/diag.h>
 
 #include "hmcdrv_ftp.h"
@@ -106,7 +106,7 @@ static int diag_ftp_2c4(struct diag_ftp_ldfpl *fpl,
 	int rc;
 
 	diag_stat_inc(DIAG_STAT_X2C4);
-	asm_inline volatile(
+	asm volatile(
 		"	diag	%[addr],%[cmd],0x2c4\n"
 		"0:	j	2f\n"
 		"1:	la	%[rc],%[err]\n"
@@ -159,8 +159,8 @@ ssize_t diag_ftp_cmd(const struct hmcdrv_ftp_cmdspec *ftp, size_t *fsize)
 		goto out;
 	}
 
-	len = strscpy(ldfpl->fident, ftp->fname);
-	if (len < 0) {
+	len = strlcpy(ldfpl->fident, ftp->fname, sizeof(ldfpl->fident));
+	if (len >= HMCDRV_FTP_FIDENT_MAX) {
 		len = -EINVAL;
 		goto out_free;
 	}

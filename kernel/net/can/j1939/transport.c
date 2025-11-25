@@ -991,7 +991,7 @@ static int j1939_session_tx_eoma(struct j1939_session *session)
 	/* wait for the EOMA packet to come in */
 	j1939_tp_set_rxtimeout(session, 1250);
 
-	netdev_dbg(session->priv->ndev, "%s: 0x%p\n", __func__, session);
+	netdev_dbg(session->priv->ndev, "%p: 0x%p\n", __func__, session);
 
 	return 0;
 }
@@ -1169,7 +1169,7 @@ static enum hrtimer_restart j1939_tp_txtimer(struct hrtimer *hrtimer)
 		if (session->tx_retry < J1939_XTP_TX_RETRY_LIMIT) {
 			session->tx_retry++;
 			j1939_tp_schedule_txtimer(session,
-						  10 + get_random_u32_below(16));
+						  10 + prandom_u32_max(16));
 		} else {
 			netdev_alert(priv->ndev, "%s: 0x%p: tx retry count reached\n",
 				     __func__, session);
@@ -1511,8 +1511,12 @@ static struct j1939_session *j1939_session_new(struct j1939_priv *priv,
 	skcb = j1939_skb_to_cb(skb);
 	memcpy(&session->skcb, skcb, sizeof(session->skcb));
 
-	hrtimer_setup(&session->txtimer, j1939_tp_txtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
-	hrtimer_setup(&session->rxtimer, j1939_tp_rxtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	hrtimer_init(&session->txtimer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL_SOFT);
+	session->txtimer.function = j1939_tp_txtimer;
+	hrtimer_init(&session->rxtimer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL_SOFT);
+	session->rxtimer.function = j1939_tp_rxtimer;
 
 	netdev_dbg(priv->ndev, "%s: 0x%p: sa: %02x, da: %02x\n",
 		   __func__, session, skcb->addr.sa, skcb->addr.da);

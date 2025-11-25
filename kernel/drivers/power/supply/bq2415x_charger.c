@@ -171,7 +171,6 @@ struct bq2415x_device {
 	char *name;
 	int autotimer;	/* 1 - if driver automatically reset timer, 0 - not */
 	int automode;	/* 1 - enabled, 0 - disabled; -1 - not supported */
-	int charge_status;
 	int id;
 };
 
@@ -836,13 +835,11 @@ static int bq2415x_notifier_call(struct notifier_block *nb,
 	if (!bq2415x_update_reported_mode(bq, prop.intval))
 		return NOTIFY_OK;
 
-	power_supply_changed(bq->charger);
-
 	/* if automode is not enabled do not tell about reported_mode */
 	if (bq->automode < 1)
 		return NOTIFY_OK;
 
-	mod_delayed_work(system_percpu_wq, &bq->work, 0);
+	schedule_delayed_work(&bq->work, 0);
 
 	return NOTIFY_OK;
 }
@@ -892,17 +889,10 @@ static void bq2415x_timer_work(struct work_struct *work)
 	int ret;
 	int error;
 	int boost;
-	int charge;
 
 	if (bq->automode > 0 && (bq->reported_mode != bq->mode)) {
 		sysfs_notify(&bq->charger->dev.kobj, NULL, "reported_mode");
 		bq2415x_set_mode(bq, bq->reported_mode);
-	}
-
-	charge = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
-	if (bq->charge_status != charge) {
-		power_supply_changed(bq->charger);
-		bq->charge_status = charge;
 	}
 
 	if (!bq->autotimer)
@@ -1001,7 +991,6 @@ static enum power_supply_property bq2415x_power_supply_props[] = {
 	/* TODO: maybe add more power supply properties */
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_MODEL_NAME,
-	POWER_SUPPLY_PROP_ONLINE,
 };
 
 static int bq2415x_power_supply_get_property(struct power_supply *psy,
@@ -1028,15 +1017,6 @@ static int bq2415x_power_supply_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_MODEL_NAME:
 		val->strval = bq->model;
 		break;
-	case POWER_SUPPLY_PROP_ONLINE:
-		/* VBUS is present for all charging and fault states,
-		 * except the 'Ready' state.
-		 */
-		ret = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
-		if (ret < 0)
-			return ret;
-		val->intval = ret > 0;
-		break;
 	default:
 		return -EINVAL;
 	}
@@ -1060,7 +1040,7 @@ static ssize_t bq2415x_sysfs_show_status(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	enum bq2415x_command command;
 	int ret;
@@ -1079,7 +1059,7 @@ static ssize_t bq2415x_sysfs_show_status(struct device *dev,
 	ret = bq2415x_exec_command(bq, command);
 	if (ret < 0)
 		return ret;
-	return sysfs_emit(buf, "%d\n", ret);
+	return sprintf(buf, "%d\n", ret);
 }
 
 /*
@@ -1093,7 +1073,7 @@ static ssize_t bq2415x_sysfs_set_timer(struct device *dev,
 				       const char *buf,
 				       size_t count)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	int ret = 0;
 
@@ -1114,15 +1094,15 @@ static ssize_t bq2415x_sysfs_show_timer(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 
 	if (bq->timer_error)
-		return sysfs_emit(buf, "%s\n", bq->timer_error);
+		return sprintf(buf, "%s\n", bq->timer_error);
 
 	if (bq->autotimer)
-		return sysfs_emit(buf, "auto\n");
-	return sysfs_emit(buf, "off\n");
+		return sprintf(buf, "auto\n");
+	return sprintf(buf, "off\n");
 }
 
 /*
@@ -1138,7 +1118,7 @@ static ssize_t bq2415x_sysfs_set_mode(struct device *dev,
 				      const char *buf,
 				      size_t count)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	enum bq2415x_mode mode;
 	int ret = 0;
@@ -1190,35 +1170,35 @@ static ssize_t bq2415x_sysfs_show_mode(struct device *dev,
 				       struct device_attribute *attr,
 				       char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	ssize_t ret = 0;
 
 	if (bq->automode > 0)
-		ret += sysfs_emit_at(buf, ret, "auto (");
+		ret += sprintf(buf+ret, "auto (");
 
 	switch (bq->mode) {
 	case BQ2415X_MODE_OFF:
-		ret += sysfs_emit_at(buf, ret, "off");
+		ret += sprintf(buf+ret, "off");
 		break;
 	case BQ2415X_MODE_NONE:
-		ret += sysfs_emit_at(buf, ret, "none");
+		ret += sprintf(buf+ret, "none");
 		break;
 	case BQ2415X_MODE_HOST_CHARGER:
-		ret += sysfs_emit_at(buf, ret, "host");
+		ret += sprintf(buf+ret, "host");
 		break;
 	case BQ2415X_MODE_DEDICATED_CHARGER:
-		ret += sysfs_emit_at(buf, ret, "dedicated");
+		ret += sprintf(buf+ret, "dedicated");
 		break;
 	case BQ2415X_MODE_BOOST:
-		ret += sysfs_emit_at(buf, ret, "boost");
+		ret += sprintf(buf+ret, "boost");
 		break;
 	}
 
 	if (bq->automode > 0)
-		ret += sysfs_emit_at(buf, ret, ")");
+		ret += sprintf(buf+ret, ")");
 
-	ret += sysfs_emit_at(buf, ret, "\n");
+	ret += sprintf(buf+ret, "\n");
 	return ret;
 }
 
@@ -1227,7 +1207,7 @@ static ssize_t bq2415x_sysfs_show_reported_mode(struct device *dev,
 						struct device_attribute *attr,
 						char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 
 	if (bq->automode < 0)
@@ -1235,15 +1215,15 @@ static ssize_t bq2415x_sysfs_show_reported_mode(struct device *dev,
 
 	switch (bq->reported_mode) {
 	case BQ2415X_MODE_OFF:
-		return sysfs_emit(buf, "off\n");
+		return sprintf(buf, "off\n");
 	case BQ2415X_MODE_NONE:
-		return sysfs_emit(buf, "none\n");
+		return sprintf(buf, "none\n");
 	case BQ2415X_MODE_HOST_CHARGER:
-		return sysfs_emit(buf, "host\n");
+		return sprintf(buf, "host\n");
 	case BQ2415X_MODE_DEDICATED_CHARGER:
-		return sysfs_emit(buf, "dedicated\n");
+		return sprintf(buf, "dedicated\n");
 	case BQ2415X_MODE_BOOST:
-		return sysfs_emit(buf, "boost\n");
+		return sprintf(buf, "boost\n");
 	}
 
 	return -EINVAL;
@@ -1255,7 +1235,7 @@ static ssize_t bq2415x_sysfs_set_registers(struct device *dev,
 					   const char *buf,
 					   size_t count)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	ssize_t ret = 0;
 	unsigned int reg;
@@ -1281,8 +1261,8 @@ static ssize_t bq2415x_sysfs_print_reg(struct bq2415x_device *bq,
 	int ret = bq2415x_i2c_read(bq, reg);
 
 	if (ret < 0)
-		return sysfs_emit(buf, "%#.2x=error %d\n", reg, ret);
-	return sysfs_emit(buf, "%#.2x=%#.2x\n", reg, ret);
+		return sprintf(buf, "%#.2x=error %d\n", reg, ret);
+	return sprintf(buf, "%#.2x=%#.2x\n", reg, ret);
 }
 
 /* show all raw values of chip register, format per line: 'register=value' */
@@ -1290,7 +1270,7 @@ static ssize_t bq2415x_sysfs_show_registers(struct device *dev,
 					    struct device_attribute *attr,
 					    char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	ssize_t ret = 0;
 
@@ -1308,7 +1288,7 @@ static ssize_t bq2415x_sysfs_set_limit(struct device *dev,
 				       const char *buf,
 				       size_t count)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	long val;
 	int ret;
@@ -1339,7 +1319,7 @@ static ssize_t bq2415x_sysfs_show_limit(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	int ret;
 
@@ -1358,7 +1338,7 @@ static ssize_t bq2415x_sysfs_show_limit(struct device *dev,
 
 	if (ret < 0)
 		return ret;
-	return sysfs_emit(buf, "%d\n", ret);
+	return sprintf(buf, "%d\n", ret);
 }
 
 /* set *_enable entries */
@@ -1367,7 +1347,7 @@ static ssize_t bq2415x_sysfs_set_enable(struct device *dev,
 					const char *buf,
 					size_t count)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	enum bq2415x_command command;
 	long val;
@@ -1402,7 +1382,7 @@ static ssize_t bq2415x_sysfs_show_enable(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
 {
-	struct power_supply *psy = dev_to_psy(dev);
+	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bq2415x_device *bq = power_supply_get_drvdata(psy);
 	enum bq2415x_command command;
 	int ret;
@@ -1421,7 +1401,7 @@ static ssize_t bq2415x_sysfs_show_enable(struct device *dev,
 	ret = bq2415x_exec_command(bq, command);
 	if (ret < 0)
 		return ret;
-	return sysfs_emit(buf, "%d\n", ret);
+	return sprintf(buf, "%d\n", ret);
 }
 
 static DEVICE_ATTR(current_limit, S_IWUSR | S_IRUGO,
@@ -1497,7 +1477,7 @@ static int bq2415x_power_supply_init(struct bq2415x_device *bq)
 	char revstr[8];
 	struct power_supply_config psy_cfg = {
 		.drv_data = bq,
-		.fwnode = dev_fwnode(bq->dev),
+		.of_node = bq->dev->of_node,
 		.attr_grp = bq2415x_sysfs_groups,
 	};
 
@@ -1516,7 +1496,7 @@ static int bq2415x_power_supply_init(struct bq2415x_device *bq)
 
 	ret = bq2415x_detect_revision(bq);
 	if (ret < 0)
-		strscpy(revstr, "unknown", sizeof(revstr));
+		strcpy(revstr, "unknown");
 	else
 		sprintf(revstr, "1.%d", ret);
 
@@ -1540,9 +1520,9 @@ static int bq2415x_power_supply_init(struct bq2415x_device *bq)
 }
 
 /* main bq2415x probe function */
-static int bq2415x_probe(struct i2c_client *client)
+static int bq2415x_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	int ret;
 	int num;
 	char *name = NULL;
@@ -1674,7 +1654,7 @@ static int bq2415x_probe(struct i2c_client *client)
 	/* Query for initial reported_mode and set it */
 	if (bq->nb.notifier_call) {
 		if (np) {
-			notify_psy = power_supply_get_by_reference(of_fwnode_handle(np),
+			notify_psy = power_supply_get_by_phandle(np,
 						"ti,usb-charger-detection");
 			if (IS_ERR(notify_psy))
 				notify_psy = NULL;

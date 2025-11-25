@@ -136,7 +136,7 @@ static struct virtqueue *rp_find_vq(struct virtio_device *vdev,
 	size = vring_size(num, rvring->align);
 	memset(addr, 0, size);
 
-	dev_dbg(dev, "vring%d: va %p qsz %d notifyid %d\n",
+	dev_dbg(dev, "vring%d: va %pK qsz %d notifyid %d\n",
 		id, addr, num, rvring->notifyid);
 
 	/*
@@ -182,21 +182,21 @@ static void rproc_virtio_del_vqs(struct virtio_device *vdev)
 
 static int rproc_virtio_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
 				 struct virtqueue *vqs[],
-				 struct virtqueue_info vqs_info[],
+				 vq_callback_t *callbacks[],
+				 const char * const names[],
+				 const bool * ctx,
 				 struct irq_affinity *desc)
 {
 	int i, ret, queue_idx = 0;
 
 	for (i = 0; i < nvqs; ++i) {
-		struct virtqueue_info *vqi = &vqs_info[i];
-
-		if (!vqi->name) {
+		if (!names[i]) {
 			vqs[i] = NULL;
 			continue;
 		}
 
-		vqs[i] = rp_find_vq(vdev, queue_idx++, vqi->callback,
-				    vqi->name, vqi->ctx);
+		vqs[i] = rp_find_vq(vdev, queue_idx++, callbacks[i], names[i],
+				    ctx ? ctx[i] : false);
 		if (IS_ERR(vqs[i])) {
 			ret = PTR_ERR(vqs[i]);
 			goto error;
@@ -572,7 +572,7 @@ unwind_vring_allocations:
 	return ret;
 }
 
-static void rproc_virtio_remove(struct platform_device *pdev)
+static int rproc_virtio_remove(struct platform_device *pdev)
 {
 	struct rproc_vdev *rvdev = dev_get_drvdata(&pdev->dev);
 	struct rproc *rproc = rvdev->rproc;
@@ -588,6 +588,8 @@ static void rproc_virtio_remove(struct platform_device *pdev)
 	rproc_remove_rvdev(rvdev);
 
 	put_device(&rproc->dev);
+
+	return 0;
 }
 
 /* Platform driver */

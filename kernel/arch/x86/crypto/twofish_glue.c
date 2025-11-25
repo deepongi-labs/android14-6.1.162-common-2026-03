@@ -38,9 +38,8 @@
  * Third Edition.
  */
 
-#include <crypto/algapi.h>
 #include <crypto/twofish.h>
-#include <linux/export.h>
+#include <linux/crypto.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/types.h>
@@ -69,6 +68,7 @@ static struct crypto_alg alg = {
 	.cra_flags		=	CRYPTO_ALG_TYPE_CIPHER,
 	.cra_blocksize		=	TF_BLOCK_SIZE,
 	.cra_ctxsize		=	sizeof(struct twofish_ctx),
+	.cra_alignmask		=	0,
 	.cra_module		=	THIS_MODULE,
 	.cra_u			=	{
 		.cipher = {

@@ -8,7 +8,6 @@
 
 #include <linux/device.h>
 #include <linux/dmi.h>
-#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/i2c-smbus.h>
 #include <linux/interrupt.h>
@@ -163,13 +162,12 @@ static void smbalert_work(struct work_struct *work)
 }
 
 /* Setup SMBALERT# infrastructure */
-static int smbalert_probe(struct i2c_client *ara)
+static int smbalert_probe(struct i2c_client *ara,
+			  const struct i2c_device_id *id)
 {
 	struct i2c_smbus_alert_setup *setup = dev_get_platdata(&ara->dev);
 	struct i2c_smbus_alert *alert;
 	struct i2c_adapter *adapter = ara->adapter;
-	unsigned long irqflags = IRQF_SHARED | IRQF_ONESHOT;
-	struct gpio_desc *gpiod;
 	int res, irq;
 
 	alert = devm_kzalloc(&ara->dev, sizeof(struct i2c_smbus_alert),
@@ -182,25 +180,18 @@ static int smbalert_probe(struct i2c_client *ara)
 	} else {
 		irq = fwnode_irq_get_byname(dev_fwnode(adapter->dev.parent),
 					    "smbus_alert");
-		if (irq <= 0) {
-			gpiod = devm_gpiod_get(adapter->dev.parent, "smbalert", GPIOD_IN);
-			if (IS_ERR(gpiod))
-				return PTR_ERR(gpiod);
-
-			irq = gpiod_to_irq(gpiod);
-			if (irq <= 0)
-				return irq;
-
-			irqflags |= IRQF_TRIGGER_FALLING;
-		}
+		if (irq <= 0)
+			return irq;
 	}
 
 	INIT_WORK(&alert->alert, smbalert_work);
 	alert->ara = ara;
 
 	if (irq > 0) {
-		res = devm_request_threaded_irq(&ara->dev, irq, NULL, smbus_alert,
-						irqflags, "smbus_alert", alert);
+		res = devm_request_threaded_irq(&ara->dev, irq,
+						NULL, smbus_alert,
+						IRQF_SHARED | IRQF_ONESHOT,
+						"smbus_alert", alert);
 		if (res)
 			return res;
 	}
@@ -220,7 +211,7 @@ static void smbalert_remove(struct i2c_client *ara)
 }
 
 static const struct i2c_device_id smbalert_ids[] = {
-	{ "smbus_alert" },
+	{ "smbus_alert", 0 },
 	{ /* LIST END */ }
 };
 MODULE_DEVICE_TABLE(i2c, smbalert_ids);
@@ -368,17 +359,16 @@ EXPORT_SYMBOL_GPL(i2c_free_slave_host_notify_device);
  * target systems are the same.
  * Restrictions to automatic SPD instantiation:
  *  - Only works if all filled slots have the same memory type
- *  - Only works for (LP)DDR memory types up to DDR5
- *  - Only works on systems with 1 to 8 memory slots
+ *  - Only works for DDR2, DDR3 and DDR4 for now
+ *  - Only works on systems with 1 to 4 memory slots
  */
 #if IS_ENABLED(CONFIG_DMI)
-static void i2c_register_spd(struct i2c_adapter *adap, bool write_disabled)
+void i2c_register_spd(struct i2c_adapter *adap)
 {
 	int n, slot_count = 0, dimm_count = 0;
 	u16 handle;
 	u8 common_mem_type = 0x0, mem_type;
 	u64 mem_size;
-	bool instantiate = true;
 	const char *name;
 
 	while ((handle = dmi_memdev_handle(slot_count)) != 0xffff) {
@@ -412,22 +402,18 @@ static void i2c_register_spd(struct i2c_adapter *adap, bool write_disabled)
 	if (!dimm_count)
 		return;
 
-	/*
-	 * The max number of SPD EEPROMs that can be addressed per bus is 8.
-	 * If more slots are present either muxed or multiple busses are
-	 * necessary or the additional slots are ignored.
-	 */
-	slot_count = min(slot_count, 8);
+	dev_info(&adap->dev, "%d/%d memory slots populated (from DMI)\n",
+		 dimm_count, slot_count);
 
-	/*
-	 * Memory types could be found at section 7.18.2 (Memory Device — Type), table 78
-	 * https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.6.0.pdf
-	 */
+	if (slot_count > 4) {
+		dev_warn(&adap->dev,
+			 "Systems with more than 4 memory slots not supported yet, not instantiating SPD\n");
+		return;
+	}
+
 	switch (common_mem_type) {
-	case 0x12:	/* DDR */
 	case 0x13:	/* DDR2 */
 	case 0x18:	/* DDR3 */
-	case 0x1B:	/* LPDDR */
 	case 0x1C:	/* LPDDR2 */
 	case 0x1D:	/* LPDDR3 */
 		name = "spd";
@@ -435,11 +421,6 @@ static void i2c_register_spd(struct i2c_adapter *adap, bool write_disabled)
 	case 0x1A:	/* DDR4 */
 	case 0x1E:	/* LPDDR4 */
 		name = "ee1004";
-		break;
-	case 0x22:	/* DDR5 */
-	case 0x23:	/* LPDDR5 */
-		name = "spd5118";
-		instantiate = !write_disabled;
 		break;
 	default:
 		dev_info(&adap->dev,
@@ -463,9 +444,6 @@ static void i2c_register_spd(struct i2c_adapter *adap, bool write_disabled)
 		addr_list[0] = 0x50 + n;
 		addr_list[1] = I2C_CLIENT_END;
 
-		if (!instantiate)
-			continue;
-
 		if (!IS_ERR(i2c_new_scanned_device(adap, &info, addr_list, NULL))) {
 			dev_info(&adap->dev,
 				 "Successfully instantiated SPD at 0x%hx\n",
@@ -474,19 +452,7 @@ static void i2c_register_spd(struct i2c_adapter *adap, bool write_disabled)
 		}
 	}
 }
-
-void i2c_register_spd_write_disable(struct i2c_adapter *adap)
-{
-	i2c_register_spd(adap, true);
-}
-EXPORT_SYMBOL_GPL(i2c_register_spd_write_disable);
-
-void i2c_register_spd_write_enable(struct i2c_adapter *adap)
-{
-	i2c_register_spd(adap, false);
-}
-EXPORT_SYMBOL_GPL(i2c_register_spd_write_enable);
-
+EXPORT_SYMBOL_GPL(i2c_register_spd);
 #endif
 
 MODULE_AUTHOR("Jean Delvare <jdelvare@suse.de>");

@@ -142,13 +142,16 @@ static int vfio_platform_regions_init(struct vfio_platform_device *vdev)
 		cnt++;
 
 	vdev->regions = kcalloc(cnt, sizeof(struct vfio_platform_region),
-				GFP_KERNEL_ACCOUNT);
+				GFP_KERNEL);
 	if (!vdev->regions)
 		return -ENOMEM;
 
 	for (i = 0; i < cnt;  i++) {
 		struct resource *res =
 			vdev->get_resource(vdev, i);
+
+		if (!res)
+			goto err;
 
 		vdev->regions[i].addr = res->start;
 		vdev->regions[i].size = resource_size(res);
@@ -393,6 +396,11 @@ static ssize_t vfio_platform_read_mmio(struct vfio_platform_region *reg,
 
 	count = min_t(size_t, count, reg->size - off);
 
+	if (off >= reg->size)
+		return -EINVAL;
+
+	count = min_t(size_t, count, reg->size - off);
+
 	if (!reg->ioaddr) {
 		reg->ioaddr =
 			ioremap(reg->addr, reg->size);
@@ -471,6 +479,11 @@ static ssize_t vfio_platform_write_mmio(struct vfio_platform_region *reg,
 					loff_t off)
 {
 	unsigned int done = 0;
+
+	if (off >= reg->size)
+		return -EINVAL;
+
+	count = min_t(size_t, count, reg->size - off);
 
 	if (off >= reg->size)
 		return -EINVAL;
@@ -657,13 +670,10 @@ int vfio_platform_init_common(struct vfio_platform_device *vdev)
 	mutex_init(&vdev->igate);
 
 	ret = vfio_platform_get_reset(vdev);
-	if (ret && vdev->reset_required) {
+	if (ret && vdev->reset_required)
 		dev_err(dev, "No reset function found for device %s\n",
 			vdev->name);
-		return ret;
-	}
-
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(vfio_platform_init_common);
 

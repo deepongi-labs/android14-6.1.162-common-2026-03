@@ -14,6 +14,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 
 #include "dt_idle_states.h"
 
@@ -76,7 +77,7 @@ static int init_state_node(struct cpuidle_state *idle_state,
 	if (err)
 		desc = state_node->name;
 
-	idle_state->flags = CPUIDLE_FLAG_RCU_IDLE;
+	idle_state->flags = 0;
 	if (of_property_read_bool(state_node, "local-timer-stop"))
 		idle_state->flags |= CPUIDLE_FLAG_TIMER_STOP;
 	/*
@@ -84,8 +85,8 @@ static int init_state_node(struct cpuidle_state *idle_state,
 	 *	replace with kstrdup and pointer assignment when name
 	 *	and desc become string pointers
 	 */
-	strscpy(idle_state->name, state_node->name, CPUIDLE_NAME_LEN);
-	strscpy(idle_state->desc, desc, CPUIDLE_DESC_LEN);
+	strncpy(idle_state->name, state_node->name, CPUIDLE_NAME_LEN - 1);
+	strncpy(idle_state->desc, desc, CPUIDLE_DESC_LEN - 1);
 	return 0;
 }
 
@@ -98,6 +99,7 @@ static bool idle_state_valid(struct device_node *state_node, unsigned int idx,
 {
 	int cpu;
 	struct device_node *cpu_node, *curr_state_node;
+	bool valid = true;
 
 	/*
 	 * Compare idle state phandles for index idx on all CPUs in the
@@ -106,17 +108,20 @@ static bool idle_state_valid(struct device_node *state_node, unsigned int idx,
 	 * retrieved from. If a mismatch is found bail out straight
 	 * away since we certainly hit a firmware misconfiguration.
 	 */
-	cpu = cpumask_first(cpumask) + 1;
-	for_each_cpu_from(cpu, cpumask) {
+	for (cpu = cpumask_next(cpumask_first(cpumask), cpumask);
+	     cpu < nr_cpu_ids; cpu = cpumask_next(cpu, cpumask)) {
 		cpu_node = of_cpu_device_node_get(cpu);
 		curr_state_node = of_get_cpu_state_node(cpu_node, idx);
+		if (state_node != curr_state_node)
+			valid = false;
+
 		of_node_put(curr_state_node);
 		of_node_put(cpu_node);
-		if (state_node != curr_state_node)
-			return false;
+		if (!valid)
+			break;
 	}
 
-	return true;
+	return valid;
 }
 
 /**
@@ -206,9 +211,12 @@ int dt_init_idle_driver(struct cpuidle_driver *drv,
 	of_node_put(cpu_node);
 	if (err)
 		return err;
-
-	/* Set the number of total supported idle states. */
-	drv->state_count = state_idx;
+	/*
+	 * Update the driver state count only if some valid DT idle states
+	 * were detected
+	 */
+	if (i)
+		drv->state_count = state_idx;
 
 	/*
 	 * Return the number of present and valid DT idle states, which can

@@ -659,21 +659,21 @@ static u8 mv_sff_check_status(struct ata_port *ap);
  * PRDs for 64K boundaries in mv_fill_sg().
  */
 #ifdef CONFIG_PCI
-static const struct scsi_host_template mv5_sht = {
+static struct scsi_host_template mv5_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	.sg_tablesize		= MV_MAX_SG_CT / 2,
 	.dma_boundary		= MV_DMA_BOUNDARY,
 };
 #endif
-static const struct scsi_host_template mv6_sht = {
+static struct scsi_host_template mv6_sht = {
 	__ATA_BASE_SHT(DRV_NAME),
 	.can_queue		= MV_MAX_Q_DEPTH - 1,
 	.sg_tablesize		= MV_MAX_SG_CT / 2,
 	.dma_boundary		= MV_DMA_BOUNDARY,
 	.sdev_groups		= ata_ncq_sdev_groups,
 	.change_queue_depth	= ata_scsi_change_queue_depth,
-	.tag_alloc_policy_rr	= true,
-	.sdev_configure		= ata_scsi_sdev_configure
+	.tag_alloc_policy	= BLK_TAG_ALLOC_RR,
+	.slave_configure	= ata_scsi_slave_config
 };
 
 static struct ata_port_operations mv5_ops = {
@@ -687,7 +687,7 @@ static struct ata_port_operations mv5_ops = {
 
 	.freeze			= mv_eh_freeze,
 	.thaw			= mv_eh_thaw,
-	.reset.hardreset	= mv_hardreset,
+	.hardreset		= mv_hardreset,
 
 	.scr_read		= mv5_scr_read,
 	.scr_write		= mv5_scr_write,
@@ -709,10 +709,10 @@ static struct ata_port_operations mv6_ops = {
 
 	.freeze			= mv_eh_freeze,
 	.thaw			= mv_eh_thaw,
-	.reset.hardreset	= mv_hardreset,
-	.reset.softreset	= mv_softreset,
-	.pmp_reset.hardreset	= mv_pmp_hardreset,
-	.pmp_reset.softreset	= mv_softreset,
+	.hardreset		= mv_hardreset,
+	.softreset		= mv_softreset,
+	.pmp_hardreset		= mv_pmp_hardreset,
+	.pmp_softreset		= mv_softreset,
 	.error_handler		= mv_pmp_error_handler,
 
 	.scr_read		= mv_scr_read,
@@ -3602,7 +3602,7 @@ static int mv_hardreset(struct ata_link *link, unsigned int *class,
 
 	/* Workaround for errata FEr SATA#10 (part 2) */
 	do {
-		const unsigned int *timing =
+		const unsigned long *timing =
 				sata_ehc_deb_timing(&link->eh_context);
 
 		rc = sata_link_hardreset(link, timing, deadline + extra,
@@ -4092,13 +4092,10 @@ static int mv_platform_probe(struct platform_device *pdev)
 	hpriv->base -= SATAHC0_REG_BASE;
 
 	hpriv->clk = clk_get(&pdev->dev, NULL);
-	if (IS_ERR(hpriv->clk)) {
+	if (IS_ERR(hpriv->clk))
 		dev_notice(&pdev->dev, "cannot get optional clkdev\n");
-	} else {
-		rc = clk_prepare_enable(hpriv->clk);
-		if (rc)
-			goto err;
-	}
+	else
+		clk_prepare_enable(hpriv->clk);
 
 	for (port = 0; port < n_ports; port++) {
 		char port_number[16];
@@ -4182,7 +4179,7 @@ err:
  *      A platform bus SATA device has been unplugged. Perform the needed
  *      cleanup. Also called on module unload for any active devices.
  */
-static void mv_platform_remove(struct platform_device *pdev)
+static int mv_platform_remove(struct platform_device *pdev)
 {
 	struct ata_host *host = platform_get_drvdata(pdev);
 	struct mv_host_priv *hpriv = host->private_data;
@@ -4200,6 +4197,7 @@ static void mv_platform_remove(struct platform_device *pdev)
 		}
 		phy_power_off(hpriv->port_phys[port]);
 	}
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

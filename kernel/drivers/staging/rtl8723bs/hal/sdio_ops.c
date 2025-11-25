@@ -5,6 +5,7 @@
  *
  *******************************************************************************/
 #include <drv_types.h>
+#include <rtw_debug.h>
 #include <rtl8723b_hal.h>
 
 /*  */
@@ -871,7 +872,7 @@ void sd_int_dpc(struct adapter *adapter)
 	}
 
 	if (hal->sdio_hisr & SDIO_HISR_CPWM1) {
-		timer_delete_sync(&(pwrctl->pwr_rpwm_timer));
+		del_timer_sync(&(pwrctl->pwr_rpwm_timer));
 
 		SdioLocalCmd52Read1Byte(adapter, SDIO_REG_HCPWM1_8723B);
 

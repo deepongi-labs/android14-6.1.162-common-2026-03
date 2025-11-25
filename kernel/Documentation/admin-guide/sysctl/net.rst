@@ -71,8 +71,6 @@ two flavors of JITs, the newer eBPF JIT currently supported on:
   - s390x
   - riscv64
   - riscv32
-  - loongarch64
-  - arc
 
 And the older cBPF JIT supported on the following archs:
 
@@ -222,14 +220,6 @@ rmem_max
 
 The maximum receive socket buffer size in bytes.
 
-Default: 4194304
-
-rps_default_mask
-----------------
-
-The default RPS CPU mask used on newly created network devices. An empty
-mask means RPS disabled by default.
-
 tstamp_allow_data
 -----------------
 Allow processes to receive tx timestamps looped together with the original
@@ -248,8 +238,6 @@ wmem_max
 --------
 
 The maximum send socket buffer size in bytes.
-
-Default: 4194304
 
 message_burst and message_cost
 ------------------------------
@@ -355,10 +343,7 @@ optmem_max
 ----------
 
 Maximum ancillary buffer size allowed per socket. Ancillary data is a sequence
-of struct cmsghdr structures with appended data. TCP tx zerocopy also uses
-optmem_max as a limit for its internal structures.
-
-Default : 128 KB
+of struct cmsghdr structures with appended data.
 
 fb_tunnels_only_for_init_net
 ----------------------------
@@ -400,8 +385,8 @@ Default : 0  (for compatibility reasons)
 txrehash
 --------
 
-Controls default hash rethink behaviour on socket when SO_TXREHASH option is set
-to SOCK_TXREHASH_DEFAULT (i. e. not overridden by setsockopt).
+Controls default hash rethink behaviour on listening socket when SO_TXREHASH
+option is set to SOCK_TXREHASH_DEFAULT (i. e. not overridden by setsockopt).
 
 If set to 1 (default), hash rethink is performed on listening socket.
 If set to 0, hash rethink is not performed.

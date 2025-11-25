@@ -28,7 +28,7 @@
 #include <asm/byteorder.h>
 
 #include <media/dvb_frontend.h>
-#include <linux/int_log.h>
+#include <media/dvb_math.h>
 #include "lgdt330x_priv.h"
 #include "lgdt330x.h"
 
@@ -857,7 +857,8 @@ static struct dvb_frontend *lgdt330x_get_dvb_frontend(struct i2c_client *client)
 static const struct dvb_frontend_ops lgdt3302_ops;
 static const struct dvb_frontend_ops lgdt3303_ops;
 
-static int lgdt330x_probe(struct i2c_client *client)
+static int lgdt330x_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct lgdt330x_state *state = NULL;
 	u8 buf[1];
@@ -983,7 +984,7 @@ static void lgdt330x_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id lgdt330x_id_table[] = {
-	{ "lgdt330x" },
+	{"lgdt330x", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, lgdt330x_id_table);

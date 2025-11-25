@@ -406,7 +406,8 @@ static struct stv6110x_devctl *stv6110x_get_devctl(struct i2c_client *client)
 	return stv6110x->devctl;
 }
 
-static int stv6110x_probe(struct i2c_client *client)
+static int stv6110x_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct stv6110x_config *config = client->dev.platform_data;
 
@@ -470,7 +471,7 @@ const struct stv6110x_devctl *stv6110x_attach(struct dvb_frontend *fe,
 EXPORT_SYMBOL_GPL(stv6110x_attach);
 
 static const struct i2c_device_id stv6110x_id_table[] = {
-	{ "stv6110x" },
+	{"stv6110x", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, stv6110x_id_table);

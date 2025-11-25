@@ -148,7 +148,6 @@ struct q6v5_wcss {
 	bool requires_force_stop;
 
 	struct qcom_rproc_glink glink_subdev;
-	struct qcom_rproc_pdm pdm_subdev;
 	struct qcom_rproc_ssr ssr_subdev;
 };
 
@@ -757,7 +756,7 @@ static int q6v5_wcss_load(struct rproc *rproc, const struct firmware *fw)
 	int ret;
 
 	ret = qcom_mdt_load_no_init(wcss->dev, fw, rproc->firmware,
-				    wcss->mem_region, wcss->mem_phys,
+				    0, wcss->mem_region, wcss->mem_phys,
 				    wcss->mem_size, &wcss->mem_reloc);
 	if (ret)
 		return ret;
@@ -838,7 +837,8 @@ static int q6v5_wcss_init_mmio(struct q6v5_wcss *wcss,
 		return -ENOMEM;
 
 	if (wcss->version == WCSS_IPQ8074) {
-		wcss->rmb_base = devm_platform_ioremap_resource_byname(pdev, "rmb");
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "rmb");
+		wcss->rmb_base = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(wcss->rmb_base))
 			return PTR_ERR(wcss->rmb_base);
 	}
@@ -902,58 +902,90 @@ static int q6v5_alloc_memory_region(struct q6v5_wcss *wcss)
 
 static int q6v5_wcss_init_clock(struct q6v5_wcss *wcss)
 {
+	int ret;
+
 	wcss->xo = devm_clk_get(wcss->dev, "xo");
-	if (IS_ERR(wcss->xo))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->xo),
-				     "failed to get xo clock");
+	if (IS_ERR(wcss->xo)) {
+		ret = PTR_ERR(wcss->xo);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get xo clock");
+		return ret;
+	}
 
 	wcss->gcc_abhs_cbcr = devm_clk_get(wcss->dev, "gcc_abhs_cbcr");
-	if (IS_ERR(wcss->gcc_abhs_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->gcc_abhs_cbcr),
-				     "failed to get gcc abhs clock");
+	if (IS_ERR(wcss->gcc_abhs_cbcr)) {
+		ret = PTR_ERR(wcss->gcc_abhs_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get gcc abhs clock");
+		return ret;
+	}
 
 	wcss->gcc_axim_cbcr = devm_clk_get(wcss->dev, "gcc_axim_cbcr");
-	if (IS_ERR(wcss->gcc_axim_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->gcc_axim_cbcr),
-				     "failed to get gcc axim clock\n");
+	if (IS_ERR(wcss->gcc_axim_cbcr)) {
+		ret = PTR_ERR(wcss->gcc_axim_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get gcc axim clock\n");
+		return ret;
+	}
 
 	wcss->ahbfabric_cbcr_clk = devm_clk_get(wcss->dev,
 						"lcc_ahbfabric_cbc");
-	if (IS_ERR(wcss->ahbfabric_cbcr_clk))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->ahbfabric_cbcr_clk),
-				     "failed to get ahbfabric clock\n");
+	if (IS_ERR(wcss->ahbfabric_cbcr_clk)) {
+		ret = PTR_ERR(wcss->ahbfabric_cbcr_clk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get ahbfabric clock\n");
+		return ret;
+	}
 
 	wcss->lcc_csr_cbcr = devm_clk_get(wcss->dev, "tcsr_lcc_cbc");
-	if (IS_ERR(wcss->lcc_csr_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->lcc_csr_cbcr),
-				     "failed to get csr cbcr clk\n");
+	if (IS_ERR(wcss->lcc_csr_cbcr)) {
+		ret = PTR_ERR(wcss->lcc_csr_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get csr cbcr clk\n");
+		return ret;
+	}
 
 	wcss->ahbs_cbcr = devm_clk_get(wcss->dev,
 				       "lcc_abhs_cbc");
-	if (IS_ERR(wcss->ahbs_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->ahbs_cbcr),
-				     "failed to get ahbs_cbcr clk\n");
+	if (IS_ERR(wcss->ahbs_cbcr)) {
+		ret = PTR_ERR(wcss->ahbs_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get ahbs_cbcr clk\n");
+		return ret;
+	}
 
 	wcss->tcm_slave_cbcr = devm_clk_get(wcss->dev,
 					    "lcc_tcm_slave_cbc");
-	if (IS_ERR(wcss->tcm_slave_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->tcm_slave_cbcr),
-				     "failed to get tcm cbcr clk\n");
+	if (IS_ERR(wcss->tcm_slave_cbcr)) {
+		ret = PTR_ERR(wcss->tcm_slave_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get tcm cbcr clk\n");
+		return ret;
+	}
 
 	wcss->qdsp6ss_abhm_cbcr = devm_clk_get(wcss->dev, "lcc_abhm_cbc");
-	if (IS_ERR(wcss->qdsp6ss_abhm_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->qdsp6ss_abhm_cbcr),
-				     "failed to get abhm cbcr clk\n");
+	if (IS_ERR(wcss->qdsp6ss_abhm_cbcr)) {
+		ret = PTR_ERR(wcss->qdsp6ss_abhm_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get abhm cbcr clk\n");
+		return ret;
+	}
 
 	wcss->qdsp6ss_axim_cbcr = devm_clk_get(wcss->dev, "lcc_axim_cbc");
-	if (IS_ERR(wcss->qdsp6ss_axim_cbcr))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->qdsp6ss_axim_cbcr),
-				     "failed to get axim cbcr clk\n");
+	if (IS_ERR(wcss->qdsp6ss_axim_cbcr)) {
+		ret = PTR_ERR(wcss->qdsp6ss_axim_cbcr);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get axim cbcr clk\n");
+		return ret;
+	}
 
 	wcss->lcc_bcr_sleep = devm_clk_get(wcss->dev, "lcc_bcr_sleep");
-	if (IS_ERR(wcss->lcc_bcr_sleep))
-		return dev_err_probe(wcss->dev, PTR_ERR(wcss->lcc_bcr_sleep),
-				     "failed to get bcr cbcr clk\n");
+	if (IS_ERR(wcss->lcc_bcr_sleep)) {
+		ret = PTR_ERR(wcss->lcc_bcr_sleep);
+		if (ret != -EPROBE_DEFER)
+			dev_err(wcss->dev, "failed to get bcr cbcr clk\n");
+		return ret;
+	}
 
 	return 0;
 }
@@ -980,8 +1012,8 @@ static int q6v5_wcss_probe(struct platform_device *pdev)
 	if (!desc)
 		return -EINVAL;
 
-	rproc = devm_rproc_alloc(&pdev->dev, pdev->name, desc->ops,
-				 desc->firmware_name, sizeof(*wcss));
+	rproc = rproc_alloc(&pdev->dev, pdev->name, desc->ops,
+			    desc->firmware_name, sizeof(*wcss));
 	if (!rproc) {
 		dev_err(&pdev->dev, "failed to allocate rproc\n");
 		return -ENOMEM;
@@ -989,77 +1021,69 @@ static int q6v5_wcss_probe(struct platform_device *pdev)
 
 	wcss = rproc->priv;
 	wcss->dev = &pdev->dev;
+	wcss->version = desc->version;
 
 	wcss->version = desc->version;
 	wcss->requires_force_stop = desc->requires_force_stop;
 
 	ret = q6v5_wcss_init_mmio(wcss, pdev);
 	if (ret)
-		return ret;
+		goto free_rproc;
 
 	ret = q6v5_alloc_memory_region(wcss);
 	if (ret)
-		return ret;
+		goto free_rproc;
 
 	if (wcss->version == WCSS_QCS404) {
 		ret = q6v5_wcss_init_clock(wcss);
 		if (ret)
-			return ret;
+			goto free_rproc;
 
 		ret = q6v5_wcss_init_regulator(wcss);
 		if (ret)
-			return ret;
+			goto free_rproc;
 	}
 
 	ret = q6v5_wcss_init_reset(wcss, desc);
 	if (ret)
-		return ret;
+		goto free_rproc;
 
 	ret = qcom_q6v5_init(&wcss->q6v5, pdev, rproc, desc->crash_reason_smem, NULL, NULL);
 	if (ret)
-		return ret;
+		goto free_rproc;
 
 	qcom_add_glink_subdev(rproc, &wcss->glink_subdev, "q6wcss");
-	qcom_add_pdm_subdev(rproc, &wcss->pdm_subdev);
 	qcom_add_ssr_subdev(rproc, &wcss->ssr_subdev, "q6wcss");
 
-	if (desc->ssctl_id) {
+	if (desc->ssctl_id)
 		wcss->sysmon = qcom_add_sysmon_subdev(rproc,
 						      desc->sysmon_name,
 						      desc->ssctl_id);
-		if (IS_ERR(wcss->sysmon)) {
-			ret = PTR_ERR(wcss->sysmon);
-			goto deinit_remove_subdevs;
-		}
-	}
 
 	ret = rproc_add(rproc);
 	if (ret)
-		goto remove_sysmon_subdev;
+		goto free_rproc;
 
 	platform_set_drvdata(pdev, rproc);
 
 	return 0;
 
-remove_sysmon_subdev:
-	if (desc->ssctl_id)
-		qcom_remove_sysmon_subdev(wcss->sysmon);
-deinit_remove_subdevs:
-	qcom_q6v5_deinit(&wcss->q6v5);
-	qcom_remove_glink_subdev(rproc, &wcss->glink_subdev);
-	qcom_remove_pdm_subdev(rproc, &wcss->pdm_subdev);
-	qcom_remove_ssr_subdev(rproc, &wcss->ssr_subdev);
+free_rproc:
+	rproc_free(rproc);
+
 	return ret;
 }
 
-static void q6v5_wcss_remove(struct platform_device *pdev)
+static int q6v5_wcss_remove(struct platform_device *pdev)
 {
 	struct rproc *rproc = platform_get_drvdata(pdev);
 	struct q6v5_wcss *wcss = rproc->priv;
 
 	qcom_q6v5_deinit(&wcss->q6v5);
-	qcom_remove_pdm_subdev(rproc, &wcss->pdm_subdev);
 	rproc_del(rproc);
+	rproc_free(rproc);
+
+	return 0;
 }
 
 static const struct wcss_data wcss_ipq8074_res_init = {

@@ -39,7 +39,7 @@
  */
 #define VIO_CMO_MIN_ENT 1562624
 
-extern const struct bus_type vio_bus_type;
+extern struct bus_type vio_bus_type;
 
 struct iommu_table;
 
@@ -156,8 +156,15 @@ static inline int vio_enable_interrupts(struct vio_dev *dev)
 }
 #endif
 
-#define to_vio_driver(__drv)	container_of_const(__drv, struct vio_driver, driver)
-#define to_vio_dev(__dev)	container_of_const(__dev, struct vio_dev, dev)
+static inline struct vio_driver *to_vio_driver(struct device_driver *drv)
+{
+	return container_of(drv, struct vio_driver, driver);
+}
+
+static inline struct vio_dev *to_vio_dev(struct device *dev)
+{
+	return container_of(dev, struct vio_dev, dev);
+}
 
 #endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_VIO_H */

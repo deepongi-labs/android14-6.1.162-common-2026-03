@@ -9,8 +9,8 @@
 #include <linux/host1x.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_graph.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
@@ -521,11 +521,12 @@ static void tegra_shared_plane_atomic_disable(struct drm_plane *plane,
 
 static inline u32 compute_phase_incr(fixed20_12 in, unsigned int out)
 {
-	u64 tmp, tmp1;
+	u64 tmp, tmp1, tmp2;
 
 	tmp = (u64)dfixed_trunc(in);
-	tmp1 = (tmp << NFB) + ((u64)out >> 1);
-	do_div(tmp1, out);
+	tmp2 = (u64)out;
+	tmp1 = (tmp << NFB) + (tmp2 >> 1);
+	do_div(tmp1, tmp2);
 
 	return lower_32_bits(tmp1);
 }
@@ -1100,7 +1101,7 @@ static int tegra_display_hub_probe(struct platform_device *pdev)
 
 	for (i = 0; i < hub->soc->num_wgrps; i++) {
 		struct tegra_windowgroup *wgrp = &hub->wgrps[i];
-		char id[16];
+		char id[8];
 
 		snprintf(id, sizeof(id), "wgrp%u", i);
 		mutex_init(&wgrp->lock);
@@ -1173,12 +1174,17 @@ unregister:
 	return err;
 }
 
-static void tegra_display_hub_remove(struct platform_device *pdev)
+static int tegra_display_hub_remove(struct platform_device *pdev)
 {
 	struct tegra_display_hub *hub = platform_get_drvdata(pdev);
 	unsigned int i;
+	int err;
 
-	host1x_client_unregister(&hub->client);
+	err = host1x_client_unregister(&hub->client);
+	if (err < 0) {
+		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
+			err);
+	}
 
 	for (i = 0; i < hub->soc->num_wgrps; i++) {
 		struct tegra_windowgroup *wgrp = &hub->wgrps[i];
@@ -1187,6 +1193,8 @@ static void tegra_display_hub_remove(struct platform_device *pdev)
 	}
 
 	pm_runtime_disable(&pdev->dev);
+
+	return err;
 }
 
 static const struct tegra_display_hub_soc tegra186_display_hub = {

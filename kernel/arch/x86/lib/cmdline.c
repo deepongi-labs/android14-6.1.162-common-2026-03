@@ -6,21 +6,17 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
-
 #include <asm/setup.h>
-#include <asm/cmdline.h>
-#include <asm/bug.h>
 
 static inline int myisspace(u8 c)
 {
 	return c <= ' ';	/* Close enough approximation */
 }
 
-/*
+/**
  * Find a boolean option (like quiet,noapic,nosmp....)
  *
  * @cmdline: the cmdline string
- * @max_cmdline_size: the maximum size of cmdline
  * @option: option string to look for
  *
  * Returns the position of that @option (starts counting with 1)
@@ -207,29 +203,12 @@ __cmdline_find_option(const char *cmdline, int max_cmdline_size,
 
 int cmdline_find_option_bool(const char *cmdline, const char *option)
 {
-	int ret;
-
-	ret = __cmdline_find_option_bool(cmdline, COMMAND_LINE_SIZE, option);
-	if (ret > 0)
-		return ret;
-
-	if (IS_ENABLED(CONFIG_CMDLINE_BOOL) && !builtin_cmdline_added)
-		return __cmdline_find_option_bool(builtin_cmdline, COMMAND_LINE_SIZE, option);
-
-	return ret;
+	return __cmdline_find_option_bool(cmdline, COMMAND_LINE_SIZE, option);
 }
 
 int cmdline_find_option(const char *cmdline, const char *option, char *buffer,
 			int bufsize)
 {
-	int ret;
-
-	ret = __cmdline_find_option(cmdline, COMMAND_LINE_SIZE, option, buffer, bufsize);
-	if (ret > 0)
-		return ret;
-
-	if (IS_ENABLED(CONFIG_CMDLINE_BOOL) && !builtin_cmdline_added)
-		return __cmdline_find_option(builtin_cmdline, COMMAND_LINE_SIZE, option, buffer, bufsize);
-
-	return ret;
+	return __cmdline_find_option(cmdline, COMMAND_LINE_SIZE, option,
+				     buffer, bufsize);
 }

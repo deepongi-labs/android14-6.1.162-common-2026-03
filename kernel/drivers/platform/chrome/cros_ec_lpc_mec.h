@@ -8,8 +8,6 @@
 #ifndef __CROS_EC_LPC_MEC_H
 #define __CROS_EC_LPC_MEC_H
 
-#include <linux/acpi.h>
-
 enum cros_ec_lpc_mec_emi_access_mode {
 	/* 8-bit access */
 	ACCESS_TYPE_BYTE = 0x0,
@@ -47,14 +45,12 @@ enum cros_ec_lpc_mec_io_type {
  */
 void cros_ec_lpc_mec_init(unsigned int base, unsigned int end);
 
-/**
- * cros_ec_lpc_mec_acpi_mutex() - Find and set ACPI mutex for MEC
+/*
+ * cros_ec_lpc_mec_destroy
  *
- * @adev:     Parent ACPI device
- * @pathname: Name of AML mutex
- * @return:   Negative error code, or zero for success
+ * Cleanup MEC I/O.
  */
-int cros_ec_lpc_mec_acpi_mutex(struct acpi_device *adev, const char *pathname);
+void cros_ec_lpc_mec_destroy(void);
 
 /**
  * cros_ec_lpc_mec_in_range() - Determine if addresses are in MEC EMI range.
@@ -75,10 +71,9 @@ int cros_ec_lpc_mec_in_range(unsigned int offset, unsigned int length);
  * @length:  Number of bytes to read / write
  * @buf:     Destination / source buffer
  *
- * @return:  A negative error code on error, or 8-bit checksum of all
- *           bytes read / written
+ * @return 8-bit checksum of all bytes read / written
  */
-int cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
-			     unsigned int offset, unsigned int length, u8 *buf);
+u8 cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
+			    unsigned int offset, unsigned int length, u8 *buf);
 
 #endif /* __CROS_EC_LPC_MEC_H */

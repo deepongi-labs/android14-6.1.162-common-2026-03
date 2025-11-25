@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2017 Red Hat. All rights reserved.
  *
@@ -26,14 +25,6 @@
  * protected with a spinlock.
  */
 
-struct bt_work {
-	struct list_head list;
-	struct rb_node node;
-	struct policy_work work;
-};
-
-extern struct kmem_cache *btracker_work_cache;
-
 struct background_work;
 struct background_tracker;
 
@@ -50,6 +41,7 @@ struct background_tracker *btracker_create(unsigned int max_work);
  */
 void btracker_destroy(struct background_tracker *b);
 
+unsigned int btracker_nr_writebacks_queued(struct background_tracker *b);
 unsigned int btracker_nr_demotions_queued(struct background_tracker *b);
 
 /*

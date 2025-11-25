@@ -23,7 +23,8 @@
 #include <linux/thermal.h>
 #include <linux/units.h>
 
-#include "thermal_trace.h"
+#include <trace/events/thermal.h>
+#include <trace/hooks/thermal.h>
 
 /*
  * Cooling state <-> CPUFreq frequency
@@ -89,16 +90,12 @@ struct cpufreq_cooling_device {
 static unsigned long get_level(struct cpufreq_cooling_device *cpufreq_cdev,
 			       unsigned int freq)
 {
-	struct em_perf_state *table;
 	int i;
 
-	rcu_read_lock();
-	table = em_perf_state_from_pd(cpufreq_cdev->em);
 	for (i = cpufreq_cdev->max_level - 1; i >= 0; i--) {
-		if (freq > table[i].frequency)
+		if (freq > cpufreq_cdev->em->table[i].frequency)
 			break;
 	}
-	rcu_read_unlock();
 
 	return cpufreq_cdev->max_level - i - 1;
 }
@@ -106,20 +103,16 @@ static unsigned long get_level(struct cpufreq_cooling_device *cpufreq_cdev,
 static u32 cpu_freq_to_power(struct cpufreq_cooling_device *cpufreq_cdev,
 			     u32 freq)
 {
-	struct em_perf_state *table;
 	unsigned long power_mw;
 	int i;
 
-	rcu_read_lock();
-	table = em_perf_state_from_pd(cpufreq_cdev->em);
 	for (i = cpufreq_cdev->max_level - 1; i >= 0; i--) {
-		if (freq > table[i].frequency)
+		if (freq > cpufreq_cdev->em->table[i].frequency)
 			break;
 	}
 
-	power_mw = table[i + 1].power;
+	power_mw = cpufreq_cdev->em->table[i + 1].power;
 	power_mw /= MICROWATT_PER_MILLIWATT;
-	rcu_read_unlock();
 
 	return power_mw;
 }
@@ -127,24 +120,18 @@ static u32 cpu_freq_to_power(struct cpufreq_cooling_device *cpufreq_cdev,
 static u32 cpu_power_to_freq(struct cpufreq_cooling_device *cpufreq_cdev,
 			     u32 power)
 {
-	struct em_perf_state *table;
 	unsigned long em_power_mw;
-	u32 freq;
 	int i;
 
-	rcu_read_lock();
-	table = em_perf_state_from_pd(cpufreq_cdev->em);
 	for (i = cpufreq_cdev->max_level; i > 0; i--) {
 		/* Convert EM power to milli-Watts to make safe comparison */
-		em_power_mw = table[i].power;
+		em_power_mw = cpufreq_cdev->em->table[i].power;
 		em_power_mw /= MICROWATT_PER_MILLIWATT;
 		if (power >= em_power_mw)
 			break;
 	}
-	freq = table[i].frequency;
-	rcu_read_unlock();
 
-	return freq;
+	return cpufreq_cdev->em->table[i].frequency;
 }
 
 /**
@@ -238,6 +225,8 @@ static int cpufreq_get_requested_power(struct thermal_cooling_device *cdev,
 
 	freq = cpufreq_quick_get(policy->cpu);
 
+	trace_android_vh_modify_thermal_request_freq(policy, &freq);
+
 	for_each_cpu(cpu, policy->related_cpus) {
 		u32 load;
 
@@ -274,9 +263,8 @@ static int cpufreq_get_requested_power(struct thermal_cooling_device *cdev,
 static int cpufreq_state2power(struct thermal_cooling_device *cdev,
 			       unsigned long state, u32 *power)
 {
-	struct cpufreq_cooling_device *cpufreq_cdev = cdev->devdata;
 	unsigned int freq, num_cpus, idx;
-	struct em_perf_state *table;
+	struct cpufreq_cooling_device *cpufreq_cdev = cdev->devdata;
 
 	/* Request state should be less than max_level */
 	if (state > cpufreq_cdev->max_level)
@@ -285,12 +273,7 @@ static int cpufreq_state2power(struct thermal_cooling_device *cdev,
 	num_cpus = cpumask_weight(cpufreq_cdev->policy->cpus);
 
 	idx = cpufreq_cdev->max_level - state;
-
-	rcu_read_lock();
-	table = em_perf_state_from_pd(cpufreq_cdev->em);
-	freq = table[idx].frequency;
-	rcu_read_unlock();
-
+	freq = cpufreq_cdev->em->table[idx].frequency;
 	*power = cpu_freq_to_power(cpufreq_cdev, freq) * num_cpus;
 
 	return 0;
@@ -322,6 +305,8 @@ static int cpufreq_power2state(struct thermal_cooling_device *cdev,
 	last_load = cpufreq_cdev->last_load ?: 1;
 	normalised_power = (power * 100) / last_load;
 	target_freq = cpu_power_to_freq(cpufreq_cdev, normalised_power);
+
+	trace_android_vh_modify_thermal_target_freq(policy, &target_freq);
 
 	*state = get_level(cpufreq_cdev, target_freq);
 	trace_thermal_power_cpu_limit(policy->related_cpus, target_freq, *state,
@@ -396,17 +381,8 @@ static unsigned int get_state_freq(struct cpufreq_cooling_device *cpufreq_cdev,
 #ifdef CONFIG_THERMAL_GOV_POWER_ALLOCATOR
 	/* Use the Energy Model table if available */
 	if (cpufreq_cdev->em) {
-		struct em_perf_state *table;
-		unsigned int freq;
-
 		idx = cpufreq_cdev->max_level - state;
-
-		rcu_read_lock();
-		table = em_perf_state_from_pd(cpufreq_cdev->em);
-		freq = table[idx].frequency;
-		rcu_read_unlock();
-
-		return freq;
+		return cpufreq_cdev->em->table[idx].frequency;
 	}
 #endif
 
@@ -475,6 +451,7 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 				 unsigned long state)
 {
 	struct cpufreq_cooling_device *cpufreq_cdev = cdev->devdata;
+	struct cpumask *cpus;
 	unsigned int frequency;
 	int ret;
 
@@ -491,6 +468,8 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 	ret = freq_qos_update_request(&cpufreq_cdev->qos_req, frequency);
 	if (ret >= 0) {
 		cpufreq_cdev->cpufreq_state = state;
+		cpus = cpufreq_cdev->policy->related_cpus;
+		arch_update_thermal_pressure(cpus, frequency);
 		ret = 0;
 	}
 
@@ -657,7 +636,7 @@ of_cpufreq_cooling_register(struct cpufreq_policy *policy)
 		return NULL;
 	}
 
-	if (of_property_present(np, "#cooling-cells")) {
+	if (of_find_property(np, "#cooling-cells", NULL)) {
 		struct em_perf_domain *em = em_cpu_get(policy->cpu);
 
 		cdev = __cpufreq_cooling_register(np, policy, em);

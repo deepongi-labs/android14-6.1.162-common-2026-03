@@ -16,17 +16,11 @@ description:
 
 properties:
   compatible:
-    oneOf:
-      - const: qcom,pmi8998-lab-ibb
-      - items:
-          - enum:
-              - qcom,pmi8950-lab-ibb
-          - const: qcom,pmi8998-lab-ibb
+    const: qcom,pmi8998-lab-ibb
 
   lab:
     type: object
-    $ref: regulator.yaml#
-    unevaluatedProperties: false
+    additionalProperties: false
 
     properties:
       qcom,soft-start-us:
@@ -52,8 +46,7 @@ properties:
 
   ibb:
     type: object
-    $ref: regulator.yaml#
-    unevaluatedProperties: false
+    additionalProperties: false
 
     properties:
       qcom,discharge-resistor-kohms:

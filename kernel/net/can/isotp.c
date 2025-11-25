@@ -72,7 +72,7 @@
 #include <net/sock.h>
 #include <net/net_namespace.h>
 
-MODULE_DESCRIPTION("PF_CAN ISO 15765-2 transport protocol");
+MODULE_DESCRIPTION("PF_CAN isotp 15765-2:2016 protocol");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Oliver Hartkopp <socketcan@hartkopp.net>");
 MODULE_ALIAS("can-proto-6");
@@ -83,24 +83,12 @@ MODULE_ALIAS("can-proto-6");
 			 (CAN_EFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG) : \
 			 (CAN_SFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG))
 
-/* Since ISO 15765-2:2016 the CAN isotp protocol supports more than 4095
- * byte per ISO PDU as the FF_DL can take full 32 bit values (4 Gbyte).
- * We would need some good concept to handle this between user space and
- * kernel space. For now set the static buffer to something about 8 kbyte
- * to be able to test this new functionality.
+/* ISO 15765-2:2016 supports more than 4095 byte per ISO PDU as the FF_DL can
+ * take full 32 bit values (4 Gbyte). We would need some good concept to handle
+ * this between user space and kernel space. For now increase the static buffer
+ * to something about 64 kbyte to be able to test this new functionality.
  */
-#define DEFAULT_MAX_PDU_SIZE 8300
-
-/* maximum PDU size before ISO 15765-2:2016 extension was 4095 */
-#define MAX_12BIT_PDU_SIZE 4095
-
-/* limit the isotp pdu size from the optional module parameter to 1MByte */
-#define MAX_PDU_SIZE (1025 * 1024U)
-
-static unsigned int max_pdu_size __read_mostly = DEFAULT_MAX_PDU_SIZE;
-module_param(max_pdu_size, uint, 0444);
-MODULE_PARM_DESC(max_pdu_size, "maximum isotp pdu size (default "
-		 __stringify(DEFAULT_MAX_PDU_SIZE) ")");
+#define MAX_MSG_LENGTH 66000
 
 /* N_PCI type values in bits 7-4 of N_PCI bytes */
 #define N_PCI_SF 0x00	/* single frame */
@@ -136,15 +124,13 @@ enum {
 };
 
 struct tpcon {
-	u8 *buf;
-	unsigned int buflen;
-	unsigned int len;
 	unsigned int idx;
+	unsigned int len;
 	u32 state;
 	u8 bs;
 	u8 sn;
 	u8 ll_dl;
-	u8 sbuf[DEFAULT_MAX_PDU_SIZE];
+	u8 buf[MAX_MSG_LENGTH + 1];
 };
 
 struct isotp_sock {
@@ -278,7 +264,6 @@ static int isotp_send_fc(struct sock *sk, int ae, u8 flowstatus)
 static void isotp_rcv_skb(struct sk_buff *skb, struct sock *sk)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)skb->cb;
-	enum skb_drop_reason reason;
 
 	BUILD_BUG_ON(sizeof(skb->cb) < sizeof(struct sockaddr_can));
 
@@ -286,8 +271,8 @@ static void isotp_rcv_skb(struct sk_buff *skb, struct sock *sk)
 	addr->can_family = AF_CAN;
 	addr->can_ifindex = skb->dev->ifindex;
 
-	if (sock_queue_rcv_skb_reason(sk, skb, &reason) < 0)
-		sk_skb_reason_drop(sk, skb, reason);
+	if (sock_queue_rcv_skb(sk, skb) < 0)
+		kfree_skb(skb);
 }
 
 static u8 padlen(u8 datalen)
@@ -383,9 +368,8 @@ static int isotp_rcv_fc(struct isotp_sock *so, struct canfd_frame *cf, int ae)
 		return 1;
 	}
 
-	/* get static/dynamic communication params from first/every FC frame */
-	if (so->tx.state == ISOTP_WAIT_FIRST_FC ||
-	    so->opt.flags & CAN_ISOTP_DYN_FC_PARMS) {
+	/* get communication parameters only from the first FC frame */
+	if (so->tx.state == ISOTP_WAIT_FIRST_FC) {
 		so->txfc.bs = cf->data[ae + 1];
 		so->txfc.stmin = cf->data[ae + 2];
 
@@ -514,17 +498,7 @@ static int isotp_rcv_ff(struct sock *sk, struct canfd_frame *cf, int ae)
 	if (so->rx.len + ae + off + ff_pci_sz < so->rx.ll_dl)
 		return 1;
 
-	/* PDU size > default => try max_pdu_size */
-	if (so->rx.len > so->rx.buflen && so->rx.buflen < max_pdu_size) {
-		u8 *newbuf = kmalloc(max_pdu_size, GFP_ATOMIC);
-
-		if (newbuf) {
-			so->rx.buf = newbuf;
-			so->rx.buflen = max_pdu_size;
-		}
-	}
-
-	if (so->rx.len > so->rx.buflen) {
+	if (so->rx.len > MAX_MSG_LENGTH) {
 		/* send FC frame with overflow status */
 		isotp_send_fc(sk, ae, ISOTP_FC_OVFLW);
 		return 1;
@@ -828,7 +802,7 @@ static void isotp_create_fframe(struct canfd_frame *cf, struct isotp_sock *so,
 		cf->data[0] = so->opt.ext_address;
 
 	/* create N_PCI bytes with 12/32 bit FF_DL data length */
-	if (so->tx.len > MAX_12BIT_PDU_SIZE) {
+	if (so->tx.len > 4095) {
 		/* use 32 bit FF_DL notation */
 		cf->data[ae] = N_PCI_FF;
 		cf->data[ae + 1] = 0;
@@ -965,17 +939,7 @@ static int isotp_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 			goto err_event_drop;
 	}
 
-	/* PDU size > default => try max_pdu_size */
-	if (size > so->tx.buflen && so->tx.buflen < max_pdu_size) {
-		u8 *newbuf = kmalloc(max_pdu_size, GFP_KERNEL);
-
-		if (newbuf) {
-			so->tx.buf = newbuf;
-			so->tx.buflen = max_pdu_size;
-		}
-	}
-
-	if (!size || size > so->tx.buflen) {
+	if (!size || size > MAX_MSG_LENGTH) {
 		err = -EINVAL;
 		goto err_out_drop;
 	}
@@ -1230,17 +1194,10 @@ static int isotp_release(struct socket *sock)
 	so->ifindex = 0;
 	so->bound = 0;
 
-	if (so->rx.buf != so->rx.sbuf)
-		kfree(so->rx.buf);
-
-	if (so->tx.buf != so->tx.sbuf)
-		kfree(so->tx.buf);
-
 	sock_orphan(sk);
 	sock->sk = NULL;
 
 	release_sock(sk);
-	sock_prot_inuse_add(net, sk->sk_prot, -1);
 	sock_put(sk);
 
 	return 0;
@@ -1313,7 +1270,7 @@ static int isotp_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 		err = -ENODEV;
 		goto out;
 	}
-	if (READ_ONCE(dev->mtu) < so->ll.mtu) {
+	if (dev->mtu < so->ll.mtu) {
 		dev_put(dev);
 		err = -EINVAL;
 		goto out;
@@ -1631,15 +1588,12 @@ static int isotp_init(struct sock *sk)
 	so->rx.state = ISOTP_IDLE;
 	so->tx.state = ISOTP_IDLE;
 
-	so->rx.buf = so->rx.sbuf;
-	so->tx.buf = so->tx.sbuf;
-	so->rx.buflen = ARRAY_SIZE(so->rx.sbuf);
-	so->tx.buflen = ARRAY_SIZE(so->tx.sbuf);
-
-	hrtimer_setup(&so->rxtimer, isotp_rx_timer_handler, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
-	hrtimer_setup(&so->txtimer, isotp_tx_timer_handler, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
-	hrtimer_setup(&so->txfrtimer, isotp_txfr_timer_handler, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL_SOFT);
+	hrtimer_init(&so->rxtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	so->rxtimer.function = isotp_rx_timer_handler;
+	hrtimer_init(&so->txtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	so->txtimer.function = isotp_tx_timer_handler;
+	hrtimer_init(&so->txfrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	so->txfrtimer.function = isotp_txfr_timer_handler;
 
 	init_waitqueue_head(&so->wait);
 	spin_lock_init(&so->rx_lock);
@@ -1691,6 +1645,7 @@ static const struct proto_ops isotp_ops = {
 	.sendmsg = isotp_sendmsg,
 	.recvmsg = isotp_recvmsg,
 	.mmap = sock_no_mmap,
+	.sendpage = sock_no_sendpage,
 };
 
 static struct proto isotp_proto __read_mostly = {
@@ -1715,10 +1670,7 @@ static __init int isotp_module_init(void)
 {
 	int err;
 
-	max_pdu_size = max_t(unsigned int, max_pdu_size, MAX_12BIT_PDU_SIZE);
-	max_pdu_size = min_t(unsigned int, max_pdu_size, MAX_PDU_SIZE);
-
-	pr_info("can: isotp protocol (max_pdu_size %d)\n", max_pdu_size);
+	pr_info("can: isotp protocol\n");
 
 	err = can_proto_register(&isotp_can_proto);
 	if (err < 0)

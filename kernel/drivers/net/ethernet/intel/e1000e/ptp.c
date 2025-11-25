@@ -29,10 +29,16 @@ static int e1000e_phc_adjfine(struct ptp_clock_info *ptp, long delta)
 	struct e1000_adapter *adapter = container_of(ptp, struct e1000_adapter,
 						     ptp_clock_info);
 	struct e1000_hw *hw = &adapter->hw;
+	bool neg_adj = false;
 	unsigned long flags;
-	u64 incvalue;
-	u32 timinca;
+	u64 adjustment;
+	u32 timinca, incvalue;
 	s32 ret_val;
+
+	if (delta < 0) {
+		neg_adj = true;
+		delta = -delta;
+	}
 
 	/* Get the System Time Register SYSTIM base frequency */
 	ret_val = e1000e_get_base_timinca(adapter, &timinca);
@@ -42,7 +48,11 @@ static int e1000e_phc_adjfine(struct ptp_clock_info *ptp, long delta)
 	spin_lock_irqsave(&adapter->systim_lock, flags);
 
 	incvalue = timinca & E1000_TIMINCA_INCVALUE_MASK;
-	incvalue = adjust_by_scaled_ppm(incvalue, delta);
+
+	adjustment = mul_u64_u64_div_u64(incvalue, (u64)delta,
+					 1000000ULL << 16);
+
+	incvalue = neg_adj ? (incvalue - adjustment) : (incvalue + adjustment);
 
 	timinca &= ~E1000_TIMINCA_INCVALUE_MASK;
 	timinca |= incvalue;
@@ -124,8 +134,7 @@ static int e1000e_phc_get_syncdevicetime(ktime_t *device,
 	sys_cycles = er32(PLTSTMPH);
 	sys_cycles <<= 32;
 	sys_cycles |= er32(PLTSTMPL);
-	system->cycles = sys_cycles;
-	system->cs_id = CSID_X86_ART;
+	*system = convert_art_to_tsc(sys_cycles);
 
 	return 0;
 }
@@ -281,34 +290,22 @@ void e1000e_ptp_init(struct e1000_adapter *adapter)
 
 	switch (hw->mac.type) {
 	case e1000_pch2lan:
-		adapter->ptp_clock_info.max_adj = MAX_PPB_96MHZ;
-		break;
 	case e1000_pch_lpt:
-		if (er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI)
-			adapter->ptp_clock_info.max_adj = MAX_PPB_96MHZ;
-		else
-			adapter->ptp_clock_info.max_adj = MAX_PPB_25MHZ;
-		break;
 	case e1000_pch_spt:
-		adapter->ptp_clock_info.max_adj = MAX_PPB_24MHZ;
-		break;
 	case e1000_pch_cnp:
 	case e1000_pch_tgp:
 	case e1000_pch_adp:
-	case e1000_pch_nvp:
-		if (er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI)
-			adapter->ptp_clock_info.max_adj = MAX_PPB_24MHZ;
-		else
-			adapter->ptp_clock_info.max_adj = MAX_PPB_38400KHZ;
-		break;
 	case e1000_pch_mtp:
 	case e1000_pch_lnp:
-	case e1000_pch_ptp:
-		adapter->ptp_clock_info.max_adj = MAX_PPB_38400KHZ;
-		break;
+		if ((hw->mac.type < e1000_pch_lpt) ||
+		    (er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI)) {
+			adapter->ptp_clock_info.max_adj = 24000000 - 1;
+			break;
+		}
+		fallthrough;
 	case e1000_82574:
 	case e1000_82583:
-		adapter->ptp_clock_info.max_adj = MAX_PPB_25MHZ;
+		adapter->ptp_clock_info.max_adj = 600000000 - 1;
 		break;
 	default:
 		break;

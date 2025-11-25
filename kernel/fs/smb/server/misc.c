@@ -165,7 +165,7 @@ char *convert_to_nt_pathname(struct ksmbd_share_config *share,
 	char *pathname, *ab_pathname, *nt_pathname;
 	int share_path_len = share->path_sz;
 
-	pathname = kmalloc(PATH_MAX, KSMBD_DEFAULT_GFP);
+	pathname = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!pathname)
 		return ERR_PTR(-EACCES);
 
@@ -180,8 +180,7 @@ char *convert_to_nt_pathname(struct ksmbd_share_config *share,
 		goto free_pathname;
 	}
 
-	nt_pathname = kzalloc(strlen(&ab_pathname[share_path_len]) + 2,
-			      KSMBD_DEFAULT_GFP);
+	nt_pathname = kzalloc(strlen(&ab_pathname[share_path_len]) + 2, GFP_KERNEL);
 	if (!nt_pathname) {
 		nt_pathname = ERR_PTR(-ENOMEM);
 		goto free_pathname;
@@ -233,7 +232,7 @@ char *ksmbd_casefold_sharename(struct unicode_map *um, const char *name)
 	char *cf_name;
 	int cf_len;
 
-	cf_name = kzalloc(KSMBD_REQ_MAX_SHARE_NAME, KSMBD_DEFAULT_GFP);
+	cf_name = kzalloc(KSMBD_REQ_MAX_SHARE_NAME, GFP_KERNEL);
 	if (!cf_name)
 		return ERR_PTR(-ENOMEM);
 
@@ -262,7 +261,6 @@ out_ascii:
 
 /**
  * ksmbd_extract_sharename() - get share name from tree connect request
- * @um: pointer to a unicode_map structure for character encoding handling
  * @treename:	buffer containing tree name and share name
  *
  * Return:      share name on success, otherwise error
@@ -295,7 +293,7 @@ char *convert_to_unix_name(struct ksmbd_share_config *share, const char *name)
 
 	path_len = share->path_sz;
 	name_len = strlen(name);
-	new_name = kmalloc(path_len + name_len + 2, KSMBD_DEFAULT_GFP);
+	new_name = kmalloc(path_len + name_len + 2, GFP_KERNEL);
 	if (!new_name)
 		return new_name;
 
@@ -321,7 +319,7 @@ char *ksmbd_convert_dir_info_name(struct ksmbd_dir_info *d_info,
 	if (!sz)
 		return NULL;
 
-	conv = kmalloc(sz, KSMBD_DEFAULT_GFP);
+	conv = kmalloc(sz, GFP_KERNEL);
 	if (!conv)
 		return NULL;
 

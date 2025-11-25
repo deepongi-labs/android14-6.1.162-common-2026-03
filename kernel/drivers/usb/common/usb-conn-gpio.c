@@ -19,7 +19,6 @@
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/regulator/consumer.h>
-#include <linux/string_choices.h>
 #include <linux/usb/role.h>
 #include <linux/idr.h>
 
@@ -116,7 +115,7 @@ static void usb_conn_detect_cable(struct work_struct *work)
 
 	if (info->vbus)
 		dev_dbg(info->dev, "vbus regulator is %s\n",
-			str_enabled_disabled(regulator_is_enabled(info->vbus)));
+			regulator_is_enabled(info->vbus) ? "enabled" : "disabled");
 
 	power_supply_changed(info->charger);
 }
@@ -162,7 +161,7 @@ static int usb_conn_psy_register(struct usb_conn_info *info)
 	struct device *dev = info->dev;
 	struct power_supply_desc *desc = &info->desc;
 	struct power_supply_config cfg = {
-		.fwnode = dev_fwnode(dev),
+		.of_node = dev->of_node,
 	};
 
 	info->conn_id = ida_alloc(&usb_conn_ida, GFP_KERNEL);
@@ -288,7 +287,7 @@ put_role_sw:
 	return ret;
 }
 
-static void usb_conn_remove(struct platform_device *pdev)
+static int usb_conn_remove(struct platform_device *pdev)
 {
 	struct usb_conn_info *info = platform_get_drvdata(pdev);
 
@@ -301,6 +300,8 @@ static void usb_conn_remove(struct platform_device *pdev)
 		regulator_disable(info->vbus);
 
 	usb_role_switch_put(info->role_sw);
+
+	return 0;
 }
 
 static int __maybe_unused usb_conn_suspend(struct device *dev)

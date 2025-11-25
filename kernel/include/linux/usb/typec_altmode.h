@@ -20,7 +20,6 @@ struct typec_altmode_ops;
  * @active: Tells has the mode been entered or not
  * @desc: Optional human readable description of the mode
  * @ops: Operations vector from the driver
- * @cable_ops: Cable operations vector from the driver.
  */
 struct typec_altmode {
 	struct device			dev;
@@ -31,7 +30,7 @@ struct typec_altmode {
 
 	char				*desc;
 	const struct typec_altmode_ops	*ops;
-	const struct typec_cable_ops	*cable_ops;
+	ANDROID_KABI_RESERVE(1);
 };
 
 #define to_typec_altmode(d) container_of(d, struct typec_altmode, dev)
@@ -65,45 +64,18 @@ struct typec_altmode_ops {
 	int (*notify)(struct typec_altmode *altmode, unsigned long conf,
 		      void *data);
 	int (*activate)(struct typec_altmode *altmode, int activate);
+	ANDROID_KABI_RESERVE(1);
 };
 
 int typec_altmode_enter(struct typec_altmode *altmode, u32 *vdo);
 int typec_altmode_exit(struct typec_altmode *altmode);
-int typec_altmode_attention(struct typec_altmode *altmode, u32 vdo);
+void typec_altmode_attention(struct typec_altmode *altmode, u32 vdo);
 int typec_altmode_vdm(struct typec_altmode *altmode,
 		      const u32 header, const u32 *vdo, int count);
 int typec_altmode_notify(struct typec_altmode *altmode, unsigned long conf,
 			 void *data);
 const struct typec_altmode *
 typec_altmode_get_partner(struct typec_altmode *altmode);
-
-/**
- * struct typec_cable_ops - Cable alternate mode operations vector
- * @enter: Operations to be executed with Enter Mode Command
- * @exit: Operations to be executed with Exit Mode Command
- * @vdm: Callback for SVID specific commands
- */
-struct typec_cable_ops {
-	int (*enter)(struct typec_altmode *altmode, enum typec_plug_index sop, u32 *vdo);
-	int (*exit)(struct typec_altmode *altmode, enum typec_plug_index sop);
-	int (*vdm)(struct typec_altmode *altmode, enum typec_plug_index sop,
-		   const u32 hdr, const u32 *vdo, int cnt);
-};
-
-int typec_cable_altmode_enter(struct typec_altmode *altmode, enum typec_plug_index sop, u32 *vdo);
-int typec_cable_altmode_exit(struct typec_altmode *altmode, enum typec_plug_index sop);
-int typec_cable_altmode_vdm(struct typec_altmode *altmode, enum typec_plug_index sop,
-			    const u32 header, const u32 *vdo, int count);
-
-/**
- * typec_altmode_get_cable_svdm_version - Get negotiated SVDM version for cable plug
- * @altmode: Handle to the alternate mode
- */
-static inline int
-typec_altmode_get_cable_svdm_version(struct typec_altmode *altmode)
-{
-	return typec_get_cable_svdm_version(typec_altmode2port(altmode));
-}
 
 /*
  * These are the connector states (USB, Safe and Alt Mode) defined in USB Type-C

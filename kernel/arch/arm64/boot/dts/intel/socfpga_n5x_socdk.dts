@@ -19,17 +19,18 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	memory@80000000 {
+	memory {
 		device_type = "memory";
 		/* We expect the bootloader to fill in the reg */
-		reg = <0 0x80000000 0 0>;
+		reg = <0 0 0 0>;
 	};
 
-	soc@0 {
+	soc {
 		sdram_edac: memory-controller@f87f8000 {
 			compatible = "snps,ddrc-3.80a";
 			reg = <0xf87f8000 0x400>;
 			interrupts = <0 175 4>;
+			status = "okay";
 		};
 	};
 };
@@ -73,7 +74,6 @@
 	cap-sd-highspeed;
 	broken-cd;
 	bus-width = <4>;
-	clk-phase-sd-hs = <0>, <135>;
 };
 
 &osc1 {
@@ -83,11 +83,15 @@
 &qspi {
 	status = "okay";
 	flash@0 {
+		#address-cells = <1>;
+		#size-cells = <1>;
 		compatible = "micron,mt25qu02g", "jedec,spi-nor";
 		reg = <0>;
 		spi-max-frequency = <100000000>;
 
 		m25p,fast-read;
+		cdns,page-size = <256>;
+		cdns,block-size = <16>;
 		cdns,read-delay = <2>;
 		cdns,tshsl-ns = <50>;
 		cdns,tsd2d-ns = <50>;
@@ -104,7 +108,7 @@
 				reg = <0x0 0x03FE0000>;
 			};
 
-			qspi_rootfs: partition@3fe0000 {
+			qspi_rootfs: partition@3FE0000 {
 				label = "Root Filesystem - JFFS2";
 				reg = <0x03FE0000 0x0C020000>;
 			};

@@ -527,24 +527,33 @@ void snd_tscm_stream_lock_changed(struct snd_tscm *tscm)
 
 int snd_tscm_stream_lock_try(struct snd_tscm *tscm)
 {
-	guard(spinlock_irq)(&tscm->lock);
+	int err;
+
+	spin_lock_irq(&tscm->lock);
 
 	/* user land lock this */
-	if (tscm->dev_lock_count < 0)
-		return -EBUSY;
+	if (tscm->dev_lock_count < 0) {
+		err = -EBUSY;
+		goto end;
+	}
 
 	/* this is the first time */
 	if (tscm->dev_lock_count++ == 0)
 		snd_tscm_stream_lock_changed(tscm);
-	return 0;
+	err = 0;
+end:
+	spin_unlock_irq(&tscm->lock);
+	return err;
 }
 
 void snd_tscm_stream_lock_release(struct snd_tscm *tscm)
 {
-	guard(spinlock_irq)(&tscm->lock);
+	spin_lock_irq(&tscm->lock);
 
 	if (WARN_ON(tscm->dev_lock_count <= 0))
-		return;
+		goto end;
 	if (--tscm->dev_lock_count == 0)
 		snd_tscm_stream_lock_changed(tscm);
+end:
+	spin_unlock_irq(&tscm->lock);
 }

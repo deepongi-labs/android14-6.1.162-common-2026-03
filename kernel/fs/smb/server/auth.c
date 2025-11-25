@@ -20,7 +20,6 @@
 #include "glob.h"
 
 #include <linux/fips.h>
-#include <crypto/arc4.h>
 #include <crypto/des.h>
 
 #include "server.h"
@@ -30,6 +29,7 @@
 #include "mgmt/user_config.h"
 #include "crypto_ctx.h"
 #include "transport_ipc.h"
+#include "../common/arc4.h"
 
 /*
  * Fixed format data defining GSS header and fixed string
@@ -151,7 +151,7 @@ static int calc_ntlmv2_hash(struct ksmbd_conn *conn, struct ksmbd_session *sess,
 
 	/* convert user_name to unicode */
 	len = strlen(user_name(sess->user));
-	uniname = kzalloc(2 + UNICODE_LEN(len), KSMBD_DEFAULT_GFP);
+	uniname = kzalloc(2 + UNICODE_LEN(len), GFP_KERNEL);
 	if (!uniname) {
 		ret = -ENOMEM;
 		goto out;
@@ -175,7 +175,7 @@ static int calc_ntlmv2_hash(struct ksmbd_conn *conn, struct ksmbd_session *sess,
 
 	/* Convert domain name or conn name to unicode and uppercase */
 	len = strlen(dname);
-	domain = kzalloc(2 + UNICODE_LEN(len), KSMBD_DEFAULT_GFP);
+	domain = kzalloc(2 + UNICODE_LEN(len), GFP_KERNEL);
 	if (!domain) {
 		ret = -ENOMEM;
 		goto out;
@@ -208,12 +208,10 @@ out:
 
 /**
  * ksmbd_auth_ntlmv2() - NTLMv2 authentication handler
- * @conn:		connection
- * @sess:		session of connection
+ * @sess:	session of connection
  * @ntlmv2:		NTLMv2 challenge response
  * @blen:		NTLMv2 blob length
  * @domain_name:	domain name
- * @cryptkey:		session crypto key
  *
  * Return:	0 on success, error number on error
  */
@@ -254,7 +252,7 @@ int ksmbd_auth_ntlmv2(struct ksmbd_conn *conn, struct ksmbd_session *sess,
 	}
 
 	len = CIFS_CRYPTO_KEY_SIZE + blen;
-	construct = kzalloc(len, KSMBD_DEFAULT_GFP);
+	construct = kzalloc(len, GFP_KERNEL);
 	if (!construct) {
 		rc = -ENOMEM;
 		goto out;
@@ -296,8 +294,7 @@ out:
  * ksmbd_decode_ntlmssp_auth_blob() - helper function to construct
  * authenticate blob
  * @authblob:	authenticate blob source pointer
- * @blob_len:	length of the @authblob message
- * @conn:	connection
+ * @usr:	user details
  * @sess:	session of connection
  *
  * Return:	0 on success, error number on error
@@ -361,13 +358,14 @@ int ksmbd_decode_ntlmssp_auth_blob(struct authenticate_message *authblob,
 		if (sess_key_len > CIFS_KEY_SIZE)
 			return -EINVAL;
 
-		ctx_arc4 = kmalloc(sizeof(*ctx_arc4), KSMBD_DEFAULT_GFP);
+		ctx_arc4 = kmalloc(sizeof(*ctx_arc4), GFP_KERNEL);
 		if (!ctx_arc4)
 			return -ENOMEM;
 
-		arc4_setkey(ctx_arc4, sess->sess_key, SMB2_NTLMV2_SESSKEY_SIZE);
-		arc4_crypt(ctx_arc4, sess->sess_key,
-			   (char *)authblob + sess_key_off, sess_key_len);
+		cifs_arc4_setkey(ctx_arc4, sess->sess_key,
+				 SMB2_NTLMV2_SESSKEY_SIZE);
+		cifs_arc4_crypt(ctx_arc4, sess->sess_key,
+				(char *)authblob + sess_key_off, sess_key_len);
 		kfree_sensitive(ctx_arc4);
 	}
 
@@ -378,8 +376,8 @@ int ksmbd_decode_ntlmssp_auth_blob(struct authenticate_message *authblob,
  * ksmbd_decode_ntlmssp_neg_blob() - helper function to construct
  * negotiate blob
  * @negblob: negotiate blob source pointer
- * @blob_len:	length of the @authblob message
- * @conn:	connection
+ * @rsp:     response header pointer to be updated
+ * @sess:    session of connection
  *
  */
 int ksmbd_decode_ntlmssp_neg_blob(struct negotiate_message *negblob,
@@ -405,7 +403,8 @@ int ksmbd_decode_ntlmssp_neg_blob(struct negotiate_message *negblob,
  * ksmbd_build_ntlmssp_challenge_blob() - helper function to construct
  * challenge blob
  * @chgblob: challenge blob source pointer to initialize
- * @conn:	connection
+ * @rsp:     response header pointer to be updated
+ * @sess:    session of connection
  *
  */
 unsigned int
@@ -450,7 +449,7 @@ ksmbd_build_ntlmssp_challenge_blob(struct challenge_message *chgblob,
 
 	chgblob->NegotiateFlags = cpu_to_le32(flags);
 	len = strlen(ksmbd_netbios_name());
-	name = kmalloc(2 + UNICODE_LEN(len), KSMBD_DEFAULT_GFP);
+	name = kmalloc(2 + UNICODE_LEN(len), GFP_KERNEL);
 	if (!name)
 		return -ENOMEM;
 
@@ -511,7 +510,6 @@ int ksmbd_krb5_authenticate(struct ksmbd_session *sess, char *in_blob,
 			    int in_len, char *out_blob, int *out_len)
 {
 	struct ksmbd_spnego_authen_response *resp;
-	struct ksmbd_login_response_ext *resp_ext = NULL;
 	struct ksmbd_user *user = NULL;
 	int retval;
 
@@ -540,10 +538,7 @@ int ksmbd_krb5_authenticate(struct ksmbd_session *sess, char *in_blob,
 		goto out;
 	}
 
-	if (resp->login_response.status & KSMBD_USER_FLAG_EXTENSION)
-		resp_ext = ksmbd_ipc_login_request_ext(resp->login_response.account);
-
-	user = ksmbd_alloc_user(&resp->login_response, resp_ext);
+	user = ksmbd_alloc_user(&resp->login_response);
 	if (!user) {
 		ksmbd_debug(AUTH, "login failure\n");
 		retval = -ENOMEM;
@@ -978,6 +973,40 @@ out:
 	return rc;
 }
 
+int ksmbd_gen_sd_hash(struct ksmbd_conn *conn, char *sd_buf, int len,
+		      __u8 *pi_hash)
+{
+	int rc;
+	struct ksmbd_crypto_ctx *ctx = NULL;
+
+	ctx = ksmbd_crypto_ctx_find_sha256();
+	if (!ctx) {
+		ksmbd_debug(AUTH, "could not alloc sha256\n");
+		return -ENOMEM;
+	}
+
+	rc = crypto_shash_init(CRYPTO_SHA256(ctx));
+	if (rc) {
+		ksmbd_debug(AUTH, "could not init shashn");
+		goto out;
+	}
+
+	rc = crypto_shash_update(CRYPTO_SHA256(ctx), sd_buf, len);
+	if (rc) {
+		ksmbd_debug(AUTH, "could not update with n\n");
+		goto out;
+	}
+
+	rc = crypto_shash_final(CRYPTO_SHA256(ctx), pi_hash);
+	if (rc) {
+		ksmbd_debug(AUTH, "Could not generate hash err : %d\n", rc);
+		goto out;
+	}
+out:
+	ksmbd_release_crypto_ctx(ctx);
+	return rc;
+}
+
 static int ksmbd_get_encryption_key(struct ksmbd_work *work, __u64 ses_id,
 				    int enc, u8 *key)
 {
@@ -1022,7 +1051,7 @@ static struct scatterlist *ksmbd_init_sg(struct kvec *iov, unsigned int nvec,
 	if (!nvec)
 		return NULL;
 
-	nr_entries = kcalloc(nvec, sizeof(int), KSMBD_DEFAULT_GFP);
+	nr_entries = kcalloc(nvec, sizeof(int), GFP_KERNEL);
 	if (!nr_entries)
 		return NULL;
 
@@ -1042,8 +1071,7 @@ static struct scatterlist *ksmbd_init_sg(struct kvec *iov, unsigned int nvec,
 	/* Add two entries for transform header and signature */
 	total_entries += 2;
 
-	sg = kmalloc_array(total_entries, sizeof(struct scatterlist),
-			   KSMBD_DEFAULT_GFP);
+	sg = kmalloc_array(total_entries, sizeof(struct scatterlist), GFP_KERNEL);
 	if (!sg) {
 		kfree(nr_entries);
 		return NULL;
@@ -1143,7 +1171,7 @@ int ksmbd_crypt_message(struct ksmbd_work *work, struct kvec *iov,
 		goto free_ctx;
 	}
 
-	req = aead_request_alloc(tfm, KSMBD_DEFAULT_GFP);
+	req = aead_request_alloc(tfm, GFP_KERNEL);
 	if (!req) {
 		rc = -ENOMEM;
 		goto free_ctx;
@@ -1162,7 +1190,7 @@ int ksmbd_crypt_message(struct ksmbd_work *work, struct kvec *iov,
 	}
 
 	iv_len = crypto_aead_ivsize(tfm);
-	iv = kzalloc(iv_len, KSMBD_DEFAULT_GFP);
+	iv = kzalloc(iv_len, GFP_KERNEL);
 	if (!iv) {
 		rc = -ENOMEM;
 		goto free_sg;

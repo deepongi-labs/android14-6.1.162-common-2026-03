@@ -1,21 +1,34 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0
+CFLAGS += -D_FILE_OFFSET_BITS=64 -Wall -Werror -I../.. -I../../../../.. -I../../../../include
+LDLIBS := -lpthread -lelf
+TEST_GEN_PROGS := fuse_test fuse_daemon
+TEST_GEN_FILES := \
+	test_bpf.bpf \
+	fd_bpf.bpf \
+	fd.sh \
 
-CFLAGS += -Wall -O2 -g $(KHDR_INCLUDES)
-
-TEST_GEN_PROGS := fusectl_test
-TEST_GEN_FILES := fuse_mnt
+EXTRA_CLEAN := *.bpf
+BPF_FLAGS = -Wall -Werror -O2 -g -emit-llvm \
+	    -I ../../../../../include \
+	    -idirafter /usr/lib/gcc/x86_64-linux-gnu/10/include \
+	    -idirafter /usr/local/include \
+	    -idirafter /usr/include/x86_64-linux-gnu \
+	    -idirafter /usr/include \
 
 include ../../lib.mk
 
-VAR_CFLAGS := $(shell pkg-config fuse --cflags 2>/dev/null)
-ifeq ($(VAR_CFLAGS),)
-VAR_CFLAGS := -D_FILE_OFFSET_BITS=64 -I/usr/include/fuse
-endif
+# Put after include ../../lib.mk since that changes $(TEST_GEN_PROGS)
+# Otherwise you get multiple targets, this becomes the default, and it's a mess
+EXTRA_SOURCES := bpf_loader.c
+$(TEST_GEN_PROGS) : $(EXTRA_SOURCES)
 
-VAR_LDLIBS := $(shell pkg-config fuse --libs 2>/dev/null)
-ifeq ($(VAR_LDLIBS),)
-VAR_LDLIBS := -lfuse -pthread
-endif
+$(OUTPUT)/%.ir: %.c
+	clang $(BPF_FLAGS) -c $< -o $@
 
-$(OUTPUT)/fuse_mnt: CFLAGS += $(VAR_CFLAGS)
-$(OUTPUT)/fuse_mnt: LDLIBS += $(VAR_LDLIBS)
+$(OUTPUT)/%.bpf: $(OUTPUT)/%.ir
+	llc -march=bpf -filetype=obj -o $@ $<
+
+$(OUTPUT)/fd.sh: fd.txt
+	cp $< $@
+	chmod 755 $@
+

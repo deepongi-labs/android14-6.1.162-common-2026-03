@@ -4,7 +4,6 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -352,8 +351,8 @@ static struct clk_regmap_div disp_cc_mdss_byte0_div_clk_src = {
 	.width = 2,
 	.clkr.hw.init = &(struct clk_init_data) {
 		.name = "disp_cc_mdss_byte0_div_clk_src",
-		.parent_hws = (const struct clk_hw*[]) {
-			&disp_cc_mdss_byte0_clk_src.clkr.hw,
+		.parent_data = &(const struct clk_parent_data){
+			.hw = &disp_cc_mdss_byte0_clk_src.clkr.hw
 		},
 		.num_parents = 1,
 		.ops = &clk_regmap_div_ops,
@@ -366,8 +365,8 @@ static struct clk_regmap_div disp_cc_mdss_dp_link_div_clk_src = {
 	.width = 2,
 	.clkr.hw.init = &(struct clk_init_data) {
 		.name = "disp_cc_mdss_dp_link_div_clk_src",
-		.parent_hws = (const struct clk_hw*[]) {
-			&disp_cc_mdss_dp_link_clk_src.clkr.hw,
+		.parent_data = &(const struct clk_parent_data){
+			.hw = &disp_cc_mdss_dp_link_clk_src.clkr.hw
 		},
 		.num_parents = 1,
 		.ops = &clk_regmap_div_ops,
@@ -714,7 +713,7 @@ static int disp_cc_sc7180_probe(struct platform_device *pdev)
 
 	clk_fabia_pll_configure(&disp_cc_pll0, regmap, &disp_cc_pll_config);
 
-	return qcom_cc_really_probe(&pdev->dev, &disp_cc_sc7180_desc, regmap);
+	return qcom_cc_really_probe(pdev, &disp_cc_sc7180_desc, regmap);
 }
 
 static struct platform_driver disp_cc_sc7180_driver = {
@@ -725,7 +724,17 @@ static struct platform_driver disp_cc_sc7180_driver = {
 	},
 };
 
-module_platform_driver(disp_cc_sc7180_driver);
+static int __init disp_cc_sc7180_init(void)
+{
+	return platform_driver_register(&disp_cc_sc7180_driver);
+}
+subsys_initcall(disp_cc_sc7180_init);
+
+static void __exit disp_cc_sc7180_exit(void)
+{
+	platform_driver_unregister(&disp_cc_sc7180_driver);
+}
+module_exit(disp_cc_sc7180_exit);
 
 MODULE_DESCRIPTION("QTI DISP_CC SC7180 Driver");
 MODULE_LICENSE("GPL v2");

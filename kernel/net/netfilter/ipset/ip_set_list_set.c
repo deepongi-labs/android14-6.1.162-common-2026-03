@@ -546,7 +546,7 @@ list_set_cancel_gc(struct ip_set *set)
 	struct list_set *map = set->data;
 
 	if (SET_WITH_TIMEOUT(set))
-		timer_shutdown_sync(&map->gc);
+		del_timer_sync(&map->gc);
 
 	/* Flush list to drop references to other ipsets */
 	list_set_flush(set);
@@ -571,7 +571,7 @@ static const struct ip_set_type_variant set_variant = {
 static void
 list_set_gc(struct timer_list *t)
 {
-	struct list_set *map = timer_container_of(map, t, gc);
+	struct list_set *map = from_timer(map, t, gc);
 	struct ip_set *set = map->set;
 
 	spin_lock_bh(&set->lock);

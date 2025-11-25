@@ -375,9 +375,7 @@ static int do_validate_mem(struct pcmcia_socket *s,
 
 	if (validate && !s->fake_cis) {
 		/* move it to the validated data set */
-		ret = add_interval(&s_data->mem_db_valid, base, size);
-		if (ret)
-			return ret;
+		add_interval(&s_data->mem_db_valid, base, size);
 		sub_interval(&s_data->mem_db, base, size);
 	}
 
@@ -1204,7 +1202,8 @@ static const struct attribute_group rsrc_attributes = {
 	.attrs = pccard_rsrc_attributes,
 };
 
-static int pccard_sysfs_add_rsrc(struct device *dev)
+static int pccard_sysfs_add_rsrc(struct device *dev,
+					   struct class_interface *class_intf)
 {
 	struct pcmcia_socket *s = dev_get_drvdata(dev);
 
@@ -1213,7 +1212,8 @@ static int pccard_sysfs_add_rsrc(struct device *dev)
 	return sysfs_create_group(&dev->kobj, &rsrc_attributes);
 }
 
-static void pccard_sysfs_remove_rsrc(struct device *dev)
+static void pccard_sysfs_remove_rsrc(struct device *dev,
+					       struct class_interface *class_intf)
 {
 	struct pcmcia_socket *s = dev_get_drvdata(dev);
 

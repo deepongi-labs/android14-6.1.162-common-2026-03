@@ -13,7 +13,6 @@
 #include <linux/net_tstamp.h>
 #include <linux/interrupt.h>
 #include <linux/phy/phy.h>
-#include <linux/workqueue.h>
 
 #if defined(CONFIG_ARCH_DMA_ADDR_T_64BIT) || defined(CONFIG_MACB_USE_HWSTAMP)
 #define MACB_EXT_DESC
@@ -83,7 +82,6 @@
 #define GEM_NCFGR		0x0004 /* Network Config */
 #define GEM_USRIO		0x000c /* User IO */
 #define GEM_DMACFG		0x0010 /* DMA Configuration */
-#define GEM_PBUFRXCUT		0x0044 /* RX Partial Store and Forward */
 #define GEM_JML			0x0048 /* Jumbo Max Length */
 #define GEM_HS_MAC_CONFIG	0x0050 /* GEM high speed config */
 #define GEM_HRB			0x0080 /* Hash Bottom */
@@ -184,13 +182,6 @@
 #define GEM_DCFG8		0x029C /* Design Config 8 */
 #define GEM_DCFG10		0x02A4 /* Design Config 10 */
 #define GEM_DCFG12		0x02AC /* Design Config 12 */
-#define GEM_ENST_START_TIME_Q0	0x0800 /* ENST Q0 start time */
-#define GEM_ENST_START_TIME_Q1	0x0804 /* ENST Q1 start time */
-#define GEM_ENST_ON_TIME_Q0	0x0820 /* ENST Q0 on time */
-#define GEM_ENST_ON_TIME_Q1	0x0824 /* ENST Q1 on time */
-#define GEM_ENST_OFF_TIME_Q0	0x0840 /* ENST Q0 off time */
-#define GEM_ENST_OFF_TIME_Q1	0x0844 /* ENST Q1 off time */
-#define GEM_ENST_CONTROL	0x0880 /* ENST control register */
 #define GEM_USX_CONTROL		0x0A80 /* High speed PCS control register */
 #define GEM_USX_STATUS		0x0A88 /* High speed PCS status register */
 
@@ -220,18 +211,13 @@
 
 #define GEM_ISR(hw_q)		(0x0400 + ((hw_q) << 2))
 #define GEM_TBQP(hw_q)		(0x0440 + ((hw_q) << 2))
+#define GEM_TBQPH(hw_q)		(0x04C8)
 #define GEM_RBQP(hw_q)		(0x0480 + ((hw_q) << 2))
 #define GEM_RBQS(hw_q)		(0x04A0 + ((hw_q) << 2))
+#define GEM_RBQPH(hw_q)		(0x04D4)
 #define GEM_IER(hw_q)		(0x0600 + ((hw_q) << 2))
 #define GEM_IDR(hw_q)		(0x0620 + ((hw_q) << 2))
 #define GEM_IMR(hw_q)		(0x0640 + ((hw_q) << 2))
-
-#define GEM_ENST_START_TIME(hw_q)	(0x0800 + ((hw_q) << 2))
-#define GEM_ENST_ON_TIME(hw_q)		(0x0820 + ((hw_q) << 2))
-#define GEM_ENST_OFF_TIME(hw_q)		(0x0840 + ((hw_q) << 2))
-
-/* Bitfields in ENST_CONTROL */
-#define GEM_ENST_DISABLE_QUEUE_OFFSET	16
 
 /* Bitfields in NCR */
 #define MACB_LB_OFFSET		0 /* reserved */
@@ -360,10 +346,6 @@
 #define GEM_ADDR64_OFFSET	30 /* Address bus width - 64b or 32b */
 #define GEM_ADDR64_SIZE		1
 
-
-/* Bitfields in PBUFRXCUT */
-#define GEM_ENCUTTHRU_OFFSET	31 /* Enable RX partial store and forward */
-#define GEM_ENCUTTHRU_SIZE	1
 
 /* Bitfields in NSR */
 #define MACB_NSR_LINK_OFFSET	0 /* pcs_link_state */
@@ -531,8 +513,6 @@
 #define GEM_TX_PKT_BUFF_OFFSET			21
 #define GEM_TX_PKT_BUFF_SIZE			1
 
-#define GEM_RX_PBUF_ADDR_OFFSET			22
-#define GEM_RX_PBUF_ADDR_SIZE			4
 
 /* Bitfields in DCFG5. */
 #define GEM_TSU_OFFSET				8
@@ -541,8 +521,6 @@
 /* Bitfields in DCFG6. */
 #define GEM_PBUF_LSO_OFFSET			27
 #define GEM_PBUF_LSO_SIZE			1
-#define GEM_PBUF_CUTTHRU_OFFSET			25
-#define GEM_PBUF_CUTTHRU_SIZE			1
 #define GEM_DAW64_OFFSET			23
 #define GEM_DAW64_SIZE				1
 
@@ -565,23 +543,6 @@
 /* Bitfields in DCFG12. */
 #define GEM_HIGH_SPEED_OFFSET			26
 #define GEM_HIGH_SPEED_SIZE			1
-
-/* Bitfields in ENST_START_TIME_Qx. */
-#define GEM_START_TIME_SEC_OFFSET		30
-#define GEM_START_TIME_SEC_SIZE			2
-#define GEM_START_TIME_NSEC_OFFSET		0
-#define GEM_START_TIME_NSEC_SIZE		30
-
-/* Bitfields in ENST_ON_TIME_Qx. */
-#define GEM_ON_TIME_OFFSET			0
-#define GEM_ON_TIME_SIZE			17
-
-/* Bitfields in ENST_OFF_TIME_Qx. */
-#define GEM_OFF_TIME_OFFSET			0
-#define GEM_OFF_TIME_SIZE			17
-
-/* Hardware ENST timing registers granularity */
-#define ENST_TIME_GRANULARITY_NS		8
 
 /* Bitfields in USX_CONTROL. */
 #define GEM_USX_CTRL_SPEED_OFFSET		14
@@ -675,10 +636,6 @@
 #define GEM_T2OFST_OFFSET			0 /* offset value */
 #define GEM_T2OFST_SIZE				7
 
-/* Bitfields in queue pointer registers */
-#define MACB_QUEUE_DISABLE_OFFSET		0 /* disable queue */
-#define MACB_QUEUE_DISABLE_SIZE			1
-
 /* Offset for screener type 2 compare values (T2CMPOFST).
  * Note the offset is applied after the specified point,
  * e.g. GEM_T2COMPOFST_ETYPE denotes the EtherType field, so an offset
@@ -739,8 +696,6 @@
 #define GEM_CLK_DIV48				3
 #define GEM_CLK_DIV64				4
 #define GEM_CLK_DIV96				5
-#define GEM_CLK_DIV128				6
-#define GEM_CLK_DIV224				7
 
 /* Constants for MAN register */
 #define MACB_MAN_C22_SOF			1
@@ -767,8 +722,6 @@
 #define MACB_CAPS_NEEDS_RSTONUBR		0x00000100
 #define MACB_CAPS_MIIONRGMII			0x00000200
 #define MACB_CAPS_NEED_TSUCLK			0x00000400
-#define MACB_CAPS_QUEUE_DISABLE			0x00000800
-#define MACB_CAPS_QBV				0x00001000
 #define MACB_CAPS_PCS				0x01000000
 #define MACB_CAPS_HIGH_SPEED			0x02000000
 #define MACB_CAPS_CLK_HW_CHG			0x04000000
@@ -819,6 +772,8 @@
 #define gem_readl_n(port, reg, idx)		(port)->macb_reg_readl((port), GEM_##reg + idx * 4)
 #define gem_writel_n(port, reg, idx, value)	(port)->macb_reg_writel((port), GEM_##reg + idx * 4, (value))
 
+#define PTP_TS_BUFFER_SIZE		128 /* must be power of 2 */
+
 /* Conditional GEM/MACB macros.  These perform the operation to the correct
  * register dependent on whether the device is a GEM or a MACB.  For registers
  * and bitfields that are common across both devices, use macb_{read,write}l
@@ -867,6 +822,11 @@ struct macb_dma_desc_64 {
 struct macb_dma_desc_ptp {
 	u32	ts_1;
 	u32	ts_2;
+};
+
+struct gem_tx_ts {
+	struct sk_buff *skb;
+	struct macb_dma_desc_ptp desc_ptp;
 };
 #endif
 
@@ -981,73 +941,75 @@ struct macb_tx_skb {
  * device stats by a periodic timer.
  */
 struct macb_stats {
-	u64	rx_pause_frames;
-	u64	tx_ok;
-	u64	tx_single_cols;
-	u64	tx_multiple_cols;
-	u64	rx_ok;
-	u64	rx_fcs_errors;
-	u64	rx_align_errors;
-	u64	tx_deferred;
-	u64	tx_late_cols;
-	u64	tx_excessive_cols;
-	u64	tx_underruns;
-	u64	tx_carrier_errors;
-	u64	rx_resource_errors;
-	u64	rx_overruns;
-	u64	rx_symbol_errors;
-	u64	rx_oversize_pkts;
-	u64	rx_jabbers;
-	u64	rx_undersize_pkts;
-	u64	sqe_test_errors;
-	u64	rx_length_mismatch;
-	u64	tx_pause_frames;
+	u32	rx_pause_frames;
+	u32	tx_ok;
+	u32	tx_single_cols;
+	u32	tx_multiple_cols;
+	u32	rx_ok;
+	u32	rx_fcs_errors;
+	u32	rx_align_errors;
+	u32	tx_deferred;
+	u32	tx_late_cols;
+	u32	tx_excessive_cols;
+	u32	tx_underruns;
+	u32	tx_carrier_errors;
+	u32	rx_resource_errors;
+	u32	rx_overruns;
+	u32	rx_symbol_errors;
+	u32	rx_oversize_pkts;
+	u32	rx_jabbers;
+	u32	rx_undersize_pkts;
+	u32	sqe_test_errors;
+	u32	rx_length_mismatch;
+	u32	tx_pause_frames;
 };
 
 struct gem_stats {
-	u64	tx_octets;
-	u64	tx_frames;
-	u64	tx_broadcast_frames;
-	u64	tx_multicast_frames;
-	u64	tx_pause_frames;
-	u64	tx_64_byte_frames;
-	u64	tx_65_127_byte_frames;
-	u64	tx_128_255_byte_frames;
-	u64	tx_256_511_byte_frames;
-	u64	tx_512_1023_byte_frames;
-	u64	tx_1024_1518_byte_frames;
-	u64	tx_greater_than_1518_byte_frames;
-	u64	tx_underrun;
-	u64	tx_single_collision_frames;
-	u64	tx_multiple_collision_frames;
-	u64	tx_excessive_collisions;
-	u64	tx_late_collisions;
-	u64	tx_deferred_frames;
-	u64	tx_carrier_sense_errors;
-	u64	rx_octets;
-	u64	rx_frames;
-	u64	rx_broadcast_frames;
-	u64	rx_multicast_frames;
-	u64	rx_pause_frames;
-	u64	rx_64_byte_frames;
-	u64	rx_65_127_byte_frames;
-	u64	rx_128_255_byte_frames;
-	u64	rx_256_511_byte_frames;
-	u64	rx_512_1023_byte_frames;
-	u64	rx_1024_1518_byte_frames;
-	u64	rx_greater_than_1518_byte_frames;
-	u64	rx_undersized_frames;
-	u64	rx_oversize_frames;
-	u64	rx_jabbers;
-	u64	rx_frame_check_sequence_errors;
-	u64	rx_length_field_frame_errors;
-	u64	rx_symbol_errors;
-	u64	rx_alignment_errors;
-	u64	rx_resource_errors;
-	u64	rx_overruns;
-	u64	rx_ip_header_checksum_errors;
-	u64	rx_tcp_checksum_errors;
-	u64	rx_udp_checksum_errors;
+	u32	tx_octets_31_0;
+	u32	tx_octets_47_32;
+	u32	tx_frames;
+	u32	tx_broadcast_frames;
+	u32	tx_multicast_frames;
+	u32	tx_pause_frames;
+	u32	tx_64_byte_frames;
+	u32	tx_65_127_byte_frames;
+	u32	tx_128_255_byte_frames;
+	u32	tx_256_511_byte_frames;
+	u32	tx_512_1023_byte_frames;
+	u32	tx_1024_1518_byte_frames;
+	u32	tx_greater_than_1518_byte_frames;
+	u32	tx_underrun;
+	u32	tx_single_collision_frames;
+	u32	tx_multiple_collision_frames;
+	u32	tx_excessive_collisions;
+	u32	tx_late_collisions;
+	u32	tx_deferred_frames;
+	u32	tx_carrier_sense_errors;
+	u32	rx_octets_31_0;
+	u32	rx_octets_47_32;
+	u32	rx_frames;
+	u32	rx_broadcast_frames;
+	u32	rx_multicast_frames;
+	u32	rx_pause_frames;
+	u32	rx_64_byte_frames;
+	u32	rx_65_127_byte_frames;
+	u32	rx_128_255_byte_frames;
+	u32	rx_256_511_byte_frames;
+	u32	rx_512_1023_byte_frames;
+	u32	rx_1024_1518_byte_frames;
+	u32	rx_greater_than_1518_byte_frames;
+	u32	rx_undersized_frames;
+	u32	rx_oversize_frames;
+	u32	rx_jabbers;
+	u32	rx_frame_check_sequence_errors;
+	u32	rx_length_field_frame_errors;
+	u32	rx_symbol_errors;
+	u32	rx_alignment_errors;
+	u32	rx_resource_errors;
+	u32	rx_overruns;
+	u32	rx_ip_header_checksum_errors;
+	u32	rx_tcp_checksum_errors;
+	u32	rx_udp_checksum_errors;
 };
 
 /* Describes the name and offset of an individual statistic register, as
@@ -1055,7 +1017,7 @@ struct gem_stats {
  * this register should contribute to.
  */
 struct gem_statistic {
-	char stat_string[ETH_GSTRING_LEN] __nonstring;
+	char stat_string[ETH_GSTRING_LEN];
 	int offset;
 	u32 stat_bits;
 };
@@ -1197,12 +1159,11 @@ struct macb_ptp_info {
 	s32 (*get_ptp_max_adj)(void);
 	unsigned int (*get_tsu_rate)(struct macb *bp);
 	int (*get_ts_info)(struct net_device *dev,
-			   struct kernel_ethtool_ts_info *info);
+			   struct ethtool_ts_info *info);
 	int (*get_hwtst)(struct net_device *netdev,
-			 struct kernel_hwtstamp_config *tstamp_config);
+			 struct ifreq *ifr);
 	int (*set_hwtst)(struct net_device *netdev,
-			 struct kernel_hwtstamp_config *tstamp_config,
-			 struct netlink_ext_ack *extack);
+			 struct ifreq *ifr, int cmd);
 };
 
 struct macb_pm_data {
@@ -1225,7 +1186,6 @@ struct macb_config {
 			    struct clk **hclk, struct clk **tx_clk,
 			    struct clk **rx_clk, struct clk **tsu_clk);
 	int	(*init)(struct platform_device *pdev);
-	unsigned int		max_tx_length;
 	int	jumbo_max_len;
 	const struct macb_usrio_config *usrio;
 };
@@ -1244,13 +1204,10 @@ struct macb_queue {
 	unsigned int		IDR;
 	unsigned int		IMR;
 	unsigned int		TBQP;
+	unsigned int		TBQPH;
 	unsigned int		RBQS;
 	unsigned int		RBQP;
-
-	/* ENST register offsets for this queue */
-	unsigned int		ENST_START_TIME;
-	unsigned int		ENST_ON_TIME;
-	unsigned int		ENST_OFF_TIME;
+	unsigned int		RBQPH;
 
 	/* Lock to protect tx_head and tx_tail */
 	spinlock_t		tx_ptr_lock;
@@ -1271,6 +1228,12 @@ struct macb_queue {
 	void			*rx_buffers;
 	struct napi_struct	napi_rx;
 	struct queue_stats stats;
+
+#ifdef CONFIG_MACB_USE_HWSTAMP
+	struct work_struct	tx_ts_task;
+	unsigned int		tx_ts_head, tx_ts_tail;
+	struct gem_tx_ts	tx_timestamps[PTP_TS_BUFFER_SIZE];
+#endif
 };
 
 struct ethtool_rx_fs_item {
@@ -1291,8 +1254,6 @@ struct macb {
 	u32	(*macb_reg_readl)(struct macb *bp, int offset);
 	void	(*macb_reg_writel)(struct macb *bp, int offset, u32 value);
 
-	struct macb_dma_desc	*rx_ring_tieoff;
-	dma_addr_t		rx_ring_tieoff_dma;
 	size_t			rx_buffer_size;
 
 	unsigned int		rx_ring_size;
@@ -1340,10 +1301,6 @@ struct macb {
 	unsigned int		jumbo_max_len;
 
 	u32			wol;
-	u32			wolopts;
-
-	/* holds value of rx watermark value for pbuf_rxcutthru register */
-	u32			rx_watermark;
 
 	struct macb_ptp_info	*ptp_info;	/* macb-ptp interface */
 
@@ -1357,14 +1314,14 @@ struct macb {
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_clock_info;
 	struct tsu_incr tsu_incr;
-	struct kernel_hwtstamp_config tstamp_config;
+	struct hwtstamp_config tstamp_config;
 
 	/* RX queue filer rule set*/
 	struct ethtool_rx_fs_list rx_fs_list;
 	spinlock_t rx_fs_lock;
 	unsigned int max_tuples;
 
-	struct work_struct	hresp_err_bh_work;
+	struct tasklet_struct	hresp_err_tasklet;
 
 	int	rx_bd_rd_prefetch;
 	int	tx_bd_rd_prefetch;
@@ -1389,14 +1346,14 @@ enum macb_bd_control {
 
 void gem_ptp_init(struct net_device *ndev);
 void gem_ptp_remove(struct net_device *ndev);
-void gem_ptp_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc);
+int gem_ptp_txstamp(struct macb_queue *queue, struct sk_buff *skb, struct macb_dma_desc *des);
 void gem_ptp_rxstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc);
-static inline void gem_ptp_do_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc)
+static inline int gem_ptp_do_txstamp(struct macb_queue *queue, struct sk_buff *skb, struct macb_dma_desc *desc)
 {
-	if (bp->tstamp_config.tx_type == TSTAMP_DISABLED)
-		return;
+	if (queue->bp->tstamp_config.tx_type == TSTAMP_DISABLED)
+		return -ENOTSUPP;
 
-	gem_ptp_txstamp(bp, skb, desc);
+	return gem_ptp_txstamp(queue, skb, desc);
 }
 
 static inline void gem_ptp_do_rxstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc)
@@ -1406,17 +1363,17 @@ static inline void gem_ptp_do_rxstamp(struct macb *bp, struct sk_buff *skb, stru
 
 	gem_ptp_rxstamp(bp, skb, desc);
 }
-
-int gem_get_hwtst(struct net_device *dev,
-		  struct kernel_hwtstamp_config *tstamp_config);
-int gem_set_hwtst(struct net_device *dev,
-		  struct kernel_hwtstamp_config *tstamp_config,
-		  struct netlink_ext_ack *extack);
+int gem_get_hwtst(struct net_device *dev, struct ifreq *rq);
+int gem_set_hwtst(struct net_device *dev, struct ifreq *ifr, int cmd);
 #else
 static inline void gem_ptp_init(struct net_device *ndev) { }
 static inline void gem_ptp_remove(struct net_device *ndev) { }
 
-static inline void gem_ptp_do_txstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc) { }
+static inline int gem_ptp_do_txstamp(struct macb_queue *queue, struct sk_buff *skb, struct macb_dma_desc *desc)
+{
+	return -1;
+}
+
 static inline void gem_ptp_do_rxstamp(struct macb *bp, struct sk_buff *skb, struct macb_dma_desc *desc) { }
 #endif
 
@@ -1427,20 +1384,7 @@ static inline bool macb_is_gem(struct macb *bp)
 
 static inline bool gem_has_ptp(struct macb *bp)
 {
-	return IS_ENABLED(CONFIG_MACB_USE_HWSTAMP) && (bp->caps & MACB_CAPS_GEM_HAS_PTP);
-}
-
-/* ENST Helper functions */
-static inline u64 enst_ns_to_hw_units(size_t ns, u32 speed_mbps)
-{
-	return DIV_ROUND_UP((ns) * (speed_mbps),
-			    (ENST_TIME_GRANULARITY_NS * 1000));
-}
-
-static inline u64 enst_max_hw_interval(u32 speed_mbps)
-{
-	return DIV_ROUND_UP(GENMASK(GEM_ON_TIME_SIZE - 1, 0) *
-			    ENST_TIME_GRANULARITY_NS * 1000, (speed_mbps));
+	return !!(bp->caps & MACB_CAPS_GEM_HAS_PTP);
 }
 
 /**
@@ -1451,23 +1395,6 @@ static inline u64 enst_max_hw_interval(u32 speed_mbps)
 struct macb_platform_data {
 	struct clk	*pclk;
 	struct clk	*hclk;
-};
-
-/**
- * struct macb_queue_enst_config - Configuration for Enhanced Scheduled Traffic
- * @start_time_mask:  Bitmask representing the start time for the queue
- * @on_time_bytes:    "on" time nsec expressed in bytes
- * @off_time_bytes:   "off" time nsec expressed in bytes
- * @queue_id:         Identifier for the queue
- *
- * This structure holds the configuration parameters for an ENST queue,
- * used to control time-based transmission scheduling in the MACB driver.
- */
-struct macb_queue_enst_config {
-	u32 start_time_mask;
-	u32 on_time_bytes;
-	u32 off_time_bytes;
-	u8 queue_id;
 };
 
 #endif /* _MACB_H */

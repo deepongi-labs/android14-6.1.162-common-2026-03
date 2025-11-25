@@ -8,7 +8,6 @@
  * Copyright (C) 2004 Pengutronix
  */
 
-#include <linux/circ_buf.h>
 #include <linux/module.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
@@ -26,6 +25,7 @@
 #include <linux/rational.h>
 #include <linux/slab.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/dma-mapping.h>
@@ -180,6 +180,8 @@
 enum imx_uart_type {
 	IMX1_UART,
 	IMX21_UART,
+	IMX53_UART,
+	IMX6Q_UART,
 };
 
 /* device type dependent stuff */
@@ -210,8 +212,12 @@ struct imx_port {
 
 	struct mctrl_gpios *gpios;
 
-	/* counter to stop 0xff flood */
-	int idle_counter;
+	/* shadow registers */
+	unsigned int ucr1;
+	unsigned int ucr2;
+	unsigned int ucr3;
+	unsigned int ucr4;
+	unsigned int ufcr;
 
 	/* DMA fields */
 	unsigned int		dma_is_enabled:1;
@@ -230,8 +236,6 @@ struct imx_port {
 	unsigned int            saved_reg[10];
 	bool			context_saved;
 
-	bool			last_putchar_was_newline;
-
 	enum imx_tx_state	tx_state;
 	struct hrtimer		trigger_start_tx;
 	struct hrtimer		trigger_stop_tx;
@@ -244,43 +248,87 @@ struct imx_port_ucrs {
 	unsigned int	ucr3;
 };
 
-static const struct imx_uart_data imx_uart_imx1_devdata = {
-	.uts_reg = IMX1_UTS,
-	.devtype = IMX1_UART,
-};
-
-static const struct imx_uart_data imx_uart_imx21_devdata = {
-	.uts_reg = IMX21_UTS,
-	.devtype = IMX21_UART,
+static struct imx_uart_data imx_uart_devdata[] = {
+	[IMX1_UART] = {
+		.uts_reg = IMX1_UTS,
+		.devtype = IMX1_UART,
+	},
+	[IMX21_UART] = {
+		.uts_reg = IMX21_UTS,
+		.devtype = IMX21_UART,
+	},
+	[IMX53_UART] = {
+		.uts_reg = IMX21_UTS,
+		.devtype = IMX53_UART,
+	},
+	[IMX6Q_UART] = {
+		.uts_reg = IMX21_UTS,
+		.devtype = IMX6Q_UART,
+	},
 };
 
 static const struct of_device_id imx_uart_dt_ids[] = {
-	/*
-	 * For reasons unknown to me, some UART devices (e.g. imx6ul's) are
-	 * compatible to fsl,imx6q-uart, but not fsl,imx21-uart, while the
-	 * original imx6q's UART is compatible to fsl,imx21-uart. This driver
-	 * doesn't make any distinction between these two variants.
-	 */
-	{ .compatible = "fsl,imx6q-uart", .data = &imx_uart_imx21_devdata, },
-	{ .compatible = "fsl,imx1-uart", .data = &imx_uart_imx1_devdata, },
-	{ .compatible = "fsl,imx21-uart", .data = &imx_uart_imx21_devdata, },
+	{ .compatible = "fsl,imx6q-uart", .data = &imx_uart_devdata[IMX6Q_UART], },
+	{ .compatible = "fsl,imx53-uart", .data = &imx_uart_devdata[IMX53_UART], },
+	{ .compatible = "fsl,imx1-uart", .data = &imx_uart_devdata[IMX1_UART], },
+	{ .compatible = "fsl,imx21-uart", .data = &imx_uart_devdata[IMX21_UART], },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, imx_uart_dt_ids);
 
-static inline struct imx_port *to_imx_port(struct uart_port *port)
+static void imx_uart_writel(struct imx_port *sport, u32 val, u32 offset)
 {
-        return container_of(port, struct imx_port, port);
-}
-
-static inline void imx_uart_writel(struct imx_port *sport, u32 val, u32 offset)
-{
+	switch (offset) {
+	case UCR1:
+		sport->ucr1 = val;
+		break;
+	case UCR2:
+		sport->ucr2 = val;
+		break;
+	case UCR3:
+		sport->ucr3 = val;
+		break;
+	case UCR4:
+		sport->ucr4 = val;
+		break;
+	case UFCR:
+		sport->ufcr = val;
+		break;
+	default:
+		break;
+	}
 	writel(val, sport->port.membase + offset);
 }
 
-static inline u32 imx_uart_readl(struct imx_port *sport, u32 offset)
+static u32 imx_uart_readl(struct imx_port *sport, u32 offset)
 {
-	return readl(sport->port.membase + offset);
+	switch (offset) {
+	case UCR1:
+		return sport->ucr1;
+		break;
+	case UCR2:
+		/*
+		 * UCR2_SRST is the only bit in the cached registers that might
+		 * differ from the value that was last written. As it only
+		 * automatically becomes one after being cleared, reread
+		 * conditionally.
+		 */
+		if (!(sport->ucr2 & UCR2_SRST))
+			sport->ucr2 = readl(sport->port.membase + offset);
+		return sport->ucr2;
+		break;
+	case UCR3:
+		return sport->ucr3;
+		break;
+	case UCR4:
+		return sport->ucr4;
+		break;
+	case UFCR:
+		return sport->ufcr;
+		break;
+	default:
+		return readl(sport->port.membase + offset);
+	}
 }
 
 static inline unsigned imx_uart_uts_reg(struct imx_port *sport)
@@ -293,6 +341,20 @@ static inline int imx_uart_is_imx1(struct imx_port *sport)
 	return sport->devdata->devtype == IMX1_UART;
 }
 
+static inline int imx_uart_is_imx21(struct imx_port *sport)
+{
+	return sport->devdata->devtype == IMX21_UART;
+}
+
+static inline int imx_uart_is_imx53(struct imx_port *sport)
+{
+	return sport->devdata->devtype == IMX53_UART;
+}
+
+static inline int imx_uart_is_imx6q(struct imx_port *sport)
+{
+	return sport->devdata->devtype == IMX6Q_UART;
+}
 /*
  * Save and restore functions for UCR1, UCR2 and UCR3 registers
  */
@@ -338,42 +400,6 @@ static void start_hrtimer_ms(struct hrtimer *hrt, unsigned long msec)
        hrtimer_start(hrt, ms_to_ktime(msec), HRTIMER_MODE_REL);
 }
 
-/* called with port.lock taken and irqs off */
-static void imx_uart_soft_reset(struct imx_port *sport)
-{
-	int i = 10;
-	u32 ucr2, ubir, ubmr, uts;
-
-	/*
-	 * According to the Reference Manual description of the UART SRST bit:
-	 *
-	 * "Reset the transmit and receive state machines,
-	 * all FIFOs and register USR1, USR2, UBIR, UBMR, UBRC, URXD, UTXD
-	 * and UTS[6-3]".
-	 *
-	 * We don't need to restore the old values from USR1, USR2, URXD and
-	 * UTXD. UBRC is read only, so only save/restore the other three
-	 * registers.
-	 */
-	ubir = imx_uart_readl(sport, UBIR);
-	ubmr = imx_uart_readl(sport, UBMR);
-	uts = imx_uart_readl(sport, IMX21_UTS);
-
-	ucr2 = imx_uart_readl(sport, UCR2);
-	imx_uart_writel(sport, ucr2 & ~UCR2_SRST, UCR2);
-
-	while (!(imx_uart_readl(sport, UCR2) & UCR2_SRST) && (--i > 0))
-		udelay(1);
-
-	/* Restore the registers */
-	imx_uart_writel(sport, ubir, UBIR);
-	imx_uart_writel(sport, ubmr, UBMR);
-	imx_uart_writel(sport, uts, IMX21_UTS);
-
-	sport->idle_counter = 0;
-}
-
-/* called with port.lock taken and irqs off */
 static void imx_uart_disable_loopback_rs485(struct imx_port *sport)
 {
 	unsigned int uts;
@@ -387,7 +413,7 @@ static void imx_uart_disable_loopback_rs485(struct imx_port *sport)
 /* called with port.lock taken and irqs off */
 static void imx_uart_start_rx(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned int ucr1, ucr2;
 
 	ucr1 = imx_uart_readl(sport, UCR1);
@@ -411,7 +437,7 @@ static void imx_uart_start_rx(struct uart_port *port)
 /* called with port.lock taken and irqs off */
 static void imx_uart_stop_tx(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	u32 ucr1, ucr4, usr2;
 
 	if (sport->tx_state == OFF)
@@ -464,8 +490,7 @@ static void imx_uart_stop_tx(struct uart_port *port)
 				imx_uart_rts_inactive(sport, &ucr2);
 			imx_uart_writel(sport, ucr2, UCR2);
 
-			if (!port->rs485_rx_during_tx_gpio)
-				imx_uart_start_rx(port);
+			imx_uart_start_rx(port);
 
 			sport->tx_state = OFF;
 		}
@@ -474,10 +499,9 @@ static void imx_uart_stop_tx(struct uart_port *port)
 	}
 }
 
-/* called with port.lock taken and irqs off */
 static void imx_uart_stop_rx_with_loopback_ctrl(struct uart_port *port, bool loopback)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	u32 ucr1, ucr2, ucr4, uts;
 
 	ucr1 = imx_uart_readl(sport, UCR1);
@@ -522,7 +546,7 @@ static void imx_uart_stop_rx(struct uart_port *port)
 /* called with port.lock taken and irqs off */
 static void imx_uart_enable_ms(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 
 	mod_timer(&sport->timer, jiffies);
 
@@ -534,8 +558,7 @@ static void imx_uart_dma_tx(struct imx_port *sport);
 /* called with port.lock taken and irqs off */
 static inline void imx_uart_transmit_buffer(struct imx_port *sport)
 {
-	struct tty_port *tport = &sport->port.state->port;
-	unsigned char c;
+	struct circ_buf *xmit = &sport->port.state->xmit;
 
 	if (sport->port.x_char) {
 		/* Send next char */
@@ -545,8 +568,7 @@ static inline void imx_uart_transmit_buffer(struct imx_port *sport)
 		return;
 	}
 
-	if (kfifo_is_empty(&tport->xmit_fifo) ||
-			uart_tx_stopped(&sport->port)) {
+	if (uart_circ_empty(xmit) || uart_tx_stopped(&sport->port)) {
 		imx_uart_stop_tx(&sport->port);
 		return;
 	}
@@ -570,26 +592,31 @@ static inline void imx_uart_transmit_buffer(struct imx_port *sport)
 		return;
 	}
 
-	while (!(imx_uart_readl(sport, imx_uart_uts_reg(sport)) & UTS_TXFULL) &&
-			uart_fifo_get(&sport->port, &c))
-		imx_uart_writel(sport, c, URTX0);
+	while (!uart_circ_empty(xmit) &&
+	       !(imx_uart_readl(sport, imx_uart_uts_reg(sport)) & UTS_TXFULL)) {
+		/* send xmit->buf[xmit->tail]
+		 * out the port here */
+		imx_uart_writel(sport, xmit->buf[xmit->tail], URTX0);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		sport->port.icount.tx++;
+	}
 
-	if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
 		uart_write_wakeup(&sport->port);
 
-	if (kfifo_is_empty(&tport->xmit_fifo))
+	if (uart_circ_empty(xmit))
 		imx_uart_stop_tx(&sport->port);
 }
 
 static void imx_uart_dma_tx_callback(void *data)
 {
 	struct imx_port *sport = data;
-	struct tty_port *tport = &sport->port.state->port;
 	struct scatterlist *sgl = &sport->tx_sgl[0];
+	struct circ_buf *xmit = &sport->port.state->xmit;
 	unsigned long flags;
 	u32 ucr1;
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 
 	dma_unmap_sg(sport->port.dev, sgl, sport->dma_tx_nents, DMA_TO_DEVICE);
 
@@ -597,17 +624,18 @@ static void imx_uart_dma_tx_callback(void *data)
 	ucr1 &= ~UCR1_TXDMAEN;
 	imx_uart_writel(sport, ucr1, UCR1);
 
-	uart_xmit_advance(&sport->port, sport->tx_bytes);
+	/* update the stat */
+	xmit->tail = (xmit->tail + sport->tx_bytes) & (UART_XMIT_SIZE - 1);
+	sport->port.icount.tx += sport->tx_bytes;
 
 	dev_dbg(sport->port.dev, "we finish the TX DMA.\n");
 
 	sport->dma_is_txing = 0;
 
-	if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
 		uart_write_wakeup(&sport->port);
 
-	if (!kfifo_is_empty(&tport->xmit_fifo) &&
-			!uart_tx_stopped(&sport->port))
+	if (!uart_circ_empty(xmit) && !uart_tx_stopped(&sport->port))
 		imx_uart_dma_tx(sport);
 	else if (sport->port.rs485.flags & SER_RS485_ENABLED) {
 		u32 ucr4 = imx_uart_readl(sport, UCR4);
@@ -615,13 +643,13 @@ static void imx_uart_dma_tx_callback(void *data)
 		imx_uart_writel(sport, ucr4, UCR4);
 	}
 
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
 /* called with port.lock taken and irqs off */
 static void imx_uart_dma_tx(struct imx_port *sport)
 {
-	struct tty_port *tport = &sport->port.state->port;
+	struct circ_buf *xmit = &sport->port.state->xmit;
 	struct scatterlist *sgl = sport->tx_sgl;
 	struct dma_async_tx_descriptor *desc;
 	struct dma_chan	*chan = sport->dma_chan_tx;
@@ -636,10 +664,18 @@ static void imx_uart_dma_tx(struct imx_port *sport)
 	ucr4 &= ~UCR4_TCEN;
 	imx_uart_writel(sport, ucr4, UCR4);
 
-	sg_init_table(sgl, ARRAY_SIZE(sport->tx_sgl));
-	sport->tx_bytes = kfifo_len(&tport->xmit_fifo);
-	sport->dma_tx_nents = kfifo_dma_out_prepare(&tport->xmit_fifo, sgl,
-			ARRAY_SIZE(sport->tx_sgl), sport->tx_bytes);
+	sport->tx_bytes = uart_circ_chars_pending(xmit);
+
+	if (xmit->tail < xmit->head || xmit->head == 0) {
+		sport->dma_tx_nents = 1;
+		sg_init_one(sgl, xmit->buf + xmit->tail, sport->tx_bytes);
+	} else {
+		sport->dma_tx_nents = 2;
+		sg_init_table(sgl, 2);
+		sg_set_buf(sgl, xmit->buf + xmit->tail,
+				UART_XMIT_SIZE - xmit->tail);
+		sg_set_buf(sgl + 1, xmit->buf, xmit->head);
+	}
 
 	ret = dma_map_sg(dev, sgl, sport->dma_tx_nents, DMA_TO_DEVICE);
 	if (ret == 0) {
@@ -657,7 +693,8 @@ static void imx_uart_dma_tx(struct imx_port *sport)
 	desc->callback = imx_uart_dma_tx_callback;
 	desc->callback_param = sport;
 
-	dev_dbg(dev, "TX: prepare to send %u bytes by DMA.\n", sport->tx_bytes);
+	dev_dbg(dev, "TX: prepare to send %lu bytes by DMA.\n",
+			uart_circ_chars_pending(xmit));
 
 	ucr1 = imx_uart_readl(sport, UCR1);
 	ucr1 |= UCR1_TXDMAEN;
@@ -673,11 +710,10 @@ static void imx_uart_dma_tx(struct imx_port *sport)
 /* called with port.lock taken and irqs off */
 static void imx_uart_start_tx(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
-	struct tty_port *tport = &sport->port.state->port;
+	struct imx_port *sport = (struct imx_port *)port;
 	u32 ucr1;
 
-	if (!sport->port.x_char && kfifo_is_empty(&tport->xmit_fifo))
+	if (!sport->port.x_char && uart_circ_empty(&port->state->xmit))
 		return;
 
 	/*
@@ -700,8 +736,7 @@ static void imx_uart_start_tx(struct uart_port *port)
 			 * with loopback enabled because that will make our
 			 * transmitted data being just looped to RX.
 			 */
-			if (!(port->rs485.flags & SER_RS485_RX_DURING_TX) &&
-			    !port->rs485_rx_during_tx_gpio)
+			if (!(port->rs485.flags & SER_RS485_RX_DURING_TX))
 				imx_uart_stop_rx_with_loopback_ctrl(port, false);
 
 			sport->tx_state = WAIT_AFTER_RTS;
@@ -753,7 +788,7 @@ static void imx_uart_start_tx(struct uart_port *port)
 			return;
 		}
 
-		if (!kfifo_is_empty(&tport->xmit_fifo) &&
+		if (!uart_circ_empty(&port->state->xmit) &&
 		    !uart_tx_stopped(port))
 			imx_uart_dma_tx(sport);
 		return;
@@ -767,22 +802,7 @@ static irqreturn_t __imx_uart_rtsint(int irq, void *dev_id)
 
 	imx_uart_writel(sport, USR1_RTSD, USR1);
 	usr1 = imx_uart_readl(sport, USR1) & USR1_RTSS;
-	/*
-	 * Update sport->old_status here, so any follow-up calls to
-	 * imx_uart_mctrl_check() will be able to recognize that RTS
-	 * state changed since last imx_uart_mctrl_check() call.
-	 *
-	 * In case RTS has been detected as asserted here and later on
-	 * deasserted by the time imx_uart_mctrl_check() was called,
-	 * imx_uart_mctrl_check() can detect the RTS state change and
-	 * trigger uart_handle_cts_change() to unblock the port for
-	 * further TX transfers.
-	 */
-	if (usr1 & USR1_RTSS)
-		sport->old_status |= TIOCM_CTS;
-	else
-		sport->old_status &= ~TIOCM_CTS;
-	uart_handle_cts_change(&sport->port, usr1);
+	uart_handle_cts_change(&sport->port, !!usr1);
 	wake_up_interruptible(&sport->port.state->port.delta_msr_wait);
 
 	return IRQ_HANDLED;
@@ -793,11 +813,11 @@ static irqreturn_t imx_uart_rtsint(int irq, void *dev_id)
 	struct imx_port *sport = dev_id;
 	irqreturn_t ret;
 
-	uart_port_lock(&sport->port);
+	spin_lock(&sport->port.lock);
 
 	ret = __imx_uart_rtsint(irq, dev_id);
 
-	uart_port_unlock(&sport->port);
+	spin_unlock(&sport->port.lock);
 
 	return ret;
 }
@@ -806,82 +826,39 @@ static irqreturn_t imx_uart_txint(int irq, void *dev_id)
 {
 	struct imx_port *sport = dev_id;
 
-	uart_port_lock(&sport->port);
+	spin_lock(&sport->port.lock);
 	imx_uart_transmit_buffer(sport);
-	uart_port_unlock(&sport->port);
+	spin_unlock(&sport->port.lock);
 	return IRQ_HANDLED;
 }
 
-/* Check if hardware Rx flood is in progress, and issue soft reset to stop it.
- * This is to be called from Rx ISRs only when some bytes were actually
- * received.
- *
- * A way to reproduce the flood (checked on iMX6SX) is: open iMX UART at 9600
- * 8N1, and from external source send 0xf0 char at 115200 8N1. In about 90% of
- * cases this starts a flood of "receiving" of 0xff characters by the iMX6 UART
- * that is terminated by any activity on RxD line, or could be stopped by
- * issuing soft reset to the UART (just stop/start of RX does not help). Note
- * that what we do here is sending isolated start bit about 2.4 times shorter
- * than it is to be on UART configured baud rate.
- *
- * Called with port.lock taken and irqs off.
- */
-static void imx_uart_check_flood(struct imx_port *sport, u32 usr2)
-{
-	/* To detect hardware 0xff flood we monitor RxD line between RX
-	 * interrupts to isolate "receiving" of char(s) with no activity
-	 * on RxD line, that'd never happen on actual data transfers.
-	 *
-	 * We use USR2_WAKE bit to check for activity on RxD line, but we have a
-	 * race here if we clear USR2_WAKE when receiving of a char is in
-	 * progress, so we might get RX interrupt later with USR2_WAKE bit
-	 * cleared. Note though that as we don't try to clear USR2_WAKE when we
-	 * detected no activity, this race may hide actual activity only once.
-	 *
-	 * Yet another case where receive interrupt may occur without RxD
-	 * activity is expiration of aging timer, so we consider this as well.
-	 *
-	 * We use 'idle_counter' to ensure that we got at least so many RX
-	 * interrupts without any detected activity on RxD line. 2 cases
-	 * described plus 1 to be on the safe side gives us a margin of 3,
-	 * below. In practice I was not able to produce a false positive to
-	 * induce soft reset at regular data transfers even using 1 as the
-	 * margin, so 3 is actually very strong.
-	 *
-	 * We count interrupts, not chars in 'idle-counter' for simplicity.
-	 */
-
-	if (usr2 & USR2_WAKE) {
-		imx_uart_writel(sport, USR2_WAKE, USR2);
-		sport->idle_counter = 0;
-	} else if (++sport->idle_counter > 3) {
-		dev_warn(sport->port.dev, "RX flood detected: soft reset.");
-		imx_uart_soft_reset(sport); /* also clears 'sport->idle_counter' */
-	}
-}
-
-/* called with port.lock taken and irqs off */
 static irqreturn_t __imx_uart_rxint(int irq, void *dev_id)
 {
 	struct imx_port *sport = dev_id;
+	unsigned int rx, flg, ignored = 0;
 	struct tty_port *port = &sport->port.state->port;
-	u32 usr2, rx;
 
-	/* If we received something, check for 0xff flood */
-	usr2 = imx_uart_readl(sport, USR2);
-	if (usr2 & USR2_RDR)
-		imx_uart_check_flood(sport, usr2);
+	while (imx_uart_readl(sport, USR2) & USR2_RDR) {
+		u32 usr2;
 
-	while ((rx = imx_uart_readl(sport, URXD0)) & URXD_CHARRDY) {
-		unsigned int flg = TTY_NORMAL;
+		flg = TTY_NORMAL;
 		sport->port.icount.rx++;
 
+		rx = imx_uart_readl(sport, URXD0);
+
+		usr2 = imx_uart_readl(sport, USR2);
+		if (usr2 & USR2_BRCD) {
+			imx_uart_writel(sport, USR2_BRCD, USR2);
+			if (uart_handle_break(&sport->port))
+				continue;
+		}
+
+		if (uart_handle_sysrq_char(&sport->port, (unsigned char)rx))
+			continue;
+
 		if (unlikely(rx & URXD_ERR)) {
-			if (rx & URXD_BRK) {
+			if (rx & URXD_BRK)
 				sport->port.icount.brk++;
-				if (uart_handle_break(&sport->port))
-					continue;
-			}
 			else if (rx & URXD_PRERR)
 				sport->port.icount.parity++;
 			else if (rx & URXD_FRMERR)
@@ -889,8 +866,11 @@ static irqreturn_t __imx_uart_rxint(int irq, void *dev_id)
 			if (rx & URXD_OVRRUN)
 				sport->port.icount.overrun++;
 
-			if (rx & sport->port.ignore_status_mask)
+			if (rx & sport->port.ignore_status_mask) {
+				if (++ignored > 100)
+					goto out;
 				continue;
+			}
 
 			rx &= (sport->port.read_status_mask | 0xFF);
 
@@ -904,17 +884,16 @@ static irqreturn_t __imx_uart_rxint(int irq, void *dev_id)
 				flg = TTY_OVERRUN;
 
 			sport->port.sysrq = 0;
-		} else if (uart_handle_sysrq_char(&sport->port, (unsigned char)rx)) {
-			continue;
 		}
 
 		if (sport->port.ignore_status_mask & URXD_DUMMY_READ)
-			continue;
+			goto out;
 
 		if (tty_insert_flip_char(port, rx, flg) == 0)
 			sport->port.icount.buf_overrun++;
 	}
 
+out:
 	tty_flip_buffer_push(port);
 
 	return IRQ_HANDLED;
@@ -925,11 +904,11 @@ static irqreturn_t imx_uart_rxint(int irq, void *dev_id)
 	struct imx_port *sport = dev_id;
 	irqreturn_t ret;
 
-	uart_port_lock(&sport->port);
+	spin_lock(&sport->port.lock);
 
 	ret = __imx_uart_rxint(irq, dev_id);
 
-	uart_port_unlock(&sport->port);
+	spin_unlock(&sport->port.lock);
 
 	return ret;
 }
@@ -939,7 +918,6 @@ static void imx_uart_clear_rx_errors(struct imx_port *sport);
 /*
  * We have a modem side uart, so the meanings of RTS and CTS are inverted.
  */
-/* called with port.lock taken and irqs off */
 static unsigned int imx_uart_get_hwmctrl(struct imx_port *sport)
 {
 	unsigned int tmp = TIOCM_DSR;
@@ -962,8 +940,6 @@ static unsigned int imx_uart_get_hwmctrl(struct imx_port *sport)
 
 /*
  * Handle any change of modem status signal since we were last called.
- *
- * Called with port.lock taken and irqs off.
  */
 static void imx_uart_mctrl_check(struct imx_port *sport)
 {
@@ -995,7 +971,7 @@ static irqreturn_t imx_uart_int(int irq, void *dev_id)
 	unsigned int usr1, usr2, ucr1, ucr2, ucr3, ucr4;
 	irqreturn_t ret = IRQ_NONE;
 
-	uart_port_lock(&sport->port);
+	spin_lock(&sport->port.lock);
 
 	usr1 = imx_uart_readl(sport, USR1);
 	usr2 = imx_uart_readl(sport, USR2);
@@ -1065,7 +1041,7 @@ static irqreturn_t imx_uart_int(int irq, void *dev_id)
 		ret = IRQ_HANDLED;
 	}
 
-	uart_port_unlock(&sport->port);
+	spin_unlock(&sport->port.lock);
 
 	return ret;
 }
@@ -1075,7 +1051,7 @@ static irqreturn_t imx_uart_int(int irq, void *dev_id)
  */
 static unsigned int imx_uart_tx_empty(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned int ret;
 
 	ret = (imx_uart_readl(sport, USR2) & USR2_TXDC) ?  TIOCSER_TEMT : 0;
@@ -1090,7 +1066,7 @@ static unsigned int imx_uart_tx_empty(struct uart_port *port)
 /* called with port.lock taken and irqs off */
 static unsigned int imx_uart_get_mctrl(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned int ret = imx_uart_get_hwmctrl(sport);
 
 	mctrl_gpio_get(sport->gpios, &ret);
@@ -1101,7 +1077,7 @@ static unsigned int imx_uart_get_mctrl(struct uart_port *port)
 /* called with port.lock taken and irqs off */
 static void imx_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	u32 ucr3, uts;
 
 	if (!(port->rs485.flags & SER_RS485_ENABLED)) {
@@ -1144,11 +1120,11 @@ static void imx_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
  */
 static void imx_uart_break_ctl(struct uart_port *port, int break_state)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned long flags;
 	u32 ucr1;
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 
 	ucr1 = imx_uart_readl(sport, UCR1) & ~UCR1_SNDBRK;
 
@@ -1157,7 +1133,7 @@ static void imx_uart_break_ctl(struct uart_port *port, int break_state)
 
 	imx_uart_writel(sport, ucr1, UCR1);
 
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
 /*
@@ -1166,13 +1142,13 @@ static void imx_uart_break_ctl(struct uart_port *port, int break_state)
  */
 static void imx_uart_timeout(struct timer_list *t)
 {
-	struct imx_port *sport = timer_container_of(sport, t, timer);
+	struct imx_port *sport = from_timer(sport, t, timer);
 	unsigned long flags;
 
 	if (sport->port.state) {
-		uart_port_lock_irqsave(&sport->port, &flags);
+		spin_lock_irqsave(&sport->port.lock, flags);
 		imx_uart_mctrl_check(sport);
-		uart_port_unlock_irqrestore(&sport->port, flags);
+		spin_unlock_irqrestore(&sport->port.lock, flags);
 
 		mod_timer(&sport->timer, jiffies + MCTRL_TIMEOUT);
 	}
@@ -1202,62 +1178,55 @@ static void imx_uart_dma_rx_callback(void *data)
 	status = dmaengine_tx_status(chan, sport->rx_cookie, &state);
 
 	if (status == DMA_ERROR) {
-		uart_port_lock(&sport->port);
 		imx_uart_clear_rx_errors(sport);
-		uart_port_unlock(&sport->port);
 		return;
 	}
 
-	/*
-	 * The state-residue variable represents the empty space
-	 * relative to the entire buffer. Taking this in consideration
-	 * the head is always calculated base on the buffer total
-	 * length - DMA transaction residue. The UART script from the
-	 * SDMA firmware will jump to the next buffer descriptor,
-	 * once a DMA transaction if finalized (IMX53 RM - A.4.1.2.4).
-	 * Taking this in consideration the tail is always at the
-	 * beginning of the buffer descriptor that contains the head.
-	 */
+	if (!(sport->port.ignore_status_mask & URXD_DUMMY_READ)) {
 
-	/* Calculate the head */
-	rx_ring->head = sg_dma_len(sgl) - state.residue;
+		/*
+		 * The state-residue variable represents the empty space
+		 * relative to the entire buffer. Taking this in consideration
+		 * the head is always calculated base on the buffer total
+		 * length - DMA transaction residue. The UART script from the
+		 * SDMA firmware will jump to the next buffer descriptor,
+		 * once a DMA transaction if finalized (IMX53 RM - A.4.1.2.4).
+		 * Taking this in consideration the tail is always at the
+		 * beginning of the buffer descriptor that contains the head.
+		 */
 
-	/* Calculate the tail. */
-	bd_size = sg_dma_len(sgl) / sport->rx_periods;
-	rx_ring->tail = ((rx_ring->head-1) / bd_size) * bd_size;
+		/* Calculate the head */
+		rx_ring->head = sg_dma_len(sgl) - state.residue;
 
-	if (rx_ring->head <= sg_dma_len(sgl) &&
-	    rx_ring->head > rx_ring->tail) {
+		/* Calculate the tail. */
+		bd_size = sg_dma_len(sgl) / sport->rx_periods;
+		rx_ring->tail = ((rx_ring->head-1) / bd_size) * bd_size;
 
-		/* Move data from tail to head */
-		r_bytes = rx_ring->head - rx_ring->tail;
+		if (rx_ring->head <= sg_dma_len(sgl) &&
+		    rx_ring->head > rx_ring->tail) {
 
-		/* If we received something, check for 0xff flood */
-		uart_port_lock(&sport->port);
-		imx_uart_check_flood(sport, imx_uart_readl(sport, USR2));
-		uart_port_unlock(&sport->port);
-
-		if (!(sport->port.ignore_status_mask & URXD_DUMMY_READ)) {
+			/* Move data from tail to head */
+			r_bytes = rx_ring->head - rx_ring->tail;
 
 			/* CPU claims ownership of RX DMA buffer */
 			dma_sync_sg_for_cpu(sport->port.dev, sgl, 1,
-					    DMA_FROM_DEVICE);
+				DMA_FROM_DEVICE);
 
 			w_bytes = tty_insert_flip_string(port,
-							 sport->rx_buf + rx_ring->tail, r_bytes);
+				sport->rx_buf + rx_ring->tail, r_bytes);
 
 			/* UART retrieves ownership of RX DMA buffer */
 			dma_sync_sg_for_device(sport->port.dev, sgl, 1,
-					       DMA_FROM_DEVICE);
+				DMA_FROM_DEVICE);
 
 			if (w_bytes != r_bytes)
 				sport->port.icount.buf_overrun++;
 
 			sport->port.icount.rx += w_bytes;
+		} else	{
+			WARN_ON(rx_ring->head > sg_dma_len(sgl));
+			WARN_ON(rx_ring->head <= rx_ring->tail);
 		}
-	} else	{
-		WARN_ON(rx_ring->head > sg_dma_len(sgl));
-		WARN_ON(rx_ring->head <= rx_ring->tail);
 	}
 
 	if (w_bytes) {
@@ -1303,7 +1272,6 @@ static int imx_uart_start_rx_dma(struct imx_port *sport)
 	return 0;
 }
 
-/* called with port.lock taken and irqs off */
 static void imx_uart_clear_rx_errors(struct imx_port *sport)
 {
 	struct tty_port *port = &sport->port.state->port;
@@ -1333,8 +1301,6 @@ static void imx_uart_clear_rx_errors(struct imx_port *sport)
 		sport->port.icount.overrun++;
 		imx_uart_writel(sport, USR2_ORE, USR2);
 	}
-
-	sport->idle_counter = 0;
 
 }
 
@@ -1377,18 +1343,15 @@ static int imx_uart_dma_init(struct imx_port *sport)
 {
 	struct dma_slave_config slave_config = {};
 	struct device *dev = sport->port.dev;
-	struct dma_chan *chan;
 	int ret;
 
 	/* Prepare for RX : */
-	chan = dma_request_chan(dev, "rx");
-	if (IS_ERR(chan)) {
+	sport->dma_chan_rx = dma_request_slave_channel(dev, "rx");
+	if (!sport->dma_chan_rx) {
 		dev_dbg(dev, "cannot get the DMA channel.\n");
-		sport->dma_chan_rx = NULL;
-		ret = PTR_ERR(chan);
+		ret = -EINVAL;
 		goto err;
 	}
-	sport->dma_chan_rx = chan;
 
 	slave_config.direction = DMA_DEV_TO_MEM;
 	slave_config.src_addr = sport->port.mapbase + URXD0;
@@ -1410,14 +1373,12 @@ static int imx_uart_dma_init(struct imx_port *sport)
 	sport->rx_ring.buf = sport->rx_buf;
 
 	/* Prepare for TX : */
-	chan = dma_request_chan(dev, "tx");
-	if (IS_ERR(chan)) {
+	sport->dma_chan_tx = dma_request_slave_channel(dev, "tx");
+	if (!sport->dma_chan_tx) {
 		dev_err(dev, "cannot get the TX DMA channel!\n");
-		sport->dma_chan_tx = NULL;
-		ret = PTR_ERR(chan);
+		ret = -EINVAL;
 		goto err;
 	}
-	sport->dma_chan_tx = chan;
 
 	slave_config.direction = DMA_MEM_TO_DEV;
 	slave_config.dst_addr = sport->port.mapbase + URTX0;
@@ -1435,7 +1396,6 @@ err:
 	return ret;
 }
 
-/* called with port.lock taken and irqs off */
 static void imx_uart_enable_dma(struct imx_port *sport)
 {
 	u32 ucr1;
@@ -1469,8 +1429,8 @@ static void imx_uart_disable_dma(struct imx_port *sport)
 
 static int imx_uart_startup(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
-	int retval;
+	struct imx_port *sport = (struct imx_port *)port;
+	int retval, i;
 	unsigned long flags;
 	int dma_is_inited = 0;
 	u32 ucr1, ucr2, ucr3, ucr4;
@@ -1503,15 +1463,19 @@ static int imx_uart_startup(struct uart_port *port)
 	imx_uart_writel(sport, ucr4 & ~UCR4_DREN, UCR4);
 
 	/* Can we enable the DMA support? */
-	if (!uart_console(port) && imx_uart_dma_init(sport) == 0) {
-		lockdep_set_subclass(&port->lock, 1);
+	if (!uart_console(port) && imx_uart_dma_init(sport) == 0)
 		dma_is_inited = 1;
-	}
 
-	uart_port_lock_irqsave(&sport->port, &flags);
-
+	spin_lock_irqsave(&sport->port.lock, flags);
 	/* Reset fifo's and state machines */
-	imx_uart_soft_reset(sport);
+	i = 100;
+
+	ucr2 = imx_uart_readl(sport, UCR2);
+	ucr2 &= ~UCR2_SRST;
+	imx_uart_writel(sport, ucr2, UCR2);
+
+	while (!(imx_uart_readl(sport, UCR2) & UCR2_SRST) && (--i > 0))
+		udelay(1);
 
 	/*
 	 * Finally, clear and enable interrupts
@@ -1581,17 +1545,16 @@ static int imx_uart_startup(struct uart_port *port)
 
 	imx_uart_disable_loopback_rs485(sport);
 
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	return 0;
 }
 
 static void imx_uart_shutdown(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned long flags;
 	u32 ucr1, ucr2, ucr4, uts;
-	int loops;
 
 	if (sport->dma_is_enabled) {
 		dmaengine_terminate_sync(sport->dma_chan_tx);
@@ -1607,36 +1570,35 @@ static void imx_uart_shutdown(struct uart_port *port)
 			sport->dma_is_rxing = 0;
 		}
 
-		uart_port_lock_irqsave(&sport->port, &flags);
+		spin_lock_irqsave(&sport->port.lock, flags);
 		imx_uart_stop_tx(port);
 		imx_uart_stop_rx(port);
 		imx_uart_disable_dma(sport);
-		uart_port_unlock_irqrestore(&sport->port, flags);
+		spin_unlock_irqrestore(&sport->port.lock, flags);
 		imx_uart_dma_exit(sport);
 	}
 
-	mctrl_gpio_disable_ms_sync(sport->gpios);
+	mctrl_gpio_disable_ms(sport->gpios);
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 	ucr2 = imx_uart_readl(sport, UCR2);
 	ucr2 &= ~(UCR2_TXEN | UCR2_ATEN);
 	imx_uart_writel(sport, ucr2, UCR2);
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	/*
 	 * Stop our timer.
 	 */
-	timer_delete_sync(&sport->timer);
+	del_timer_sync(&sport->timer);
 
 	/*
 	 * Disable all interrupts, port and break condition.
 	 */
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 
 	ucr1 = imx_uart_readl(sport, UCR1);
-	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN | UCR1_RXDMAEN |
-		  UCR1_ATDMAEN | UCR1_SNDBRK);
+	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN | UCR1_RXDMAEN | UCR1_ATDMAEN);
 	/* See SER_RS485_ENABLED/UTS_LOOP comment in imx_uart_probe() */
 	if (port->rs485.flags & SER_RS485_ENABLED &&
 	    port->rs485.flags & SER_RS485_RTS_ON_SEND &&
@@ -1654,57 +1616,7 @@ static void imx_uart_shutdown(struct uart_port *port)
 	ucr4 &= ~UCR4_TCEN;
 	imx_uart_writel(sport, ucr4, UCR4);
 
-	/*
-	 * We have to ensure the tx state machine ends up in OFF. This
-	 * is especially important for rs485 where we must not leave
-	 * the RTS signal high, blocking the bus indefinitely.
-	 *
-	 * All interrupts are now disabled, so imx_uart_stop_tx() will
-	 * no longer be called from imx_uart_transmit_buffer(). It may
-	 * still be called via the hrtimers, and if those are in play,
-	 * we have to honour the delays.
-	 */
-	if (sport->tx_state == WAIT_AFTER_RTS || sport->tx_state == SEND)
-		imx_uart_stop_tx(port);
-
-	/*
-	 * In many cases (rs232 mode, or if tx_state was
-	 * WAIT_AFTER_RTS, or if tx_state was SEND and there is no
-	 * delay_rts_after_send), this will have moved directly to
-	 * OFF. In rs485 mode, tx_state might already have been
-	 * WAIT_AFTER_SEND and the hrtimer thus already started, or
-	 * the above imx_uart_stop_tx() call could have started it. In
-	 * those cases, we have to wait for the hrtimer to fire and
-	 * complete the transition to OFF.
-	 */
-	loops = port->rs485.flags & SER_RS485_ENABLED ?
-		port->rs485.delay_rts_after_send : 0;
-	while (sport->tx_state != OFF && loops--) {
-		uart_port_unlock_irqrestore(&sport->port, flags);
-		msleep(1);
-		uart_port_lock_irqsave(&sport->port, &flags);
-	}
-
-	if (sport->tx_state != OFF) {
-		dev_warn(sport->port.dev, "unexpected tx_state %d\n",
-			 sport->tx_state);
-		/*
-		 * This machine may be busted, but ensure the RTS
-		 * signal is inactive in order not to block other
-		 * devices.
-		 */
-		if (port->rs485.flags & SER_RS485_ENABLED) {
-			ucr2 = imx_uart_readl(sport, UCR2);
-			if (port->rs485.flags & SER_RS485_RTS_AFTER_SEND)
-				imx_uart_rts_active(sport, &ucr2);
-			else
-				imx_uart_rts_inactive(sport, &ucr2);
-			imx_uart_writel(sport, ucr2, UCR2);
-		}
-		sport->tx_state = OFF;
-	}
-
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	clk_disable_unprepare(sport->clk_per);
 	clk_disable_unprepare(sport->clk_ipg);
@@ -1713,8 +1625,10 @@ static void imx_uart_shutdown(struct uart_port *port)
 /* called with port.lock taken and irqs off */
 static void imx_uart_flush_buffer(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	struct scatterlist *sgl = &sport->tx_sgl[0];
+	u32 ucr2;
+	int i = 100, ubir, ubmr, uts;
 
 	if (!sport->dma_chan_tx)
 		return;
@@ -1732,15 +1646,39 @@ static void imx_uart_flush_buffer(struct uart_port *port)
 		sport->dma_is_txing = 0;
 	}
 
-	imx_uart_soft_reset(sport);
+	/*
+	 * According to the Reference Manual description of the UART SRST bit:
+	 *
+	 * "Reset the transmit and receive state machines,
+	 * all FIFOs and register USR1, USR2, UBIR, UBMR, UBRC, URXD, UTXD
+	 * and UTS[6-3]".
+	 *
+	 * We don't need to restore the old values from USR1, USR2, URXD and
+	 * UTXD. UBRC is read only, so only save/restore the other three
+	 * registers.
+	 */
+	ubir = imx_uart_readl(sport, UBIR);
+	ubmr = imx_uart_readl(sport, UBMR);
+	uts = imx_uart_readl(sport, IMX21_UTS);
 
+	ucr2 = imx_uart_readl(sport, UCR2);
+	ucr2 &= ~UCR2_SRST;
+	imx_uart_writel(sport, ucr2, UCR2);
+
+	while (!(imx_uart_readl(sport, UCR2) & UCR2_SRST) && (--i > 0))
+		udelay(1);
+
+	/* Restore the registers */
+	imx_uart_writel(sport, ubir, UBIR);
+	imx_uart_writel(sport, ubmr, UBMR);
+	imx_uart_writel(sport, uts, IMX21_UTS);
 }
 
 static void
 imx_uart_set_termios(struct uart_port *port, struct ktermios *termios,
 		     const struct ktermios *old)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned long flags;
 	u32 ucr2, old_ucr2, ufcr;
 	unsigned int baud, quot;
@@ -1759,7 +1697,7 @@ imx_uart_set_termios(struct uart_port *port, struct ktermios *termios,
 		old_csize = CS8;
 	}
 
-	timer_delete_sync(&sport->timer);
+	del_timer_sync(&sport->timer);
 
 	/*
 	 * Ask the core to calculate the divisor for us.
@@ -1767,7 +1705,7 @@ imx_uart_set_termios(struct uart_port *port, struct ktermios *termios,
 	baud = uart_get_baud_rate(port, termios, old, 50, port->uartclk / 16);
 	quot = uart_get_divisor(port, baud);
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 
 	/*
 	 * Read current UCR2 and save it for future use, then clear all the bits
@@ -1895,12 +1833,14 @@ imx_uart_set_termios(struct uart_port *port, struct ktermios *termios,
 	if (UART_ENABLE_MS(&sport->port, termios->c_cflag))
 		imx_uart_enable_ms(&sport->port);
 
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
 static const char *imx_uart_type(struct uart_port *port)
 {
-	return port->type == PORT_IMX ? "IMX" : NULL;
+	struct imx_port *sport = (struct imx_port *)port;
+
+	return sport->port.type == PORT_IMX ? "IMX" : NULL;
 }
 
 /*
@@ -1908,8 +1848,10 @@ static const char *imx_uart_type(struct uart_port *port)
  */
 static void imx_uart_config_port(struct uart_port *port, int flags)
 {
+	struct imx_port *sport = (struct imx_port *)port;
+
 	if (flags & UART_CONFIG_TYPE)
-		port->type = PORT_IMX;
+		sport->port.type = PORT_IMX;
 }
 
 /*
@@ -1920,19 +1862,20 @@ static void imx_uart_config_port(struct uart_port *port, int flags)
 static int
 imx_uart_verify_port(struct uart_port *port, struct serial_struct *ser)
 {
+	struct imx_port *sport = (struct imx_port *)port;
 	int ret = 0;
 
 	if (ser->type != PORT_UNKNOWN && ser->type != PORT_IMX)
 		ret = -EINVAL;
-	if (port->irq != ser->irq)
+	if (sport->port.irq != ser->irq)
 		ret = -EINVAL;
 	if (ser->io_type != UPIO_MEM)
 		ret = -EINVAL;
-	if (port->uartclk / 16 != ser->baud_base)
+	if (sport->port.uartclk / 16 != ser->baud_base)
 		ret = -EINVAL;
-	if (port->mapbase != (unsigned long)ser->iomem_base)
+	if (sport->port.mapbase != (unsigned long)ser->iomem_base)
 		ret = -EINVAL;
-	if (port->iobase != ser->port)
+	if (sport->port.iobase != ser->port)
 		ret = -EINVAL;
 	if (ser->hub6 != 0)
 		ret = -EINVAL;
@@ -1943,7 +1886,7 @@ imx_uart_verify_port(struct uart_port *port, struct serial_struct *ser)
 
 static int imx_uart_poll_init(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned long flags;
 	u32 ucr1, ucr2;
 	int retval;
@@ -1957,7 +1900,7 @@ static int imx_uart_poll_init(struct uart_port *port)
 
 	imx_uart_setup_ufcr(sport, TXTL_DEFAULT, sport->rxtl);
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 
 	/*
 	 * Be careful about the order of enabling bits here. First enable the
@@ -1985,14 +1928,14 @@ static int imx_uart_poll_init(struct uart_port *port)
 	imx_uart_writel(sport, ucr1 | UCR1_RRDYEN, UCR1);
 	imx_uart_writel(sport, ucr2 | UCR2_ATEN, UCR2);
 
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	return 0;
 }
 
 static int imx_uart_poll_get_char(struct uart_port *port)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	if (!(imx_uart_readl(sport, USR2) & USR2_RDR))
 		return NO_POLL_CHAR;
 
@@ -2001,7 +1944,7 @@ static int imx_uart_poll_get_char(struct uart_port *port)
 
 static void imx_uart_poll_put_char(struct uart_port *port, unsigned char c)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	unsigned int status;
 
 	/* drain */
@@ -2023,7 +1966,7 @@ static void imx_uart_poll_put_char(struct uart_port *port, unsigned char c)
 static int imx_uart_rs485_config(struct uart_port *port, struct ktermios *termios,
 				 struct serial_rs485 *rs485conf)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 	u32 ucr2, ufcr;
 
 	if (rs485conf->flags & SER_RS485_ENABLED) {
@@ -2082,40 +2025,32 @@ static struct imx_port *imx_uart_ports[UART_NR];
 #if IS_ENABLED(CONFIG_SERIAL_IMX_CONSOLE)
 static void imx_uart_console_putchar(struct uart_port *port, unsigned char ch)
 {
-	struct imx_port *sport = to_imx_port(port);
+	struct imx_port *sport = (struct imx_port *)port;
 
 	while (imx_uart_readl(sport, imx_uart_uts_reg(sport)) & UTS_TXFULL)
 		barrier();
 
 	imx_uart_writel(sport, ch, URTX0);
-
-	sport->last_putchar_was_newline = (ch == '\n');
 }
 
-static void imx_uart_console_device_lock(struct console *co, unsigned long *flags)
-{
-	struct uart_port *up = &imx_uart_ports[co->index]->port;
-
-	return __uart_port_lock_irqsave(up, flags);
-}
-
-static void imx_uart_console_device_unlock(struct console *co, unsigned long flags)
-{
-	struct uart_port *up = &imx_uart_ports[co->index]->port;
-
-	return __uart_port_unlock_irqrestore(up, flags);
-}
-
-static void imx_uart_console_write_atomic(struct console *co,
-					  struct nbcon_write_context *wctxt)
+/*
+ * Interrupts are disabled on entering
+ */
+static void
+imx_uart_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct imx_port *sport = imx_uart_ports[co->index];
-	struct uart_port *port = &sport->port;
 	struct imx_port_ucrs old_ucr;
+	unsigned long flags;
 	unsigned int ucr1, usr2;
+	int locked = 1;
 
-	if (!nbcon_enter_unsafe(wctxt))
-		return;
+	if (sport->port.sysrq)
+		locked = 0;
+	else if (oops_in_progress)
+		locked = spin_trylock_irqsave(&sport->port.lock, flags);
+	else
+		spin_lock_irqsave(&sport->port.lock, flags);
 
 	/*
 	 *	First, save UCR1/2/3 and then disable interrupts
@@ -2129,12 +2064,10 @@ static void imx_uart_console_write_atomic(struct console *co,
 	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN);
 
 	imx_uart_writel(sport, ucr1, UCR1);
+
 	imx_uart_writel(sport, old_ucr.ucr2 | UCR2_TXEN, UCR2);
 
-	if (!sport->last_putchar_was_newline)
-		uart_console_write(port, "\n", 1, imx_uart_console_putchar);
-	uart_console_write(port, wctxt->outbuf, wctxt->len,
-			   imx_uart_console_putchar);
+	uart_console_write(&sport->port, s, count, imx_uart_console_putchar);
 
 	/*
 	 *	Finally, wait for transmitter to become empty
@@ -2144,73 +2077,8 @@ static void imx_uart_console_write_atomic(struct console *co,
 				 0, USEC_PER_SEC, false, sport, USR2);
 	imx_uart_ucrs_restore(sport, &old_ucr);
 
-	nbcon_exit_unsafe(wctxt);
-}
-
-static void imx_uart_console_write_thread(struct console *co,
-					  struct nbcon_write_context *wctxt)
-{
-	struct imx_port *sport = imx_uart_ports[co->index];
-	struct uart_port *port = &sport->port;
-	struct imx_port_ucrs old_ucr;
-	unsigned int ucr1, usr2;
-
-	if (!nbcon_enter_unsafe(wctxt))
-		return;
-
-	/*
-	 *	First, save UCR1/2/3 and then disable interrupts
-	 */
-	imx_uart_ucrs_save(sport, &old_ucr);
-	ucr1 = old_ucr.ucr1;
-
-	if (imx_uart_is_imx1(sport))
-		ucr1 |= IMX1_UCR1_UARTCLKEN;
-	ucr1 |= UCR1_UARTEN;
-	ucr1 &= ~(UCR1_TRDYEN | UCR1_RRDYEN | UCR1_RTSDEN);
-
-	imx_uart_writel(sport, ucr1, UCR1);
-	imx_uart_writel(sport, old_ucr.ucr2 | UCR2_TXEN, UCR2);
-
-	if (nbcon_exit_unsafe(wctxt)) {
-		int len = READ_ONCE(wctxt->len);
-		int i;
-
-		/*
-		 * Write out the message. Toggle unsafe for each byte in order
-		 * to give another (higher priority) context the opportunity
-		 * for a friendly takeover. If such a takeover occurs, this
-		 * context must reacquire ownership in order to perform final
-		 * actions (such as re-enabling the interrupts).
-		 *
-		 * IMPORTANT: wctxt->outbuf and wctxt->len are no longer valid
-		 *	      after a reacquire so writing the message must be
-		 *	      aborted.
-		 */
-		for (i = 0; i < len; i++) {
-			if (!nbcon_enter_unsafe(wctxt))
-				break;
-
-			uart_console_write(port, wctxt->outbuf + i, 1,
-					   imx_uart_console_putchar);
-
-			if (!nbcon_exit_unsafe(wctxt))
-				break;
-		}
-	}
-
-	while (!nbcon_enter_unsafe(wctxt))
-		nbcon_reacquire_nobuf(wctxt);
-
-	/*
-	 *	Finally, wait for transmitter to become empty
-	 *	and restore UCR1/2/3
-	 */
-	read_poll_timeout(imx_uart_readl, usr2, usr2 & USR2_TXDC,
-			  0, USEC_PER_SEC, false, sport, USR2);
-	imx_uart_ucrs_restore(sport, &old_ucr);
-
-	nbcon_exit_unsafe(wctxt);
+	if (locked)
+		spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
 /*
@@ -2302,8 +2170,6 @@ imx_uart_console_setup(struct console *co, char *options)
 	if (retval)
 		goto error_console;
 
-	sport->last_putchar_was_newline = true;
-
 	if (options)
 		uart_parse_options(options, &baud, &parity, &bits, &flow);
 	else
@@ -2340,14 +2206,11 @@ imx_uart_console_exit(struct console *co)
 static struct uart_driver imx_uart_uart_driver;
 static struct console imx_uart_console = {
 	.name		= DEV_NAME,
-	.write_atomic	= imx_uart_console_write_atomic,
-	.write_thread	= imx_uart_console_write_thread,
-	.device_lock	= imx_uart_console_device_lock,
-	.device_unlock	= imx_uart_console_device_unlock,
-	.flags		= CON_PRINTBUFFER | CON_NBCON,
+	.write		= imx_uart_console_write,
 	.device		= uart_console_device,
 	.setup		= imx_uart_console_setup,
 	.exit		= imx_uart_console_exit,
+	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
 	.data		= &imx_uart_uart_driver,
 };
@@ -2373,10 +2236,10 @@ static enum hrtimer_restart imx_trigger_start_tx(struct hrtimer *t)
 	struct imx_port *sport = container_of(t, struct imx_port, trigger_start_tx);
 	unsigned long flags;
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 	if (sport->tx_state == WAIT_AFTER_RTS)
 		imx_uart_start_tx(&sport->port);
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	return HRTIMER_NORESTART;
 }
@@ -2386,10 +2249,10 @@ static enum hrtimer_restart imx_trigger_stop_tx(struct hrtimer *t)
 	struct imx_port *sport = container_of(t, struct imx_port, trigger_stop_tx);
 	unsigned long flags;
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 	if (sport->tx_state == WAIT_AFTER_SEND)
 		imx_uart_stop_tx(&sport->port);
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 
 	return HRTIMER_NORESTART;
 }
@@ -2429,16 +2292,21 @@ static int imx_uart_probe(struct platform_device *pdev)
 	}
 	sport->port.line = ret;
 
-	sport->have_rtscts = of_property_read_bool(np, "uart-has-rtscts") ||
-		of_property_read_bool(np, "fsl,uart-has-rtscts"); /* deprecated */
+	if (of_get_property(np, "uart-has-rtscts", NULL) ||
+	    of_get_property(np, "fsl,uart-has-rtscts", NULL) /* deprecated */)
+		sport->have_rtscts = 1;
 
-	sport->dte_mode = of_property_read_bool(np, "fsl,dte-mode");
+	if (of_get_property(np, "fsl,dte-mode", NULL))
+		sport->dte_mode = 1;
 
-	sport->have_rtsgpio = of_property_present(np, "rts-gpios");
+	if (of_get_property(np, "rts-gpios", NULL))
+		sport->have_rtsgpio = 1;
 
-	sport->inverted_tx = of_property_read_bool(np, "fsl,inverted-tx");
+	if (of_get_property(np, "fsl,inverted-tx", NULL))
+		sport->inverted_tx = 1;
 
-	sport->inverted_rx = of_property_read_bool(np, "fsl,inverted-rx");
+	if (of_get_property(np, "fsl,inverted-rx", NULL))
+		sport->inverted_rx = 1;
 
 	if (!of_property_read_u32_array(np, "fsl,dma-info", dma_buf_conf, 2)) {
 		sport->rx_period_length = dma_buf_conf[0];
@@ -2454,7 +2322,8 @@ static int imx_uart_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -2506,6 +2375,13 @@ static int imx_uart_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to enable ipg clk: %d\n", ret);
 		return ret;
 	}
+
+	/* initialize shadow register values */
+	sport->ucr1 = readl(sport->port.membase + UCR1);
+	sport->ucr2 = readl(sport->port.membase + UCR2);
+	sport->ucr3 = readl(sport->port.membase + UCR3);
+	sport->ucr4 = readl(sport->port.membase + UCR4);
+	sport->ufcr = readl(sport->port.membase + UFCR);
 
 	ret = uart_get_rs485_mode(&sport->port);
 	if (ret)
@@ -2589,10 +2465,10 @@ static int imx_uart_probe(struct platform_device *pdev)
 		imx_uart_writel(sport, ucr3, UCR3);
 	}
 
-	hrtimer_setup(&sport->trigger_start_tx, imx_trigger_start_tx, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
-	hrtimer_setup(&sport->trigger_stop_tx, imx_trigger_stop_tx, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&sport->trigger_start_tx, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&sport->trigger_stop_tx, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	sport->trigger_start_tx.function = imx_trigger_start_tx;
+	sport->trigger_stop_tx.function = imx_trigger_stop_tx;
 
 	/*
 	 * Allocate the IRQ(s) i.MX1 has three interrupts whereas later
@@ -2643,20 +2519,20 @@ err_clk:
 	return ret;
 }
 
-static void imx_uart_remove(struct platform_device *pdev)
+static int imx_uart_remove(struct platform_device *pdev)
 {
 	struct imx_port *sport = platform_get_drvdata(pdev);
 
-	uart_remove_one_port(&imx_uart_uart_driver, &sport->port);
+	return uart_remove_one_port(&imx_uart_uart_driver, &sport->port);
 }
 
 static void imx_uart_restore_context(struct imx_port *sport)
 {
 	unsigned long flags;
 
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 	if (!sport->context_saved) {
-		uart_port_unlock_irqrestore(&sport->port, flags);
+		spin_unlock_irqrestore(&sport->port.lock, flags);
 		return;
 	}
 
@@ -2671,7 +2547,7 @@ static void imx_uart_restore_context(struct imx_port *sport)
 	imx_uart_writel(sport, sport->saved_reg[2], UCR3);
 	imx_uart_writel(sport, sport->saved_reg[3], UCR4);
 	sport->context_saved = false;
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
 static void imx_uart_save_context(struct imx_port *sport)
@@ -2679,7 +2555,7 @@ static void imx_uart_save_context(struct imx_port *sport)
 	unsigned long flags;
 
 	/* Save necessary regs */
-	uart_port_lock_irqsave(&sport->port, &flags);
+	spin_lock_irqsave(&sport->port.lock, flags);
 	sport->saved_reg[0] = imx_uart_readl(sport, UCR1);
 	sport->saved_reg[1] = imx_uart_readl(sport, UCR2);
 	sport->saved_reg[2] = imx_uart_readl(sport, UCR3);
@@ -2691,15 +2567,12 @@ static void imx_uart_save_context(struct imx_port *sport)
 	sport->saved_reg[8] = imx_uart_readl(sport, UBMR);
 	sport->saved_reg[9] = imx_uart_readl(sport, IMX21_UTS);
 	sport->context_saved = true;
-	uart_port_unlock_irqrestore(&sport->port, flags);
+	spin_unlock_irqrestore(&sport->port.lock, flags);
 }
 
-/* called with irq off */
 static void imx_uart_enable_wakeup(struct imx_port *sport, bool on)
 {
 	u32 ucr3;
-
-	uart_port_lock_irq(&sport->port);
 
 	ucr3 = imx_uart_readl(sport, UCR3);
 	if (on) {
@@ -2720,8 +2593,6 @@ static void imx_uart_enable_wakeup(struct imx_port *sport, bool on)
 		}
 		imx_uart_writel(sport, ucr1, UCR1);
 	}
-
-	uart_port_unlock_irq(&sport->port);
 }
 
 static int imx_uart_suspend_noirq(struct device *dev)

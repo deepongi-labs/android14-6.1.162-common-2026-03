@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2012 Red Hat, Inc.
  *
@@ -71,6 +70,7 @@ void dm_cache_metadata_close(struct dm_cache_metadata *cmd);
  * origin blocks to map to.
  */
 int dm_cache_resize(struct dm_cache_metadata *cmd, dm_cblock_t new_cache_size);
+int dm_cache_size(struct dm_cache_metadata *cmd, dm_cblock_t *result);
 
 int dm_cache_discard_bitset_resize(struct dm_cache_metadata *cmd,
 				   sector_t discard_block_size,
@@ -121,6 +121,8 @@ int dm_cache_get_free_metadata_block_count(struct dm_cache_metadata *cmd,
 
 int dm_cache_get_metadata_dev_size(struct dm_cache_metadata *cmd,
 				   dm_block_t *result);
+
+void dm_cache_dump(struct dm_cache_metadata *cmd);
 
 /*
  * The policy is invited to save a 32bit hint value for every cblock (eg,

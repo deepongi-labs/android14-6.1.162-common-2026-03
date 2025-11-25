@@ -5,7 +5,6 @@
 
 /dts-v1/;
 
-#include "msm8996.dtsi"
 #include "msm8996-xiaomi-common.dtsi"
 #include <dt-bindings/sound/qcom,q6afe.h>
 #include <dt-bindings/sound/qcom,q6asm.h>
@@ -20,14 +19,16 @@
 	qcom,pmic-id = <0x20009 0x2000a 0x00 0x00>;
 	qcom,board-id = <31 0>;
 
-	divclk2_haptics: divclk2 {
-		compatible = "fixed-clock";
-		#clock-cells = <0>;
-		clock-frequency = <32768>;
-		clock-output-names = "divclk2";
+	clocks {
+		divclk2_haptics: divclk2 {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <32768>;
+			clock-output-names = "divclk2";
 
-		pinctrl-names = "default";
-		pinctrl-0 = <&divclk2_pin_a>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&divclk2_pin_a>;
+		};
 	};
 };
 
@@ -52,7 +53,7 @@
 		reg = <0x30>;
 		#address-cells = <1>;
 		#size-cells = <0>;
-		enable-gpios = <&pm8994_gpios 7 1>;
+		enable-gpio = <&pm8994_gpios 7 1>;
 		clock-mode = /bits/8 <2>;
 		label = "button-backlight";
 
@@ -60,14 +61,14 @@
 			reg = <0>;
 			chan-name = "button-backlight";
 			led-cur = /bits/ 8 <0x32>;
-			max-cur = /bits/ 8 <0xc8>;
+			max-cur = /bits/ 8 <0xC8>;
 		};
 
 		led@1 {
 			reg = <1>;
 			chan-name = "button-backlight1";
 			led-cur = /bits/ 8 <0x32>;
-			max-cur = /bits/ 8 <0xc8>;
+			max-cur = /bits/ 8 <0xC8>;
 		};
 	};
 };
@@ -91,13 +92,7 @@
 
 };
 
-&gpu {
-	zap-shader {
-		firmware-name = "qcom/msm8996/gemini/a530_zap.mbn";
-	};
-};
-
-&mdss_dsi0 {
+&dsi0 {
 	status = "okay";
 
 	vdd-supply = <&vreg_l2a_1p25>;
@@ -116,14 +111,20 @@
 
 		port {
 			panel_in: endpoint {
-				remote-endpoint = <&mdss_dsi0_out>;
+				remote-endpoint = <&dsi0_out>;
 			};
 		};
 	};
 };
 
-&mdss_dsi0_out {
+&dsi0_out {
 	remote-endpoint = <&panel_in>;
+};
+
+&gpu {
+	zap-shader {
+		firmware-name = "qcom/msm8996/gemini/a530_zap.mbn";
+	};
 };
 
 &pmi8994_wled {
@@ -137,15 +138,15 @@
 
 &q6asmdai {
 	dai@0 {
-		reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		reg = <0>;
 	};
 
 	dai@1 {
-		reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		reg = <1>;
 	};
 
 	dai@2 {
-		reg = <MSM_FRONTEND_DAI_MULTIMEDIA3>;
+		reg = <2>;
 	};
 };
 
@@ -156,7 +157,10 @@
 &sound {
 	compatible = "qcom,apq8096-sndcard";
 	model = "gemini";
-	audio-routing = "RX_BIAS", "MCLK";
+	audio-routing = "RX_BIAS", "MCLK",
+		"MM_DL1",  "MultiMedia1 Playback",
+		"MM_DL2",  "MultiMedia2 Playback",
+		"MultiMedia3 Capture", "MM_UL3";
 
 	mm1-dai-link {
 		link-name = "MultiMedia1";
@@ -215,7 +219,7 @@
 };
 
 &rpm_requests {
-	regulators-0 {
+	pm8994-regulators {
 		vreg_l17a_2p8: l17 {
 			regulator-name = "vreg_l17a_2p8";
 			regulator-min-microvolt = <2500000>;
@@ -441,28 +445,28 @@
 		"RFFE1_DATA",		/* GPIO_148 */
 		"RFFE1_CLK";		/* GPIO_149 */
 
-	touchscreen_default: touchscreen-default-state {
+	touchscreen_default: touchscreen_default {
 		pins = "gpio89", "gpio125";
 		function = "gpio";
 		drive-strength = <10>;
 		bias-pull-up;
 	};
 
-	touchscreen_sleep: touchscreen-sleep-state {
+	touchscreen_sleep: touchscreen_sleep {
 		pins = "gpio89", "gpio125";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	vibrator_default: vibrator-default-state {
+	vibrator_default: vibrator_default {
 		pins = "gpio93";
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-up;
 	};
 
-	vibrator_sleep: vibrator-sleep-state {
+	vibrator_sleep: vibrator_sleep {
 		pins = "gpio93";
 		function = "gpio";
 		drive-strength = <2>;

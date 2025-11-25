@@ -15,10 +15,8 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
-#include <linux/pinctrl/consumer.h>
+#include <linux/of_device.h>
 #include <linux/pinctrl/pinmux.h>
-#include <linux/platform_device.h>
 
 #include "../core.h"
 #include "../pinmux.h"
@@ -172,7 +170,8 @@ static int rza2_chip_get(struct gpio_chip *chip, unsigned int offset)
 	return !!(readb(priv->base + RZA2_PIDR(port)) & BIT(pin));
 }
 
-static int rza2_chip_set(struct gpio_chip *chip, unsigned int offset, int value)
+static void rza2_chip_set(struct gpio_chip *chip, unsigned int offset,
+			  int value)
 {
 	struct rza2_pinctrl_priv *priv = gpiochip_get_data(chip);
 	u8 port = RZA2_PIN_ID_TO_PORT(offset);
@@ -187,8 +186,6 @@ static int rza2_chip_set(struct gpio_chip *chip, unsigned int offset, int value)
 		new_value &= ~BIT(pin);
 
 	writeb(new_value, priv->base + RZA2_PODR(port));
-
-	return 0;
 }
 
 static int rza2_chip_direction_output(struct gpio_chip *chip,
@@ -231,8 +228,6 @@ static const char * const rza2_gpio_names[] = {
 static struct gpio_chip chip = {
 	.names = rza2_gpio_names,
 	.base = -1,
-	.request = pinctrl_gpio_request,
-	.free = pinctrl_gpio_free,
 	.get_direction = rza2_chip_get_direction,
 	.direction_input = rza2_chip_direction_input,
 	.direction_output = rza2_chip_direction_output,
@@ -442,7 +437,7 @@ static int rza2_set_mux(struct pinctrl_dev *pctldev, unsigned int selector,
 			unsigned int group)
 {
 	struct rza2_pinctrl_priv *priv = pinctrl_dev_get_drvdata(pctldev);
-	const struct function_desc *func;
+	struct function_desc *func;
 	unsigned int i, *psel_val;
 	struct group_desc *grp;
 
@@ -456,15 +451,15 @@ static int rza2_set_mux(struct pinctrl_dev *pctldev, unsigned int selector,
 
 	psel_val = func->data;
 
-	for (i = 0; i < grp->grp.npins; ++i) {
+	for (i = 0; i < grp->num_pins; ++i) {
 		dev_dbg(priv->dev, "Setting P%c_%d to PSEL=%d\n",
-			port_names[RZA2_PIN_ID_TO_PORT(grp->grp.pins[i])],
-			RZA2_PIN_ID_TO_PIN(grp->grp.pins[i]),
+			port_names[RZA2_PIN_ID_TO_PORT(grp->pins[i])],
+			RZA2_PIN_ID_TO_PIN(grp->pins[i]),
 			psel_val[i]);
 		rza2_set_pin_function(
 			priv->base,
-			RZA2_PIN_ID_TO_PORT(grp->grp.pins[i]),
-			RZA2_PIN_ID_TO_PIN(grp->grp.pins[i]),
+			RZA2_PIN_ID_TO_PORT(grp->pins[i]),
+			RZA2_PIN_ID_TO_PIN(grp->pins[i]),
 			psel_val[i]);
 	}
 
@@ -537,3 +532,4 @@ core_initcall(rza2_pinctrl_init);
 
 MODULE_AUTHOR("Chris Brandt <chris.brandt@renesas.com>");
 MODULE_DESCRIPTION("Pin and gpio controller driver for RZ/A2 SoC");
+MODULE_LICENSE("GPL v2");

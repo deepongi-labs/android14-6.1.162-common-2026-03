@@ -38,7 +38,7 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		}
 
 		if (atomic_read(&mm->mm_count) > 1 ||
-		    is_nommu_shared_mapping(vma->vm_flags)) {
+		    vma->vm_flags & VM_MAYSHARE) {
 			sbytes += size;
 		} else {
 			bytes += size;
@@ -51,7 +51,7 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		sbytes += kobjsize(mm);
 	else
 		bytes += kobjsize(mm);
-
+	
 	if (current->fs && current->fs->users > 1)
 		sbytes += kobjsize(current->fs);
 	else
@@ -69,13 +69,13 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 
 	bytes += kobjsize(current); /* includes kernel stack */
 
-	mmap_read_unlock(mm);
-
 	seq_printf(m,
 		"Mem:\t%8lu bytes\n"
 		"Slack:\t%8lu bytes\n"
 		"Shared:\t%8lu bytes\n",
 		bytes, slack, sbytes);
+
+	mmap_read_unlock(mm);
 }
 
 unsigned long task_vsize(struct mm_struct *mm)
@@ -121,6 +121,19 @@ unsigned long task_statm(struct mm_struct *mm,
 	return size;
 }
 
+static int is_stack(struct vm_area_struct *vma)
+{
+	struct mm_struct *mm = vma->vm_mm;
+
+	/*
+	 * We make no effort to guess what a given thread considers to be
+	 * its "stack".  It's not even well-defined for programs written
+	 * languages like Go.
+	 */
+	return vma->vm_start <= mm->start_stack &&
+		vma->vm_end >= mm->start_stack;
+}
+
 /*
  * display a single VMA to a sequenced file
  */
@@ -157,8 +170,8 @@ static int nommu_vma_show(struct seq_file *m, struct vm_area_struct *vma)
 
 	if (file) {
 		seq_pad(m, ' ');
-		seq_path(m, file_user_path(file), "");
-	} else if (mm && vma_is_initial_stack(vma)) {
+		seq_file_path(m, file, "");
+	} else if (mm && is_stack(vma)) {
 		seq_pad(m, ' ');
 		seq_puts(m, "[stack]");
 	}
@@ -204,7 +217,7 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 	if (!priv->task)
 		return ERR_PTR(-ESRCH);
 
-	mm = priv->lock_ctx.mm;
+	mm = priv->mm;
 	if (!mm || !mmget_not_zero(mm)) {
 		put_task_struct(priv->task);
 		priv->task = NULL;
@@ -226,7 +239,7 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 static void m_stop(struct seq_file *m, void *v)
 {
 	struct proc_maps_private *priv = m->private;
-	struct mm_struct *mm = priv->lock_ctx.mm;
+	struct mm_struct *mm = priv->mm;
 
 	if (!priv->task)
 		return;
@@ -259,9 +272,9 @@ static int maps_open(struct inode *inode, struct file *file,
 		return -ENOMEM;
 
 	priv->inode = inode;
-	priv->lock_ctx.mm = proc_mem_open(inode, PTRACE_MODE_READ);
-	if (IS_ERR_OR_NULL(priv->lock_ctx.mm)) {
-		int err = priv->lock_ctx.mm ? PTR_ERR(priv->lock_ctx.mm) : -ESRCH;
+	priv->mm = proc_mem_open(inode, PTRACE_MODE_READ);
+	if (IS_ERR(priv->mm)) {
+		int err = PTR_ERR(priv->mm);
 
 		seq_release_private(inode, file);
 		return err;
@@ -276,8 +289,8 @@ static int map_release(struct inode *inode, struct file *file)
 	struct seq_file *seq = file->private_data;
 	struct proc_maps_private *priv = seq->private;
 
-	if (priv->lock_ctx.mm)
-		mmdrop(priv->lock_ctx.mm);
+	if (priv->mm)
+		mmdrop(priv->mm);
 
 	return seq_release_private(inode, file);
 }

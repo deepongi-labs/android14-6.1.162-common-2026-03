@@ -180,11 +180,11 @@ static void hmac_add_misc(struct shash_desc *desc, struct inode *inode,
 }
 
 /*
- * Dump large security xattr values as a continuous ascii hexadecimal string.
+ * Dump large security xattr values as a continuous ascii hexademical string.
  * (pr_debug is limited to 64 bytes.)
  */
-static void dump_security_xattr_l(const char *prefix, const void *src,
-				  size_t count)
+static void dump_security_xattr(const char *prefix, const void *src,
+				size_t count)
 {
 #if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
 	char *asciihex, *p;
@@ -200,16 +200,6 @@ static void dump_security_xattr_l(const char *prefix, const void *src,
 #endif
 }
 
-static void dump_security_xattr(const char *name, const char *value,
-				size_t value_len)
-{
-	if (value_len < 64)
-		pr_debug("%s: (%zu) [%*phN]\n", name, value_len,
-			 (int)value_len, value);
-	else
-		dump_security_xattr_l(name, value, value_len);
-}
-
 /*
  * Calculate the HMAC value across the set of protected security xattrs.
  *
@@ -221,10 +211,9 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 				 const char *req_xattr_name,
 				 const char *req_xattr_value,
 				 size_t req_xattr_value_len,
-				 uint8_t type, struct evm_digest *data,
-				 struct evm_iint_cache *iint)
+				 uint8_t type, struct evm_digest *data)
 {
-	struct inode *inode = d_inode(d_real(dentry, D_REAL_METADATA));
+	struct inode *inode = d_backing_inode(dentry);
 	struct xattr_list *xattr;
 	struct shash_desc *desc;
 	size_t xattr_size = 0;
@@ -232,7 +221,6 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 	int error;
 	int size, user_space_size;
 	bool ima_present = false;
-	u64 i_version = 0;
 
 	if (!(inode->i_opflags & IOP_XATTR) ||
 	    inode->i_sb->s_user_ns != &init_user_ns)
@@ -266,12 +254,18 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 			if (is_ima)
 				ima_present = true;
 
-			dump_security_xattr(req_xattr_name,
-					    req_xattr_value,
-					    req_xattr_value_len);
+			if (req_xattr_value_len < 64)
+				pr_debug("%s: (%zu) [%*phN]\n", req_xattr_name,
+					 req_xattr_value_len,
+					 (int)req_xattr_value_len,
+					 req_xattr_value);
+			else
+				dump_security_xattr(req_xattr_name,
+						    req_xattr_value,
+						    req_xattr_value_len);
 			continue;
 		}
-		size = vfs_getxattr_alloc(&nop_mnt_idmap, dentry, xattr->name,
+		size = vfs_getxattr_alloc(&init_user_ns, dentry, xattr->name,
 					  &xattr_value, xattr_size, GFP_NOFS);
 		if (size == -ENOMEM) {
 			error = -ENOMEM;
@@ -280,7 +274,7 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 		if (size < 0)
 			continue;
 
-		user_space_size = vfs_getxattr(&nop_mnt_idmap, dentry,
+		user_space_size = vfs_getxattr(&init_user_ns, dentry,
 					       xattr->name, NULL, 0);
 		if (user_space_size != size)
 			pr_debug("file %s: xattr %s size mismatch (kernel: %d, user: %d)\n",
@@ -292,16 +286,14 @@ static int evm_calc_hmac_or_hash(struct dentry *dentry,
 		if (is_ima)
 			ima_present = true;
 
-		dump_security_xattr(xattr->name, xattr_value, xattr_size);
+		if (xattr_size < 64)
+			pr_debug("%s: (%zu) [%*phN]", xattr->name, xattr_size,
+				 (int)xattr_size, xattr_value);
+		else
+			dump_security_xattr(xattr->name, xattr_value,
+					    xattr_size);
 	}
 	hmac_add_misc(desc, inode, type, data->digest);
-
-	if (inode != d_backing_inode(dentry) && iint) {
-		if (IS_I_VERSION(inode))
-			i_version = inode_query_iversion(inode);
-		integrity_inode_attrs_store(&iint->metadata_inode, i_version,
-					    inode);
-	}
 
 	/* Portable EVM signatures must include an IMA hash */
 	if (type == EVM_XATTR_PORTABLE_DIGSIG && !ima_present)
@@ -314,45 +306,43 @@ out:
 
 int evm_calc_hmac(struct dentry *dentry, const char *req_xattr_name,
 		  const char *req_xattr_value, size_t req_xattr_value_len,
-		  struct evm_digest *data, struct evm_iint_cache *iint)
+		  struct evm_digest *data)
 {
 	return evm_calc_hmac_or_hash(dentry, req_xattr_name, req_xattr_value,
-				    req_xattr_value_len, EVM_XATTR_HMAC, data,
-				    iint);
+				    req_xattr_value_len, EVM_XATTR_HMAC, data);
 }
 
 int evm_calc_hash(struct dentry *dentry, const char *req_xattr_name,
 		  const char *req_xattr_value, size_t req_xattr_value_len,
-		  char type, struct evm_digest *data, struct evm_iint_cache *iint)
+		  char type, struct evm_digest *data)
 {
 	return evm_calc_hmac_or_hash(dentry, req_xattr_name, req_xattr_value,
-				     req_xattr_value_len, type, data, iint);
+				     req_xattr_value_len, type, data);
 }
 
 static int evm_is_immutable(struct dentry *dentry, struct inode *inode)
 {
 	const struct evm_ima_xattr_data *xattr_data = NULL;
-	struct evm_iint_cache *iint;
+	struct integrity_iint_cache *iint;
 	int rc = 0;
 
-	iint = evm_iint_inode(inode);
+	iint = integrity_iint_find(inode);
 	if (iint && (iint->flags & EVM_IMMUTABLE_DIGSIG))
 		return 1;
 
 	/* Do this the hard way */
-	rc = vfs_getxattr_alloc(&nop_mnt_idmap, dentry, XATTR_NAME_EVM,
+	rc = vfs_getxattr_alloc(&init_user_ns, dentry, XATTR_NAME_EVM,
 				(char **)&xattr_data, 0, GFP_NOFS);
 	if (rc <= 0) {
 		if (rc == -ENODATA)
-			rc = 0;
-		goto out;
+			return 0;
+		return rc;
 	}
 	if (xattr_data->type == EVM_XATTR_PORTABLE_DIGSIG)
 		rc = 1;
 	else
 		rc = 0;
 
-out:
 	kfree(xattr_data);
 	return rc;
 }
@@ -367,7 +357,6 @@ int evm_update_evmxattr(struct dentry *dentry, const char *xattr_name,
 			const char *xattr_value, size_t xattr_value_len)
 {
 	struct inode *inode = d_backing_inode(dentry);
-	struct evm_iint_cache *iint = evm_iint_inode(inode);
 	struct evm_digest data;
 	int rc = 0;
 
@@ -383,24 +372,23 @@ int evm_update_evmxattr(struct dentry *dentry, const char *xattr_name,
 
 	data.hdr.algo = HASH_ALGO_SHA1;
 	rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
-			   xattr_value_len, &data, iint);
+			   xattr_value_len, &data);
 	if (rc == 0) {
 		data.hdr.xattr.sha1.type = EVM_XATTR_HMAC;
-		rc = __vfs_setxattr_noperm(&nop_mnt_idmap, dentry,
+		rc = __vfs_setxattr_noperm(&init_user_ns, dentry,
 					   XATTR_NAME_EVM,
 					   &data.hdr.xattr.data[1],
 					   SHA1_DIGEST_SIZE + 1, 0);
 	} else if (rc == -ENODATA && (inode->i_opflags & IOP_XATTR)) {
-		rc = __vfs_removexattr(&nop_mnt_idmap, dentry, XATTR_NAME_EVM);
+		rc = __vfs_removexattr(&init_user_ns, dentry, XATTR_NAME_EVM);
 	}
 	return rc;
 }
 
-int evm_init_hmac(struct inode *inode, const struct xattr *xattrs,
+int evm_init_hmac(struct inode *inode, const struct xattr *lsm_xattr,
 		  char *hmac_val)
 {
 	struct shash_desc *desc;
-	const struct xattr *xattr;
 
 	desc = init_desc(EVM_XATTR_HMAC, HASH_ALGO_SHA1);
 	if (IS_ERR(desc)) {
@@ -408,13 +396,7 @@ int evm_init_hmac(struct inode *inode, const struct xattr *xattrs,
 		return PTR_ERR(desc);
 	}
 
-	for (xattr = xattrs; xattr->name; xattr++) {
-		if (!evm_protected_xattr(xattr->name))
-			continue;
-
-		crypto_shash_update(desc, xattr->value, xattr->value_len);
-	}
-
+	crypto_shash_update(desc, lsm_xattr->value, lsm_xattr->value_len);
 	hmac_add_misc(desc, inode, EVM_XATTR_HMAC, hmac_val);
 	kfree(desc);
 	return 0;

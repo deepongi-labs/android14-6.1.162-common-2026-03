@@ -26,9 +26,8 @@
 #include <linux/kthread.h>
 #include <linux/vmalloc.h>
 #include <linux/efi_embedded_fw.h>
-#include <linux/string_choices.h>
 
-MODULE_IMPORT_NS("TEST_FIRMWARE");
+MODULE_IMPORT_NS(TEST_FIRMWARE);
 
 #define TEST_FIRMWARE_NAME	"test-firmware.bin"
 #define TEST_FIRMWARE_NUM_REQS	4
@@ -53,7 +52,7 @@ struct test_batched_req {
 };
 
 /**
- * struct test_config - represents configuration for the test for different triggers
+ * test_config - represents configuration for the test for different triggers
  *
  * @name: the name of the firmware file to look for
  * @into_buf: when the into_buf is used if this is true
@@ -293,7 +292,7 @@ static ssize_t config_show(struct device *dev,
 				test_fw_config->name);
 	else
 		len += scnprintf(buf + len, PAGE_SIZE - len,
-				"name:\tEMPTY\n");
+				"name:\tEMTPY\n");
 
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"num_requests:\t%u\n", test_fw_config->num_requests);
@@ -305,17 +304,17 @@ static ssize_t config_show(struct device *dev,
 			"FW_ACTION_NOUEVENT");
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"into_buf:\t\t%s\n",
-			str_true_false(test_fw_config->into_buf));
+			test_fw_config->into_buf ? "true" : "false");
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"buf_size:\t%zu\n", test_fw_config->buf_size);
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"file_offset:\t%zu\n", test_fw_config->file_offset);
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"partial:\t\t%s\n",
-			str_true_false(test_fw_config->partial));
+			test_fw_config->partial ? "true" : "false");
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"sync_direct:\t\t%s\n",
-			str_true_false(test_fw_config->sync_direct));
+			test_fw_config->sync_direct ? "true" : "false");
 	len += scnprintf(buf + len, PAGE_SIZE - len,
 			"read_fw_idx:\t%u\n", test_fw_config->read_fw_idx);
 	if (test_fw_config->upload_name)
@@ -324,7 +323,7 @@ static ssize_t config_show(struct device *dev,
 				test_fw_config->upload_name);
 	else
 		len += scnprintf(buf + len, PAGE_SIZE - len,
-				"upload_name:\tEMPTY\n");
+				"upload_name:\tEMTPY\n");
 
 	mutex_unlock(&test_fw_mutex);
 
@@ -1133,7 +1132,6 @@ static const char * const fw_upload_err_str[] = {
 	[FW_UPLOAD_ERR_INVALID_SIZE] = "invalid-file-size",
 	[FW_UPLOAD_ERR_RW_ERROR]     = "read-write-error",
 	[FW_UPLOAD_ERR_WEAROUT]	     = "flash-wearout",
-	[FW_UPLOAD_ERR_FW_INVALID]   = "firmware-invalid",
 };
 
 static void upload_err_inject_error(struct test_firmware_upload *tst,
@@ -1568,5 +1566,4 @@ static void __exit test_firmware_exit(void)
 module_exit(test_firmware_exit);
 
 MODULE_AUTHOR("Kees Cook <keescook@chromium.org>");
-MODULE_DESCRIPTION("interface to trigger and test firmware loading");
 MODULE_LICENSE("GPL");

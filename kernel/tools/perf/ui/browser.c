@@ -57,12 +57,12 @@ void ui_browser__gotorc(struct ui_browser *browser, int y, int x)
 void ui_browser__write_nstring(struct ui_browser *browser __maybe_unused, const char *msg,
 			       unsigned int width)
 {
-	SLsmg_write_nstring(msg, width);
+	slsmg_write_nstring(msg, width);
 }
 
 void ui_browser__vprintf(struct ui_browser *browser __maybe_unused, const char *fmt, va_list args)
 {
-	SLsmg_vprintf(fmt, args);
+	slsmg_vprintf(fmt, args);
 }
 
 void ui_browser__printf(struct ui_browser *browser __maybe_unused, const char *fmt, ...)
@@ -231,14 +231,6 @@ int ui_browser__warning(struct ui_browser *browser, int timeout,
 	}
 
 	return key;
-}
-
-int ui_browser__warn_unhandled_hotkey(struct ui_browser *browser, int key, int timeout, const char *help)
-{
-	char kname[32];
-
-	key_name(key, kname, sizeof(kname));
-	return ui_browser__warning(browser, timeout, "\n'%s' key not associated%s!\n", kname, help ?: "");
 }
 
 int ui_browser__help_window(struct ui_browser *browser, const char *text)
@@ -459,8 +451,6 @@ int ui_browser__run(struct ui_browser *browser, int delay_secs)
 				goto out;
 			if (browser->horiz_scroll != 0)
 				--browser->horiz_scroll;
-			else
-				goto out;
 			break;
 		case K_PGDN:
 		case ' ':
@@ -820,6 +810,6 @@ void ui_browser__init(void)
 
 	while (ui_browser__colorsets[i].name) {
 		struct ui_browser_colorset *c = &ui_browser__colorsets[i++];
-		SLtt_set_color(c->colorset, c->name, c->fg, c->bg);
+		sltt_set_color(c->colorset, c->name, c->fg, c->bg);
 	}
 }

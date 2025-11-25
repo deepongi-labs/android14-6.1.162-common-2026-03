@@ -45,7 +45,8 @@ static const struct v4l2_subdev_ops uda1342_ops = {
 	.audio = &uda1342_audio_ops,
 };
 
-static int uda1342_probe(struct i2c_client *client)
+static int uda1342_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct v4l2_subdev *sd;
@@ -79,7 +80,7 @@ static void uda1342_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id uda1342_id[] = {
-	{ "uda1342" },
+	{ "uda1342", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, uda1342_id);
@@ -95,5 +96,4 @@ static struct i2c_driver uda1342_driver = {
 
 module_i2c_driver(uda1342_driver);
 
-MODULE_DESCRIPTION("Philips UDA1342 audio codec driver");
 MODULE_LICENSE("GPL v2");

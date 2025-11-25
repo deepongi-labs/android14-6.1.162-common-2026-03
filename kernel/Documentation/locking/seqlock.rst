@@ -1,5 +1,3 @@
-.. SPDX-License-Identifier: GPL-2.0
-
 ======================================
 Sequence counters and sequential locks
 ======================================

@@ -21,16 +21,6 @@
  * as described in ARM document number ARM DEN 0022A.
  */
 
-#define AFFINITY_MASK(level)	~((0x1UL << ((level) * MPIDR_LEVEL_BITS)) - 1)
-
-static unsigned long psci_affinity_mask(unsigned long affinity_level)
-{
-	if (affinity_level <= 3)
-		return MPIDR_HWID_BITMASK & AFFINITY_MASK(affinity_level);
-
-	return 0;
-}
-
 static unsigned long kvm_psci_vcpu_suspend(struct kvm_vcpu *vcpu)
 {
 	/*
@@ -49,12 +39,6 @@ static unsigned long kvm_psci_vcpu_suspend(struct kvm_vcpu *vcpu)
 	kvm_vcpu_wfi(vcpu);
 
 	return PSCI_RET_SUCCESS;
-}
-
-static inline bool kvm_psci_valid_affinity(struct kvm_vcpu *vcpu,
-					   unsigned long affinity)
-{
-	return !(affinity & ~MPIDR_HWID_BITMASK);
 }
 
 static unsigned long kvm_psci_vcpu_on(struct kvm_vcpu *source_vcpu)
@@ -110,7 +94,7 @@ static unsigned long kvm_psci_vcpu_on(struct kvm_vcpu *source_vcpu)
 	 */
 	smp_wmb();
 
-	WRITE_ONCE(vcpu->arch.mp_state.mp_state, KVM_MP_STATE_RUNNABLE);
+	vcpu->arch.mp_state.mp_state = KVM_MP_STATE_RUNNABLE;
 	kvm_vcpu_wake_up(vcpu);
 
 out_unlock:
@@ -194,12 +178,6 @@ static void kvm_psci_system_off(struct kvm_vcpu *vcpu)
 	kvm_prepare_system_event(vcpu, KVM_SYSTEM_EVENT_SHUTDOWN, 0);
 }
 
-static void kvm_psci_system_off2(struct kvm_vcpu *vcpu)
-{
-	kvm_prepare_system_event(vcpu, KVM_SYSTEM_EVENT_SHUTDOWN,
-				 KVM_SYSTEM_EVENT_SHUTDOWN_FLAG_PSCI_OFF2);
-}
-
 static void kvm_psci_system_reset(struct kvm_vcpu *vcpu)
 {
 	kvm_prepare_system_event(vcpu, KVM_SYSTEM_EVENT_RESET, 0);
@@ -218,18 +196,6 @@ static void kvm_psci_system_suspend(struct kvm_vcpu *vcpu)
 	memset(&run->system_event, 0, sizeof(vcpu->run->system_event));
 	run->system_event.type = KVM_SYSTEM_EVENT_SUSPEND;
 	run->exit_reason = KVM_EXIT_SYSTEM_EVENT;
-}
-
-static void kvm_psci_narrow_to_32bit(struct kvm_vcpu *vcpu)
-{
-	int i;
-
-	/*
-	 * Zero the input registers' upper 32 bits. They will be fully
-	 * zeroed on exit, so we're fine changing them in place.
-	 */
-	for (i = 1; i < 4; i++)
-		vcpu_set_reg(vcpu, i, lower_32_bits(vcpu_get_reg(vcpu, i)));
 }
 
 static unsigned long kvm_psci_check_allowed_function(struct kvm_vcpu *vcpu, u32 fn)
@@ -328,7 +294,7 @@ static int kvm_psci_1_x_call(struct kvm_vcpu *vcpu, u32 minor)
 
 	switch(psci_fn) {
 	case PSCI_0_2_FN_PSCI_VERSION:
-		val = PSCI_VERSION(1, minor);
+		val = minor == 0 ? KVM_ARM_PSCI_1_0 : KVM_ARM_PSCI_1_1;
 		break;
 	case PSCI_1_0_FN_PSCI_FEATURES:
 		arg = smccc_get_arg1(vcpu);
@@ -364,11 +330,6 @@ static int kvm_psci_1_x_call(struct kvm_vcpu *vcpu, u32 minor)
 			if (minor >= 1)
 				val = 0;
 			break;
-		case PSCI_1_3_FN_SYSTEM_OFF2:
-		case PSCI_1_3_FN64_SYSTEM_OFF2:
-			if (minor >= 3)
-				val = PSCI_1_3_OFF_TYPE_HIBERNATE_OFF;
-			break;
 		}
 		break;
 	case PSCI_1_0_FN_SYSTEM_SUSPEND:
@@ -402,33 +363,6 @@ static int kvm_psci_1_x_call(struct kvm_vcpu *vcpu, u32 minor)
 			val = PSCI_RET_INVALID_PARAMS;
 			break;
 		}
-		break;
-	case PSCI_1_3_FN_SYSTEM_OFF2:
-		kvm_psci_narrow_to_32bit(vcpu);
-		fallthrough;
-	case PSCI_1_3_FN64_SYSTEM_OFF2:
-		if (minor < 3)
-			break;
-
-		arg = smccc_get_arg1(vcpu);
-		/*
-		 * SYSTEM_OFF2 defaults to HIBERNATE_OFF if arg1 is zero. arg2
-		 * must be zero.
-		 */
-		if ((arg && arg != PSCI_1_3_OFF_TYPE_HIBERNATE_OFF) ||
-		    smccc_get_arg2(vcpu) != 0) {
-			val = PSCI_RET_INVALID_PARAMS;
-			break;
-		}
-		kvm_psci_system_off2(vcpu);
-		/*
-		 * We shouldn't be going back to the guest after receiving a
-		 * SYSTEM_OFF2 request. Preload a return value of
-		 * INTERNAL_FAILURE should userspace ignore the exit and resume
-		 * the vCPU.
-		 */
-		val = PSCI_RET_INTERNAL_FAILURE;
-		ret = 0;
 		break;
 	default:
 		return kvm_psci_0_2_call(vcpu);
@@ -477,7 +411,6 @@ static int kvm_psci_0_1_call(struct kvm_vcpu *vcpu)
 int kvm_psci_call(struct kvm_vcpu *vcpu)
 {
 	u32 psci_fn = smccc_get_function(vcpu);
-	int version = kvm_psci_version(vcpu);
 	unsigned long val;
 
 	val = kvm_psci_check_allowed_function(vcpu, psci_fn);
@@ -486,11 +419,7 @@ int kvm_psci_call(struct kvm_vcpu *vcpu)
 		return 1;
 	}
 
-	switch (version) {
-	case KVM_ARM_PSCI_1_3:
-		return kvm_psci_1_x_call(vcpu, 3);
-	case KVM_ARM_PSCI_1_2:
-		return kvm_psci_1_x_call(vcpu, 2);
+	switch (kvm_psci_version(vcpu)) {
 	case KVM_ARM_PSCI_1_1:
 		return kvm_psci_1_x_call(vcpu, 1);
 	case KVM_ARM_PSCI_1_0:
@@ -500,8 +429,6 @@ int kvm_psci_call(struct kvm_vcpu *vcpu)
 	case KVM_ARM_PSCI_0_1:
 		return kvm_psci_0_1_call(vcpu);
 	default:
-		WARN_ONCE(1, "Unknown PSCI version %d", version);
-		smccc_set_retval(vcpu, SMCCC_RET_NOT_SUPPORTED, 0, 0, 0);
-		return 1;
+		return -EINVAL;
 	}
 }

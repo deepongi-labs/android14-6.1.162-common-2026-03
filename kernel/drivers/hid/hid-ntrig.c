@@ -144,9 +144,6 @@ static void ntrig_report_version(struct hid_device *hdev)
 	struct usb_device *usb_dev = hid_to_usb_dev(hdev);
 	unsigned char *data = kmalloc(8, GFP_KERNEL);
 
-	if (!hid_is_usb(hdev))
-		return;
-
 	if (!data)
 		goto err_free;
 
@@ -1032,5 +1029,4 @@ static struct hid_driver ntrig_driver = {
 };
 module_hid_driver(ntrig_driver);
 
-MODULE_DESCRIPTION("HID driver for N-Trig touchscreens");
 MODULE_LICENSE("GPL");

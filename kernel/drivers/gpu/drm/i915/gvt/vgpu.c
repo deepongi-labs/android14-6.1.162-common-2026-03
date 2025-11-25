@@ -34,7 +34,6 @@
 #include "i915_drv.h"
 #include "gvt.h"
 #include "i915_pvinfo.h"
-#include <linux/vmalloc.h>
 
 void populate_pvinfo_page(struct intel_vgpu *vgpu)
 {
@@ -78,7 +77,7 @@ void populate_pvinfo_page(struct intel_vgpu *vgpu)
  * vGPU type name is defined as GVTg_Vx_y which contains the physical GPU
  * generation type (e.g V4 as BDW server, V5 as SKL server).
  *
- * Depending on the physical SKU resource, we might see vGPU types like
+ * Depening on the physical SKU resource, we might see vGPU types like
  * GVTg_V4_8, GVTg_V4_4, GVTg_V4_2, etc. We can create different types of
  * vGPU on same physical GPU depending on available resource. Each vGPU
  * type will have a different number of avail_instance to indicate how
@@ -159,7 +158,7 @@ void intel_gvt_clean_vgpu_types(struct intel_gvt *gvt)
 }
 
 /**
- * intel_gvt_activate_vgpu - activate a virtual GPU
+ * intel_gvt_active_vgpu - activate a virtual GPU
  * @vgpu: virtual GPU
  *
  * This function is called when user wants to activate a virtual GPU.
@@ -167,11 +166,13 @@ void intel_gvt_clean_vgpu_types(struct intel_gvt *gvt)
  */
 void intel_gvt_activate_vgpu(struct intel_vgpu *vgpu)
 {
-	set_bit(INTEL_VGPU_STATUS_ACTIVE, vgpu->status);
+	mutex_lock(&vgpu->vgpu_lock);
+	vgpu->active = true;
+	mutex_unlock(&vgpu->vgpu_lock);
 }
 
 /**
- * intel_gvt_deactivate_vgpu - deactivate a virtual GPU
+ * intel_gvt_deactive_vgpu - deactivate a virtual GPU
  * @vgpu: virtual GPU
  *
  * This function is called when user wants to deactivate a virtual GPU.
@@ -182,7 +183,7 @@ void intel_gvt_deactivate_vgpu(struct intel_vgpu *vgpu)
 {
 	mutex_lock(&vgpu->vgpu_lock);
 
-	clear_bit(INTEL_VGPU_STATUS_ACTIVE, vgpu->status);
+	vgpu->active = false;
 
 	if (atomic_read(&vgpu->submission.running_workload_num)) {
 		mutex_unlock(&vgpu->vgpu_lock);
@@ -227,8 +228,7 @@ void intel_gvt_destroy_vgpu(struct intel_vgpu *vgpu)
 	struct intel_gvt *gvt = vgpu->gvt;
 	struct drm_i915_private *i915 = gvt->gt->i915;
 
-	drm_WARN(&i915->drm, test_bit(INTEL_VGPU_STATUS_ACTIVE, vgpu->status),
-		 "vGPU is still active!\n");
+	drm_WARN(&i915->drm, vgpu->active, "vGPU is still active!\n");
 
 	/*
 	 * remove idr first so later clean can judge if need to stop
@@ -285,7 +285,8 @@ struct intel_vgpu *intel_gvt_create_idle_vgpu(struct intel_gvt *gvt)
 	if (ret)
 		goto out_free_vgpu;
 
-	clear_bit(INTEL_VGPU_STATUS_ACTIVE, vgpu->status);
+	vgpu->active = false;
+
 	return vgpu;
 
 out_free_vgpu:
@@ -294,7 +295,7 @@ out_free_vgpu:
 }
 
 /**
- * intel_gvt_destroy_idle_vgpu - destroy an idle virtual GPU
+ * intel_gvt_destroy_vgpu - destroy an idle virtual GPU
  * @vgpu: virtual GPU
  *
  * This function is called when user wants to destroy an idle virtual GPU.
@@ -324,7 +325,7 @@ int intel_gvt_create_vgpu(struct intel_vgpu *vgpu,
 	ret = idr_alloc(&gvt->vgpu_idr, vgpu, IDLE_VGPU_IDR + 1, GVT_MAX_VGPU,
 		GFP_KERNEL);
 	if (ret < 0)
-		goto out_unlock;
+		goto out_unlock;;
 
 	vgpu->id = ret;
 	vgpu->sched_ctl.weight = conf->weight;
@@ -417,7 +418,7 @@ out_unlock:
  * the whole vGPU to default state as when it is created. This vGPU function
  * is required both for functionary and security concerns.The ultimate goal
  * of vGPU FLR is that reuse a vGPU instance by virtual machines. When we
- * assign a vGPU to a virtual machine we must issue such reset first.
+ * assign a vGPU to a virtual machine we must isse such reset first.
  *
  * Full GT Reset and Per-Engine GT Reset are soft reset flow for GPU engines
  * (Render, Blitter, Video, Video Enhancement). It is defined by GPU Spec.
@@ -428,7 +429,7 @@ out_unlock:
  *
  * The parameter dev_level is to identify if we will do DMLR or GT reset.
  * The parameter engine_mask is to specific the engines that need to be
- * reset. If value ALL_ENGINES is given for engine_mask, it means
+ * resetted. If value ALL_ENGINES is given for engine_mask, it means
  * the caller requests a full GT reset that we will reset all virtual
  * GPU engines. For FLR, engine_mask is ignored.
  */

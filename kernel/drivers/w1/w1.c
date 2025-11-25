@@ -32,7 +32,7 @@ static int w1_timeout = 10;
 module_param_named(timeout, w1_timeout, int, 0);
 MODULE_PARM_DESC(timeout, "time in seconds between automatic slave searches");
 
-static int w1_timeout_us;
+static int w1_timeout_us = 0;
 module_param_named(timeout_us, w1_timeout_us, int, 0);
 MODULE_PARM_DESC(timeout_us,
 		 "time in microseconds between automatic slave searches");
@@ -57,6 +57,11 @@ MODULE_PARM_DESC(slave_ttl,
 
 DEFINE_MUTEX(w1_mlock);
 LIST_HEAD(w1_masters);
+
+static int w1_master_match(struct device *dev, struct device_driver *drv)
+{
+	return 1;
+}
 
 static int w1_master_probe(struct device *dev)
 {
@@ -111,7 +116,7 @@ ATTRIBUTE_GROUPS(w1_slave);
 /* Default family */
 
 static ssize_t rw_write(struct file *filp, struct kobject *kobj,
-			const struct bin_attribute *bin_attr, char *buf, loff_t off,
+			struct bin_attribute *bin_attr, char *buf, loff_t off,
 			size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
@@ -130,8 +135,8 @@ out_up:
 }
 
 static ssize_t rw_read(struct file *filp, struct kobject *kobj,
-		       const struct bin_attribute *bin_attr, char *buf,
-		       loff_t off, size_t count)
+		       struct bin_attribute *bin_attr, char *buf, loff_t off,
+		       size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
 
@@ -141,9 +146,9 @@ static ssize_t rw_read(struct file *filp, struct kobject *kobj,
 	return count;
 }
 
-static const BIN_ATTR_RW(rw, PAGE_SIZE);
+static BIN_ATTR_RW(rw, PAGE_SIZE);
 
-static const struct bin_attribute *const w1_slave_bin_attrs[] = {
+static struct bin_attribute *w1_slave_bin_attrs[] = {
 	&bin_attr_rw,
 	NULL,
 };
@@ -165,10 +170,11 @@ static struct w1_family w1_default_family = {
 	.fops = &w1_default_fops,
 };
 
-static int w1_uevent(const struct device *dev, struct kobj_uevent_env *env);
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env);
 
-static const struct bus_type w1_bus_type = {
+static struct bus_type w1_bus_type = {
 	.name = "w1",
+	.match = w1_master_match,
 	.uevent = w1_uevent,
 };
 
@@ -295,13 +301,17 @@ static ssize_t w1_master_attribute_show_pointer(struct device *dev, struct devic
 
 static ssize_t w1_master_attribute_show_timeout(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", w1_timeout);
+	ssize_t count;
+	count = sprintf(buf, "%d\n", w1_timeout);
+	return count;
 }
 
 static ssize_t w1_master_attribute_show_timeout_us(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", w1_timeout_us);
+	ssize_t count;
+	count = sprintf(buf, "%d\n", w1_timeout_us);
+	return count;
 }
 
 static ssize_t w1_master_attribute_store_max_slave_count(struct device *dev,
@@ -491,7 +501,7 @@ static ssize_t w1_master_attribute_store_remove(struct device *dev,
 	struct w1_master *md = dev_to_w1_master(dev);
 	struct w1_reg_num rn;
 	struct w1_slave *sl;
-	ssize_t result;
+	ssize_t result = count;
 
 	if (w1_atoreg_num(dev, buf, count, &rn))
 		return -EINVAL;
@@ -504,7 +514,7 @@ static ssize_t w1_master_attribute_store_remove(struct device *dev,
 		if (result == 0)
 			result = count;
 	} else {
-		dev_info(dev, "Device %02x-%012llx doesn't exist\n", rn.family,
+		dev_info(dev, "Device %02x-%012llx doesn't exists\n", rn.family,
 			(unsigned long long)rn.id);
 		result = -EINVAL;
 	}
@@ -567,11 +577,11 @@ void w1_destroy_master_attributes(struct w1_master *master)
 	sysfs_remove_group(&master->dev.kobj, &w1_master_defattr_group);
 }
 
-static int w1_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct w1_master *md = NULL;
-	const struct w1_slave *sl = NULL;
-	const char *event_owner, *name;
+	struct w1_master *md = NULL;
+	struct w1_slave *sl = NULL;
+	char *event_owner, *name;
 	int err = 0;
 
 	if (dev->driver == &w1_master_driver) {
@@ -692,7 +702,6 @@ static int __w1_attach_slave_device(struct w1_slave *sl)
 		dev_err(&sl->dev,
 			"Device registration [%s] failed. err=%d\n",
 			dev_name(&sl->dev), err);
-		of_node_put(sl->dev.of_node);
 		put_device(&sl->dev);
 		return err;
 	}
@@ -821,47 +830,49 @@ int w1_slave_detach(struct w1_slave *sl)
 
 struct w1_master *w1_search_master_id(u32 id)
 {
-	struct w1_master *dev = NULL, *iter;
+	struct w1_master *dev;
+	int found = 0;
 
 	mutex_lock(&w1_mlock);
-	list_for_each_entry(iter, &w1_masters, w1_master_entry) {
-		if (iter->id == id) {
-			dev = iter;
-			atomic_inc(&iter->refcnt);
+	list_for_each_entry(dev, &w1_masters, w1_master_entry) {
+		if (dev->id == id) {
+			found = 1;
+			atomic_inc(&dev->refcnt);
 			break;
 		}
 	}
 	mutex_unlock(&w1_mlock);
 
-	return dev;
+	return (found)?dev:NULL;
 }
 
 struct w1_slave *w1_search_slave(struct w1_reg_num *id)
 {
 	struct w1_master *dev;
-	struct w1_slave *sl = NULL, *iter;
+	struct w1_slave *sl = NULL;
+	int found = 0;
 
 	mutex_lock(&w1_mlock);
 	list_for_each_entry(dev, &w1_masters, w1_master_entry) {
 		mutex_lock(&dev->list_mutex);
-		list_for_each_entry(iter, &dev->slist, w1_slave_entry) {
-			if (iter->reg_num.family == id->family &&
-			    iter->reg_num.id == id->id &&
-			    iter->reg_num.crc == id->crc) {
-				sl = iter;
+		list_for_each_entry(sl, &dev->slist, w1_slave_entry) {
+			if (sl->reg_num.family == id->family &&
+					sl->reg_num.id == id->id &&
+					sl->reg_num.crc == id->crc) {
+				found = 1;
 				atomic_inc(&dev->refcnt);
-				atomic_inc(&iter->refcnt);
+				atomic_inc(&sl->refcnt);
 				break;
 			}
 		}
 		mutex_unlock(&dev->list_mutex);
 
-		if (sl)
+		if (found)
 			break;
 	}
 	mutex_unlock(&w1_mlock);
 
-	return sl;
+	return (found)?sl:NULL;
 }
 
 void w1_reconnect_slaves(struct w1_family *f, int attach)

@@ -35,6 +35,7 @@
 #include <linux/bitops.h>
 #include <linux/regulator/consumer.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/mmc/slot-gpio.h>
 
 #include "dw_mmc.h"
@@ -493,7 +494,7 @@ static void dw_mci_dmac_complete_dma(void *arg)
 	 */
 	if (data) {
 		set_bit(EVENT_XFER_COMPLETE, &host->pending_events);
-		queue_work(system_bh_wq, &host->bh_work);
+		tasklet_schedule(&host->tasklet);
 	}
 }
 
@@ -1182,7 +1183,7 @@ static void dw_mci_submit_data(struct dw_mci *host, struct mmc_data *data)
 		/*
 		 * Use the initial fifoth_val for PIO mode. If wm_algined
 		 * is set, we set watermark same as data size.
-		 * If next issued data may be transferred by DMA mode,
+		 * If next issued data may be transfered by DMA mode,
 		 * prev_blksz should be invalidated.
 		 */
 		if (host->wm_aligned)
@@ -1361,7 +1362,7 @@ static void __dw_mci_start_request(struct dw_mci *host,
 		 * is just about to roll over.
 		 *
 		 * We do this whole thing under spinlock and only if the
-		 * command hasn't already completed (indicating the irq
+		 * command hasn't already completed (indicating the the irq
 		 * already ran so we don't want the timeout).
 		 */
 		spin_lock_irqsave(&host->irq_lock, irqflags);
@@ -1617,7 +1618,6 @@ static void dw_mci_hw_reset(struct mmc_host *mmc)
 {
 	struct dw_mci_slot *slot = mmc_priv(mmc);
 	struct dw_mci *host = slot->host;
-	const struct dw_mci_drv_data *drv_data = host->drv_data;
 	int reset;
 
 	if (host->use_dma == TRANS_MODE_IDMAC)
@@ -1626,11 +1626,6 @@ static void dw_mci_hw_reset(struct mmc_host *mmc)
 	if (!dw_mci_ctrl_reset(host, SDMMC_CTRL_DMA_RESET |
 				     SDMMC_CTRL_FIFO_RESET))
 		return;
-
-	if (drv_data && drv_data->hw_reset) {
-		drv_data->hw_reset(host);
-		return;
-	}
 
 	/*
 	 * According to eMMC spec, card reset procedure:
@@ -1840,7 +1835,7 @@ static enum hrtimer_restart dw_mci_fault_timer(struct hrtimer *t)
 	if (!host->data_status) {
 		host->data_status = SDMMC_INT_DCRC;
 		set_bit(EVENT_DATA_ERROR, &host->pending_events);
-		queue_work(system_bh_wq, &host->bh_work);
+		tasklet_schedule(&host->tasklet);
 	}
 
 	spin_unlock_irqrestore(&host->irq_lock, flags);
@@ -1862,7 +1857,7 @@ static void dw_mci_start_fault_timer(struct dw_mci *host)
 	 * Try to inject the error at random points during the data transfer.
 	 */
 	hrtimer_start(&host->fault_timer,
-		      ms_to_ktime(get_random_u32_below(25)),
+		      ms_to_ktime(prandom_u32_max(25)),
 		      HRTIMER_MODE_REL);
 }
 
@@ -1875,7 +1870,8 @@ static void dw_mci_init_fault(struct dw_mci *host)
 {
 	host->fail_data_crc = (struct fault_attr) FAULT_ATTR_INITIALIZER;
 
-	hrtimer_setup(&host->fault_timer, dw_mci_fault_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&host->fault_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	host->fault_timer.function = dw_mci_fault_timer;
 }
 #else
 static void dw_mci_init_fault(struct dw_mci *host)
@@ -2040,10 +2036,10 @@ static bool dw_mci_clear_pending_cmd_complete(struct dw_mci *host)
 	 * Really be certain that the timer has stopped.  This is a bit of
 	 * paranoia and could only really happen if we had really bad
 	 * interrupt latency and the interrupt routine and timeout were
-	 * running concurrently so that the timer_delete() in the interrupt
+	 * running concurrently so that the del_timer() in the interrupt
 	 * handler couldn't run.
 	 */
-	WARN_ON(timer_delete_sync(&host->cto_timer));
+	WARN_ON(del_timer_sync(&host->cto_timer));
 	clear_bit(EVENT_CMD_COMPLETE, &host->pending_events);
 
 	return true;
@@ -2055,15 +2051,15 @@ static bool dw_mci_clear_pending_data_complete(struct dw_mci *host)
 		return false;
 
 	/* Extra paranoia just like dw_mci_clear_pending_cmd_complete() */
-	WARN_ON(timer_delete_sync(&host->dto_timer));
+	WARN_ON(del_timer_sync(&host->dto_timer));
 	clear_bit(EVENT_DATA_COMPLETE, &host->pending_events);
 
 	return true;
 }
 
-static void dw_mci_work_func(struct work_struct *t)
+static void dw_mci_tasklet_func(struct tasklet_struct *t)
 {
-	struct dw_mci *host = from_work(host, t, bh_work);
+	struct dw_mci *host = from_tasklet(host, t, tasklet);
 	struct mmc_data	*data;
 	struct mmc_command *cmd;
 	struct mmc_request *mrq;
@@ -2118,7 +2114,7 @@ static void dw_mci_work_func(struct work_struct *t)
 				 * will waste a bit of time (we already know
 				 * the command was bad), it can't cause any
 				 * errors since it's possible it would have
-				 * taken place anyway if this bh work got
+				 * taken place anyway if this tasklet got
 				 * delayed. Allowing the transfer to take place
 				 * avoids races and keeps things simple.
 				 */
@@ -2788,7 +2784,7 @@ done:
 
 static void dw_mci_cmd_interrupt(struct dw_mci *host, u32 status)
 {
-	timer_delete(&host->cto_timer);
+	del_timer(&host->cto_timer);
 
 	if (!host->cmd_status)
 		host->cmd_status = status;
@@ -2796,7 +2792,7 @@ static void dw_mci_cmd_interrupt(struct dw_mci *host, u32 status)
 	smp_wmb(); /* drain writebuffer */
 
 	set_bit(EVENT_CMD_COMPLETE, &host->pending_events);
-	queue_work(system_bh_wq, &host->bh_work);
+	tasklet_schedule(&host->tasklet);
 
 	dw_mci_start_fault_timer(host);
 }
@@ -2832,13 +2828,13 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 			dw_mci_cmd_interrupt(host, pending);
 			spin_unlock(&host->irq_lock);
 
-			timer_delete(&host->cmd11_timer);
+			del_timer(&host->cmd11_timer);
 		}
 
 		if (pending & DW_MCI_CMD_ERROR_FLAGS) {
 			spin_lock(&host->irq_lock);
 
-			timer_delete(&host->cto_timer);
+			del_timer(&host->cto_timer);
 			mci_writel(host, RINTSTS, DW_MCI_CMD_ERROR_FLAGS);
 			host->cmd_status = pending;
 			smp_wmb(); /* drain writebuffer */
@@ -2851,7 +2847,7 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 			spin_lock(&host->irq_lock);
 
 			if (host->quirks & DW_MMC_QUIRK_EXTENDED_TMOUT)
-				timer_delete(&host->dto_timer);
+				del_timer(&host->dto_timer);
 
 			/* if there is an error report DATA_ERROR */
 			mci_writel(host, RINTSTS, DW_MCI_DATA_ERROR_FLAGS);
@@ -2864,7 +2860,7 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 				set_bit(EVENT_DATA_COMPLETE,
 					&host->pending_events);
 
-			queue_work(system_bh_wq, &host->bh_work);
+			tasklet_schedule(&host->tasklet);
 
 			spin_unlock(&host->irq_lock);
 		}
@@ -2872,7 +2868,7 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 		if (pending & SDMMC_INT_DATA_OVER) {
 			spin_lock(&host->irq_lock);
 
-			timer_delete(&host->dto_timer);
+			del_timer(&host->dto_timer);
 
 			mci_writel(host, RINTSTS, SDMMC_INT_DATA_OVER);
 			if (!host->data_status)
@@ -2883,7 +2879,7 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 					dw_mci_read_data_pio(host, true);
 			}
 			set_bit(EVENT_DATA_COMPLETE, &host->pending_events);
-			queue_work(system_bh_wq, &host->bh_work);
+			tasklet_schedule(&host->tasklet);
 
 			spin_unlock(&host->irq_lock);
 		}
@@ -3008,7 +3004,7 @@ static int dw_mci_init_slot(struct dw_mci *host)
 	struct dw_mci_slot *slot;
 	int ret;
 
-	mmc = devm_mmc_alloc_host(host->dev, sizeof(*slot));
+	mmc = mmc_alloc_host(sizeof(struct dw_mci_slot), host->dev);
 	if (!mmc)
 		return -ENOMEM;
 
@@ -3024,18 +3020,18 @@ static int dw_mci_init_slot(struct dw_mci *host)
 	/*if there are external regulators, get them*/
 	ret = mmc_regulator_get_supply(mmc);
 	if (ret)
-		return ret;
+		goto err_host_allocated;
 
 	if (!mmc->ocr_avail)
 		mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 
 	ret = mmc_of_parse(mmc);
 	if (ret)
-		return ret;
+		goto err_host_allocated;
 
 	ret = dw_mci_init_slot_caps(slot);
 	if (ret)
-		return ret;
+		goto err_host_allocated;
 
 	/* Useful defaults if platform data is unset. */
 	if (host->use_dma == TRANS_MODE_IDMAC) {
@@ -3065,13 +3061,17 @@ static int dw_mci_init_slot(struct dw_mci *host)
 
 	ret = mmc_add_host(mmc);
 	if (ret)
-		return ret;
+		goto err_host_allocated;
 
 #if defined(CONFIG_DEBUG_FS)
 	dw_mci_init_debugfs(slot);
 #endif
 
 	return 0;
+
+err_host_allocated:
+	mmc_free_host(mmc);
+	return ret;
 }
 
 static void dw_mci_cleanup_slot(struct dw_mci_slot *slot)
@@ -3079,6 +3079,7 @@ static void dw_mci_cleanup_slot(struct dw_mci_slot *slot)
 	/* Debugfs stuff is cleaned up by mmc core */
 	mmc_remove_host(slot->mmc);
 	slot->host->slot = NULL;
+	mmc_free_host(slot->mmc);
 }
 
 static void dw_mci_init_dma(struct dw_mci *host)
@@ -3174,7 +3175,7 @@ no_dma:
 
 static void dw_mci_cmd11_timer(struct timer_list *t)
 {
-	struct dw_mci *host = timer_container_of(host, t, cmd11_timer);
+	struct dw_mci *host = from_timer(host, t, cmd11_timer);
 
 	if (host->state != STATE_SENDING_CMD11) {
 		dev_warn(host->dev, "Unexpected CMD11 timeout\n");
@@ -3183,12 +3184,12 @@ static void dw_mci_cmd11_timer(struct timer_list *t)
 
 	host->cmd_status = SDMMC_INT_RTO;
 	set_bit(EVENT_CMD_COMPLETE, &host->pending_events);
-	queue_work(system_bh_wq, &host->bh_work);
+	tasklet_schedule(&host->tasklet);
 }
 
 static void dw_mci_cto_timer(struct timer_list *t)
 {
-	struct dw_mci *host = timer_container_of(host, t, cto_timer);
+	struct dw_mci *host = from_timer(host, t, cto_timer);
 	unsigned long irqflags;
 	u32 pending;
 
@@ -3229,7 +3230,7 @@ static void dw_mci_cto_timer(struct timer_list *t)
 		 */
 		host->cmd_status = SDMMC_INT_RTO;
 		set_bit(EVENT_CMD_COMPLETE, &host->pending_events);
-		queue_work(system_bh_wq, &host->bh_work);
+		tasklet_schedule(&host->tasklet);
 		break;
 	default:
 		dev_warn(host->dev, "Unexpected command timeout, state %d\n",
@@ -3243,7 +3244,7 @@ exit:
 
 static void dw_mci_dto_timer(struct timer_list *t)
 {
-	struct dw_mci *host = timer_container_of(host, t, dto_timer);
+	struct dw_mci *host = from_timer(host, t, dto_timer);
 	unsigned long irqflags;
 	u32 pending;
 
@@ -3280,7 +3281,7 @@ static void dw_mci_dto_timer(struct timer_list *t)
 		host->data_status = SDMMC_INT_DRTO;
 		set_bit(EVENT_DATA_ERROR, &host->pending_events);
 		set_bit(EVENT_DATA_COMPLETE, &host->pending_events);
-		queue_work(system_bh_wq, &host->bh_work);
+		tasklet_schedule(&host->tasklet);
 		break;
 	default:
 		dev_warn(host->dev, "Unexpected data timeout, state %d\n",
@@ -3533,7 +3534,7 @@ int dw_mci_probe(struct dw_mci *host)
 	else
 		host->fifo_reg = host->regs + DATA_240A_OFFSET;
 
-	INIT_WORK(&host->bh_work, dw_mci_work_func);
+	tasklet_setup(&host->tasklet, dw_mci_tasklet_func);
 	ret = devm_request_irq(host->dev, host->irq, dw_mci_interrupt,
 			       host->irq_flags, "dw-mci", host);
 	if (ret)
@@ -3617,7 +3618,7 @@ int dw_mci_runtime_suspend(struct device *dev)
 	clk_disable_unprepare(host->ciu_clk);
 
 	if (host->slot &&
-	    (mmc_host_can_gpio_cd(host->slot->mmc) ||
+	    (mmc_can_gpio_cd(host->slot->mmc) ||
 	     !mmc_card_is_removable(host->slot->mmc)))
 		clk_disable_unprepare(host->biu_clk);
 
@@ -3631,7 +3632,7 @@ int dw_mci_runtime_resume(struct device *dev)
 	struct dw_mci *host = dev_get_drvdata(dev);
 
 	if (host->slot &&
-	    (mmc_host_can_gpio_cd(host->slot->mmc) ||
+	    (mmc_can_gpio_cd(host->slot->mmc) ||
 	     !mmc_card_is_removable(host->slot->mmc))) {
 		ret = clk_prepare_enable(host->biu_clk);
 		if (ret)
@@ -3685,7 +3686,7 @@ int dw_mci_runtime_resume(struct device *dev)
 
 err:
 	if (host->slot &&
-	    (mmc_host_can_gpio_cd(host->slot->mmc) ||
+	    (mmc_can_gpio_cd(host->slot->mmc) ||
 	     !mmc_card_is_removable(host->slot->mmc)))
 		clk_disable_unprepare(host->biu_clk);
 

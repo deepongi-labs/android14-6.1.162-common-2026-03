@@ -15,8 +15,8 @@ Driver device table
    :no-identifiers: pci_device_id
 
 
-Delaying and scheduling routines
---------------------------------
+Delaying, scheduling, and timer routines
+----------------------------------------
 
 .. kernel-doc:: include/linux/sched.h
    :internal:
@@ -33,16 +33,16 @@ Delaying and scheduling routines
 .. kernel-doc:: include/linux/completion.h
    :internal:
 
-Time and timer routines
------------------------
-
-.. kernel-doc:: include/linux/jiffies.h
-   :internal:
-
-.. kernel-doc:: kernel/time/time.c
+.. kernel-doc:: kernel/time/timer.c
    :export:
 
-.. kernel-doc:: kernel/time/timer.c
+Wait queues and Wake events
+---------------------------
+
+.. kernel-doc:: include/linux/wait.h
+   :internal:
+
+.. kernel-doc:: kernel/sched/wait.c
    :export:
 
 High-resolution timers
@@ -55,15 +55,6 @@ High-resolution timers
    :internal:
 
 .. kernel-doc:: kernel/time/hrtimer.c
-   :export:
-
-Wait queues and Wake events
----------------------------
-
-.. kernel-doc:: include/linux/wait.h
-   :internal:
-
-.. kernel-doc:: kernel/sched/wait.c
    :export:
 
 Internal Functions
@@ -93,22 +84,13 @@ Reference counting
 Atomics
 -------
 
-.. kernel-doc:: include/linux/atomic/atomic-instrumented.h
-   :internal:
-
-.. kernel-doc:: include/linux/atomic/atomic-arch-fallback.h
-   :internal:
-
-.. kernel-doc:: include/linux/atomic/atomic-long.h
+.. kernel-doc:: arch/x86/include/asm/atomic.h
    :internal:
 
 Kernel objects manipulation
 ---------------------------
 
 .. kernel-doc:: lib/kobject.c
-   :export:
-
-.. kernel-doc:: lib/kobject_uevent.c
    :export:
 
 Kernel utility functions

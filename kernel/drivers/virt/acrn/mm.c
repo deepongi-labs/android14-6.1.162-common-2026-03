@@ -12,7 +12,6 @@
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/vmalloc.h>
 
 #include "acrn_drv.h"
 
@@ -68,7 +67,7 @@ int acrn_mm_region_add(struct acrn_vm *vm, u64 user_gpa, u64 service_gpa,
 	ret = modify_region(vm, region);
 
 	dev_dbg(acrn_dev.this_device,
-		"%s: user-GPA[%p] service-GPA[%p] size[0x%llx].\n",
+		"%s: user-GPA[%pK] service-GPA[%pK] size[0x%llx].\n",
 		__func__, (void *)user_gpa, (void *)service_gpa, size);
 	kfree(region);
 	return ret;
@@ -99,7 +98,7 @@ int acrn_mm_region_del(struct acrn_vm *vm, u64 user_gpa, u64 size)
 
 	ret = modify_region(vm, region);
 
-	dev_dbg(acrn_dev.this_device, "%s: user-GPA[%p] size[0x%llx].\n",
+	dev_dbg(acrn_dev.this_device, "%s: user-GPA[%pK] size[0x%llx].\n",
 		__func__, (void *)user_gpa, size);
 	kfree(region);
 	return ret;
@@ -177,7 +176,9 @@ int acrn_vm_ram_map(struct acrn_vm *vm, struct acrn_vm_memmap *memmap)
 	vma = vma_lookup(current->mm, memmap->vma_base);
 	if (vma && ((vma->vm_flags & VM_PFNMAP) != 0)) {
 		unsigned long start_pfn, cur_pfn;
+		spinlock_t *ptl;
 		bool writable;
+		pte_t *ptep;
 
 		if ((memmap->vma_base + memmap->len) > vma->vm_end) {
 			mmap_read_unlock(current->mm);
@@ -185,20 +186,17 @@ int acrn_vm_ram_map(struct acrn_vm *vm, struct acrn_vm_memmap *memmap)
 		}
 
 		for (i = 0; i < nr_pages; i++) {
-			struct follow_pfnmap_args args = {
-				.vma = vma,
-				.address = memmap->vma_base + i * PAGE_SIZE,
-			};
-
-			ret = follow_pfnmap_start(&args);
+			ret = follow_pte(vma->vm_mm,
+					 memmap->vma_base + i * PAGE_SIZE,
+					 &ptep, &ptl);
 			if (ret)
 				break;
 
-			cur_pfn = args.pfn;
+			cur_pfn = pte_pfn(ptep_get(ptep));
 			if (i == 0)
 				start_pfn = cur_pfn;
-			writable = args.writable;
-			follow_pfnmap_end(&args);
+			writable = !!pte_write(ptep_get(ptep));
+			pte_unmap_unlock(ptep, ptl);
 
 			/* Disallow write access if the PTE is not writable. */
 			if (!writable &&
@@ -224,7 +222,7 @@ int acrn_vm_ram_map(struct acrn_vm *vm, struct acrn_vm_memmap *memmap)
 
 		if (ret) {
 			dev_dbg(acrn_dev.this_device,
-				"Failed to lookup PFN at VMA:%p.\n", (void *)memmap->vma_base);
+				"Failed to lookup PFN at VMA:%pK.\n", (void *)memmap->vma_base);
 			return ret;
 		}
 
@@ -291,11 +289,11 @@ int acrn_vm_ram_map(struct acrn_vm *vm, struct acrn_vm_memmap *memmap)
 		ret = -ENOMEM;
 		goto unmap_kernel_map;
 	}
-	regions_info->regions_num = nr_regions;
 
 	/* Fill each vm_memory_region_op */
 	vm_region = regions_info->regions_op;
 	regions_info->vmid = vm->vmid;
+	regions_info->regions_num = nr_regions;
 	regions_info->regions_gpa = virt_to_phys(vm_region);
 	user_vm_pa = memmap->user_vm_pa;
 	for (i = 0; i < nr_pages; i += 1 << order) {
@@ -326,7 +324,7 @@ int acrn_vm_ram_map(struct acrn_vm *vm, struct acrn_vm_memmap *memmap)
 	kfree(regions_info);
 
 	dev_dbg(acrn_dev.this_device,
-		"%s: VM[%u] service-GVA[%p] user-GPA[%p] size[0x%llx]\n",
+		"%s: VM[%u] service-GVA[%pK] user-GPA[%pK] size[0x%llx]\n",
 		__func__, vm->vmid,
 		remap_vaddr, (void *)memmap->user_vm_pa, memmap->len);
 	return ret;

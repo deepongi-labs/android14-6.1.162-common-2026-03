@@ -353,7 +353,7 @@ static int at91_rtc_probe(struct platform_device *pdev)
 
 	/* platform setup code should have handled this; sigh */
 	if (!device_can_wakeup(&pdev->dev))
-		device_init_wakeup(&pdev->dev, true);
+		device_init_wakeup(&pdev->dev, 1);
 
 	platform_set_drvdata(pdev, rtc);
 
@@ -443,7 +443,7 @@ err_clk:
 /*
  * Disable and remove the RTC driver
  */
-static void at91_rtc_remove(struct platform_device *pdev)
+static int at91_rtc_remove(struct platform_device *pdev)
 {
 	struct sam9_rtc	*rtc = platform_get_drvdata(pdev);
 	u32		mr = rtt_readl(rtc, MR);
@@ -452,6 +452,8 @@ static void at91_rtc_remove(struct platform_device *pdev)
 	rtt_writel(rtc, MR, mr & ~(AT91_RTT_ALMIEN | AT91_RTT_RTTINCIEN));
 
 	clk_disable_unprepare(rtc->sclk);
+
+	return 0;
 }
 
 static void at91_rtc_shutdown(struct platform_device *pdev)
@@ -535,7 +537,7 @@ static struct platform_driver at91_rtc_driver = {
 	.driver		= {
 		.name	= "rtc-at91sam9",
 		.pm	= &at91_rtc_pm_ops,
-		.of_match_table = at91_rtc_dt_ids,
+		.of_match_table = of_match_ptr(at91_rtc_dt_ids),
 	},
 };
 

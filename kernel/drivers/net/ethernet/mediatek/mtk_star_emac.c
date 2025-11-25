@@ -17,6 +17,7 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
 #include <linux/platform_device.h>
@@ -1378,6 +1379,9 @@ static int mtk_star_mdio_read(struct mii_bus *mii, int phy_id, int regnum)
 	unsigned int val, data;
 	int ret;
 
+	if (regnum & MII_ADDR_C45)
+		return -EOPNOTSUPP;
+
 	mtk_star_mdio_rwok_clear(priv);
 
 	val = (regnum << MTK_STAR_OFF_PHY_CTRL0_PREG);
@@ -1404,6 +1408,9 @@ static int mtk_star_mdio_write(struct mii_bus *mii, int phy_id,
 	struct mtk_star_priv *priv = mii->priv;
 	unsigned int val;
 
+	if (regnum & MII_ADDR_C45)
+		return -EOPNOTSUPP;
+
 	mtk_star_mdio_rwok_clear(priv);
 
 	val = data;
@@ -1428,9 +1435,14 @@ static int mtk_star_mdio_init(struct net_device *ndev)
 
 	of_node = dev->of_node;
 
-	mdio_node = of_get_available_child_by_name(of_node, "mdio");
+	mdio_node = of_get_child_by_name(of_node, "mdio");
 	if (!mdio_node)
 		return -ENODEV;
+
+	if (!of_device_is_available(mdio_node)) {
+		ret = -ENODEV;
+		goto out_put_node;
+	}
 
 	priv->mii = devm_mdiobus_alloc(dev);
 	if (!priv->mii) {

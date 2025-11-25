@@ -32,8 +32,8 @@
  */
 static void uclogic_inrange_timeout(struct timer_list *t)
 {
-	struct uclogic_drvdata *drvdata = timer_container_of(drvdata, t,
-							     inrange_timer);
+	struct uclogic_drvdata *drvdata = from_timer(drvdata, t,
+							inrange_timer);
 	struct input_dev *input = drvdata->pen_input;
 
 	if (input == NULL)
@@ -50,41 +50,17 @@ static void uclogic_inrange_timeout(struct timer_list *t)
 	input_sync(input);
 }
 
-static const __u8 *uclogic_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+static __u8 *uclogic_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 					unsigned int *rsize)
 {
 	struct uclogic_drvdata *drvdata = hid_get_drvdata(hdev);
 
 	if (drvdata->desc_ptr != NULL) {
+		rdesc = drvdata->desc_ptr;
 		*rsize = drvdata->desc_size;
-		return drvdata->desc_ptr;
 	}
 	return rdesc;
 }
-
-/* Buttons considered valid tablet pad inputs. */
-static const unsigned int uclogic_extra_input_mapping[] = {
-	BTN_0,
-	BTN_1,
-	BTN_2,
-	BTN_3,
-	BTN_4,
-	BTN_5,
-	BTN_6,
-	BTN_7,
-	BTN_8,
-	BTN_RIGHT,
-	BTN_MIDDLE,
-	BTN_SIDE,
-	BTN_EXTRA,
-	BTN_FORWARD,
-	BTN_BACK,
-	BTN_B,
-	BTN_A,
-	BTN_BASE,
-	BTN_BASE2,
-	BTN_X
-};
 
 static int uclogic_input_mapping(struct hid_device *hdev,
 				 struct hid_input *hi,
@@ -96,27 +72,9 @@ static int uclogic_input_mapping(struct hid_device *hdev,
 	struct uclogic_drvdata *drvdata = hid_get_drvdata(hdev);
 	struct uclogic_params *params = &drvdata->params;
 
-	if (field->application == HID_GD_KEYPAD) {
-		/*
-		 * Remap input buttons to sensible ones that are not invalid.
-		 * This only affects previous behavior for devices with more than ten or so buttons.
-		 */
-		const int key = (usage->hid & HID_USAGE) - 1;
-
-		if (key < ARRAY_SIZE(uclogic_extra_input_mapping)) {
-			hid_map_usage(hi,
-				      usage,
-				      bit,
-				      max,
-				      EV_KEY,
-				      uclogic_extra_input_mapping[key]);
-			return 1;
-		}
-	} else if (field->application == HID_DG_PEN) {
-		/* Discard invalid pen usages */
-		if (params->pen.usage_invalid)
-			return -1;
-	}
+	/* Discard invalid pen usages */
+	if (params->pen.usage_invalid && (field->application == HID_DG_PEN))
+		return -1;
 
 	/* Let hid-core decide what to do */
 	return 0;
@@ -286,34 +244,6 @@ static int uclogic_resume(struct hid_device *hdev)
 #endif
 
 /**
- * uclogic_exec_event_hook - if the received event is hooked schedules the
- * associated work.
- *
- * @p:		Tablet interface report parameters.
- * @event:	Raw event.
- * @size:	The size of event.
- *
- * Returns:
- *	Whether the event was hooked or not.
- */
-static bool uclogic_exec_event_hook(struct uclogic_params *p, u8 *event, int size)
-{
-	struct uclogic_raw_event_hook *curr;
-
-	if (!p->event_hooks)
-		return false;
-
-	list_for_each_entry(curr, &p->event_hooks->list, list) {
-		if (curr->size == size && memcmp(curr->event, event, size) == 0) {
-			schedule_work(&curr->work);
-			return true;
-		}
-	}
-
-	return false;
-}
-
-/**
  * uclogic_raw_event_pen - handle raw pen events (pen HID reports).
  *
  * @drvdata:	Driver data.
@@ -449,22 +379,8 @@ static int uclogic_raw_event_frame(
 
 	/* If need to, and can, transform the bitmap dial reports */
 	if (frame->bitmap_dial_byte > 0 && frame->bitmap_dial_byte < size) {
-		switch (data[frame->bitmap_dial_byte]) {
-		case 2:
+		if (data[frame->bitmap_dial_byte] == 2)
 			data[frame->bitmap_dial_byte] = -1;
-			break;
-
-		/* Everything below here is for tablets that shove multiple dials into 1 byte */
-		case 16:
-			data[frame->bitmap_dial_byte] = 0;
-			data[frame->bitmap_second_dial_destination_byte] = 1;
-			break;
-
-		case 32:
-			data[frame->bitmap_dial_byte] = 0;
-			data[frame->bitmap_second_dial_destination_byte] = -1;
-			break;
-		}
 	}
 
 	return 0;
@@ -483,9 +399,6 @@ static int uclogic_raw_event(struct hid_device *hdev,
 
 	/* Do not handle anything but input reports */
 	if (report->type != HID_INPUT_REPORT)
-		return 0;
-
-	if (uclogic_exec_event_hook(params, data, size))
 		return 0;
 
 	while (true) {
@@ -531,7 +444,7 @@ static void uclogic_remove(struct hid_device *hdev)
 {
 	struct uclogic_drvdata *drvdata = hid_get_drvdata(hdev);
 
-	timer_delete_sync(&drvdata->inrange_timer);
+	del_timer_sync(&drvdata->inrange_timer);
 	hid_hw_stop(hdev);
 	kfree(drvdata->desc_ptr);
 	uclogic_params_cleanup(&drvdata->params);
@@ -602,8 +515,6 @@ static const struct hid_device_id uclogic_devices[] = {
 		.driver_data = UCLOGIC_MOUSE_FRAME_QUIRK | UCLOGIC_BATTERY_QUIRK },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_STAR06) },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
-				USB_DEVICE_ID_UGEE_XPPEN_TABLET_22R_PRO) },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, uclogic_devices);
@@ -626,10 +537,4 @@ module_hid_driver(uclogic_driver);
 
 MODULE_AUTHOR("Martin Rusko");
 MODULE_AUTHOR("Nikolai Kondrashov");
-MODULE_DESCRIPTION("HID driver for UC-Logic devices not fully compliant with HID standard");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("HID driver for UC-Logic devices not fully compliant with HID standard");
-
-#ifdef CONFIG_HID_KUNIT_TEST
-#include "hid-uclogic-core-test.c"
-#endif

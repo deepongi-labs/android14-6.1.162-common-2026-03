@@ -25,7 +25,6 @@ description:
 
 allOf:
   - $ref: /schemas/spi/spi-controller.yaml#
-  - $ref: /schemas/soc/qcom/qcom,se-common-props.yaml#
 
 properties:
   compatible:

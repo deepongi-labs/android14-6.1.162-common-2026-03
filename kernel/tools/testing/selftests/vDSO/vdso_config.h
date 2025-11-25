@@ -53,32 +53,27 @@
 #if __riscv_xlen == 32
 #define VDSO_32BIT		1
 #endif
-#elif defined(__loongarch__)
-#define VDSO_VERSION		6
-#define VDSO_NAMES		1
 #endif
 
-__attribute__((unused))
-static const char *versions[7] = {
+static const char *versions[6] = {
 	"LINUX_2.6",
 	"LINUX_2.6.15",
 	"LINUX_2.6.29",
 	"LINUX_2.6.39",
 	"LINUX_4",
 	"LINUX_4.15",
-	"LINUX_5.10"
 };
 
-__attribute__((unused))
-static const char *names[2][7] = {
+static const char *names[2][6] = {
 	{
 		"__kernel_gettimeofday",
 		"__kernel_clock_gettime",
 		"__kernel_time",
 		"__kernel_clock_getres",
 		"__kernel_getcpu",
+#if defined(VDSO_32BIT)
 		"__kernel_clock_gettime64",
-		"__kernel_getrandom",
+#endif
 	},
 	{
 		"__vdso_gettimeofday",
@@ -86,8 +81,9 @@ static const char *names[2][7] = {
 		"__vdso_time",
 		"__vdso_clock_getres",
 		"__vdso_getcpu",
+#if defined(VDSO_32BIT)
 		"__vdso_clock_gettime64",
-		"__vdso_getrandom",
+#endif
 	},
 };
 

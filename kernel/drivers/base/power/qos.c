@@ -36,6 +36,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/err.h>
 #include <trace/events/power.h>
+#include <trace/hooks/power.h>
 
 #include "power.h"
 
@@ -202,7 +203,7 @@ static int dev_pm_qos_constraints_allocate(struct device *dev)
 	if (!qos)
 		return -ENOMEM;
 
-	n = kcalloc(3, sizeof(*n), GFP_KERNEL);
+	n = kzalloc(3 * sizeof(*n), GFP_KERNEL);
 	if (!n) {
 		kfree(qos);
 		return -ENOMEM;
@@ -437,8 +438,11 @@ static int __dev_pm_qos_update_request(struct dev_pm_qos_request *req,
 
 	trace_dev_pm_qos_update_request(dev_name(req->dev), req->type,
 					new_value);
-	if (curr_value != new_value)
+	if (curr_value != new_value) {
+		if (req->type == DEV_PM_QOS_MAX_FREQUENCY)
+			trace_android_vh_fas_gpu_qos_update_tracer(&req->data.freq, &new_value);
 		ret = apply_constraint(req, PM_QOS_UPDATE_REQ, new_value);
+	}
 
 	return ret;
 }

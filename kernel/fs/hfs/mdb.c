@@ -150,11 +150,11 @@ int hfs_mdb_get(struct super_block *sb)
 
 	/* These parameters are read from and written to the MDB */
 	HFS_SB(sb)->free_ablocks = be16_to_cpu(mdb->drFreeBks);
-	atomic64_set(&HFS_SB(sb)->next_id, be32_to_cpu(mdb->drNxtCNID));
+	HFS_SB(sb)->next_id = be32_to_cpu(mdb->drNxtCNID);
 	HFS_SB(sb)->root_files = be16_to_cpu(mdb->drNmFls);
 	HFS_SB(sb)->root_dirs = be16_to_cpu(mdb->drNmRtDirs);
-	atomic64_set(&HFS_SB(sb)->file_count, be32_to_cpu(mdb->drFilCnt));
-	atomic64_set(&HFS_SB(sb)->folder_count, be32_to_cpu(mdb->drDirCnt));
+	HFS_SB(sb)->file_count = be32_to_cpu(mdb->drFilCnt);
+	HFS_SB(sb)->folder_count = be32_to_cpu(mdb->drDirCnt);
 
 	/* TRY to get the alternate (backup) MDB. */
 	sect = part_start + part_size - 2;
@@ -172,7 +172,7 @@ int hfs_mdb_get(struct super_block *sb)
 		pr_warn("continuing without an alternate MDB\n");
 	}
 
-	HFS_SB(sb)->bitmap = kzalloc(8192, GFP_KERNEL);
+	HFS_SB(sb)->bitmap = kmalloc(8192, GFP_KERNEL);
 	if (!HFS_SB(sb)->bitmap)
 		goto out;
 
@@ -273,17 +273,11 @@ void hfs_mdb_commit(struct super_block *sb)
 		/* These parameters may have been modified, so write them back */
 		mdb->drLsMod = hfs_mtime();
 		mdb->drFreeBks = cpu_to_be16(HFS_SB(sb)->free_ablocks);
-		BUG_ON(atomic64_read(&HFS_SB(sb)->next_id) > U32_MAX);
-		mdb->drNxtCNID =
-			cpu_to_be32((u32)atomic64_read(&HFS_SB(sb)->next_id));
+		mdb->drNxtCNID = cpu_to_be32(HFS_SB(sb)->next_id);
 		mdb->drNmFls = cpu_to_be16(HFS_SB(sb)->root_files);
 		mdb->drNmRtDirs = cpu_to_be16(HFS_SB(sb)->root_dirs);
-		BUG_ON(atomic64_read(&HFS_SB(sb)->file_count) > U32_MAX);
-		mdb->drFilCnt =
-			cpu_to_be32((u32)atomic64_read(&HFS_SB(sb)->file_count));
-		BUG_ON(atomic64_read(&HFS_SB(sb)->folder_count) > U32_MAX);
-		mdb->drDirCnt =
-			cpu_to_be32((u32)atomic64_read(&HFS_SB(sb)->folder_count));
+		mdb->drFilCnt = cpu_to_be32(HFS_SB(sb)->file_count);
+		mdb->drDirCnt = cpu_to_be32(HFS_SB(sb)->folder_count);
 
 		/* write MDB to disk */
 		mark_buffer_dirty(HFS_SB(sb)->mdb_bh);

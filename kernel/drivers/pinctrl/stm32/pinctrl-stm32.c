@@ -6,9 +6,7 @@
  *
  * Heavily based on Mediatek's pinctrl driver
  */
-#include <linux/bitfield.h>
 #include <linux/clk.h>
-#include <linux/export.h>
 #include <linux/gpio/driver.h>
 #include <linux/hwspinlock.h>
 #include <linux/io.h>
@@ -17,28 +15,24 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/of_irq.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/pinctrl/machine.h>
+#include <linux/pinctrl/pinconf.h>
+#include <linux/pinctrl/pinconf-generic.h>
+#include <linux/pinctrl/pinctrl.h>
+#include <linux/pinctrl/pinmux.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <linux/string_choices.h>
-
-#include <linux/pinctrl/consumer.h>
-#include <linux/pinctrl/machine.h>
-#include <linux/pinctrl/pinconf-generic.h>
-#include <linux/pinctrl/pinconf.h>
-#include <linux/pinctrl/pinctrl.h>
-#include <linux/pinctrl/pinmux.h>
 
 #include "../core.h"
 #include "../pinconf.h"
 #include "../pinctrl-utils.h"
 #include "pinctrl-stm32.h"
-
-#define STM32_GPIO_CID1		1
 
 #define STM32_GPIO_MODER	0x00
 #define STM32_GPIO_TYPER	0x04
@@ -51,8 +45,6 @@
 #define STM32_GPIO_AFRL		0x20
 #define STM32_GPIO_AFRH		0x24
 #define STM32_GPIO_SECCFGR	0x30
-#define STM32_GPIO_CIDCFGR(x)	(0x50 + (0x8 * (x)))
-#define STM32_GPIO_SEMCR(x)	(0x54 + (0x8 * (x)))
 
 /* custom bitfield to backup pin status */
 #define STM32_GPIO_BKP_MODE_SHIFT	0
@@ -65,14 +57,6 @@
 #define STM32_GPIO_BKP_PUPD_MASK	GENMASK(9, 8)
 #define STM32_GPIO_BKP_TYPE		10
 #define STM32_GPIO_BKP_VAL		11
-
-#define STM32_GPIO_CIDCFGR_CFEN		BIT(0)
-#define STM32_GPIO_CIDCFGR_SEMEN	BIT(1)
-#define STM32_GPIO_CIDCFGR_SCID_MASK	GENMASK(5, 4)
-#define STM32_GPIO_CIDCFGR_SEMWL_CID1	BIT(16 + STM32_GPIO_CID1)
-
-#define STM32_GPIO_SEMCR_SEM_MUTEX	BIT(0)
-#define STM32_GPIO_SEMCR_SEMCID_MASK	GENMASK(5, 4)
 
 #define STM32_GPIO_PINS_PER_BANK 16
 #define STM32_GPIO_IRQ_LINE	 16
@@ -91,7 +75,6 @@ static const char * const stm32_gpio_functions[] = {
 	"af8", "af9", "af10",
 	"af11", "af12", "af13",
 	"af14", "af15", "analog",
-	"reserved",
 };
 
 struct stm32_pinctrl_group {
@@ -113,7 +96,6 @@ struct stm32_gpio_bank {
 	u32 pin_backup[STM32_GPIO_PINS_PER_BANK];
 	u8 irq_type[STM32_GPIO_PINS_PER_BANK];
 	bool secure_control;
-	bool rif_control;
 };
 
 struct stm32_pinctrl {
@@ -137,8 +119,6 @@ struct stm32_pinctrl {
 	u16 irqmux_map;
 	spinlock_t irqmux_lock;
 };
-
-static void stm32_pmx_get_mode(struct stm32_gpio_bank *bank, int pin, u32 *mode, u32 *alt);
 
 static inline int stm32_gpio_pin(int gpio)
 {
@@ -210,80 +190,6 @@ static void stm32_gpio_backup_bias(struct stm32_gpio_bank *bank, u32 offset,
 	bank->pin_backup[offset] |= bias << STM32_GPIO_BKP_PUPD_SHIFT;
 }
 
-/* RIF functions */
-
-static bool stm32_gpio_rif_valid(struct stm32_gpio_bank *bank, unsigned int gpio_nr)
-{
-	u32 cid;
-
-	cid = readl_relaxed(bank->base + STM32_GPIO_CIDCFGR(gpio_nr));
-
-	if (!(cid & STM32_GPIO_CIDCFGR_CFEN))
-		return true;
-
-	if (!(cid & STM32_GPIO_CIDCFGR_SEMEN)) {
-		if (FIELD_GET(STM32_GPIO_CIDCFGR_SCID_MASK, cid) == STM32_GPIO_CID1)
-			return true;
-
-		return false;
-	}
-
-	if (cid & STM32_GPIO_CIDCFGR_SEMWL_CID1)
-		return true;
-
-	return false;
-}
-
-static bool stm32_gpio_rif_acquire_semaphore(struct stm32_gpio_bank *bank, unsigned int gpio_nr)
-{
-	u32 cid, sem;
-
-	cid = readl_relaxed(bank->base + STM32_GPIO_CIDCFGR(gpio_nr));
-
-	if (!(cid & STM32_GPIO_CIDCFGR_CFEN))
-		return true;
-
-	if (!(cid & STM32_GPIO_CIDCFGR_SEMEN)) {
-		if (FIELD_GET(STM32_GPIO_CIDCFGR_SCID_MASK, cid) == STM32_GPIO_CID1)
-			return true;
-
-		return false;
-	}
-
-	if (!(cid & STM32_GPIO_CIDCFGR_SEMWL_CID1))
-		return false;
-
-	sem = readl_relaxed(bank->base + STM32_GPIO_SEMCR(gpio_nr));
-	if (sem & STM32_GPIO_SEMCR_SEM_MUTEX) {
-		if (FIELD_GET(STM32_GPIO_SEMCR_SEMCID_MASK, sem) == STM32_GPIO_CID1)
-			return true;
-
-		return false;
-	}
-
-	writel_relaxed(STM32_GPIO_SEMCR_SEM_MUTEX, bank->base + STM32_GPIO_SEMCR(gpio_nr));
-
-	sem = readl_relaxed(bank->base + STM32_GPIO_SEMCR(gpio_nr));
-	if (sem & STM32_GPIO_SEMCR_SEM_MUTEX &&
-	    FIELD_GET(STM32_GPIO_SEMCR_SEMCID_MASK, sem) == STM32_GPIO_CID1)
-		return true;
-
-	return false;
-}
-
-static void stm32_gpio_rif_release_semaphore(struct stm32_gpio_bank *bank, unsigned int gpio_nr)
-{
-	u32 cid;
-
-	cid = readl_relaxed(bank->base + STM32_GPIO_CIDCFGR(gpio_nr));
-
-	if (!(cid & STM32_GPIO_CIDCFGR_CFEN))
-		return;
-
-	if (cid & STM32_GPIO_CIDCFGR_SEMEN)
-		writel_relaxed(0, bank->base + STM32_GPIO_SEMCR(gpio_nr));
-}
-
 /* GPIO functions */
 
 static inline void __stm32_gpio_set(struct stm32_gpio_bank *bank,
@@ -310,24 +216,12 @@ static int stm32_gpio_request(struct gpio_chip *chip, unsigned offset)
 		return -EINVAL;
 	}
 
-	if (bank->rif_control) {
-		if (!stm32_gpio_rif_acquire_semaphore(bank, offset)) {
-			dev_err(pctl->dev, "pin %d not available.\n", pin);
-			return -EINVAL;
-		}
-	}
-
-	return pinctrl_gpio_request(chip, offset);
+	return pinctrl_gpio_request(chip->base + offset);
 }
 
-static void stm32_gpio_free(struct gpio_chip *chip, unsigned int offset)
+static void stm32_gpio_free(struct gpio_chip *chip, unsigned offset)
 {
-	struct stm32_gpio_bank *bank = gpiochip_get_data(chip);
-
-	pinctrl_gpio_free(chip, offset);
-
-	if (bank->rif_control)
-		stm32_gpio_rif_release_semaphore(bank, offset);
+	pinctrl_gpio_free(chip->base + offset);
 }
 
 static int stm32_gpio_get(struct gpio_chip *chip, unsigned offset)
@@ -337,14 +231,16 @@ static int stm32_gpio_get(struct gpio_chip *chip, unsigned offset)
 	return !!(readl_relaxed(bank->base + STM32_GPIO_IDR) & BIT(offset));
 }
 
-static int stm32_gpio_set(struct gpio_chip *chip, unsigned int offset,
-			  int value)
+static void stm32_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
 	struct stm32_gpio_bank *bank = gpiochip_get_data(chip);
 
 	__stm32_gpio_set(bank, offset, value);
+}
 
-	return 0;
+static int stm32_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	return pinctrl_gpio_direction_input(chip->base + offset);
 }
 
 static int stm32_gpio_direction_output(struct gpio_chip *chip,
@@ -353,8 +249,9 @@ static int stm32_gpio_direction_output(struct gpio_chip *chip,
 	struct stm32_gpio_bank *bank = gpiochip_get_data(chip);
 
 	__stm32_gpio_set(bank, offset, value);
+	pinctrl_gpio_direction_output(chip->base + offset);
 
-	return pinctrl_gpio_direction_output(chip, offset);
+	return 0;
 }
 
 
@@ -413,19 +310,6 @@ static int stm32_gpio_init_valid_mask(struct gpio_chip *chip,
 		}
 	}
 
-	if (bank->rif_control) {
-		for (i = 0; i < ngpios; i++) {
-			if (!test_bit(i, valid_mask))
-				continue;
-
-			if (stm32_gpio_rif_valid(bank, i))
-				continue;
-
-			dev_dbg(pctl->dev, "RIF semaphore ownership conflict, GPIO %u", i);
-			clear_bit(i, valid_mask);
-		}
-	}
-
 	return 0;
 }
 
@@ -434,7 +318,7 @@ static const struct gpio_chip stm32_gpio_template = {
 	.free			= stm32_gpio_free,
 	.get			= stm32_gpio_get,
 	.set			= stm32_gpio_set,
-	.direction_input	= pinctrl_gpio_direction_input,
+	.direction_input	= stm32_gpio_direction_input,
 	.direction_output	= stm32_gpio_direction_output,
 	.to_irq			= stm32_gpio_to_irq,
 	.get_direction		= stm32_gpio_get_direction,
@@ -496,7 +380,7 @@ static int stm32_gpio_irq_request_resources(struct irq_data *irq_data)
 	struct stm32_pinctrl *pctl = dev_get_drvdata(bank->gpio_chip.parent);
 	int ret;
 
-	ret = pinctrl_gpio_direction_input(&bank->gpio_chip, irq_data->hwirq);
+	ret = stm32_gpio_direction_input(&bank->gpio_chip, irq_data->hwirq);
 	if (ret)
 		return ret;
 
@@ -533,7 +417,6 @@ static struct irq_chip stm32_gpio_irq_chip = {
 	.irq_set_wake	= irq_chip_set_wake_parent,
 	.irq_request_resources = stm32_gpio_irq_request_resources,
 	.irq_release_resources = stm32_gpio_irq_release_resources,
-	.irq_set_affinity = IS_ENABLED(CONFIG_SMP) ? irq_chip_set_affinity_parent : NULL,
 };
 
 static int stm32_gpio_domain_translate(struct irq_domain *d,
@@ -663,9 +546,6 @@ static bool stm32_pctrl_is_function_valid(struct stm32_pinctrl *pctl,
 
 		if (pin->pin.number != pin_num)
 			continue;
-
-		if (fnum == STM32_PIN_RSVD)
-			return true;
 
 		for (k = 0; k < STM32_CONFIG_NUM; k++) {
 			if (func->num == fnum)
@@ -800,6 +680,7 @@ static int stm32_pctrl_dt_node_to_map(struct pinctrl_dev *pctldev,
 				 struct device_node *np_config,
 				 struct pinctrl_map **map, unsigned *num_maps)
 {
+	struct device_node *np;
 	unsigned reserved_maps;
 	int ret;
 
@@ -807,11 +688,12 @@ static int stm32_pctrl_dt_node_to_map(struct pinctrl_dev *pctldev,
 	*num_maps = 0;
 	reserved_maps = 0;
 
-	for_each_child_of_node_scoped(np_config, np) {
+	for_each_child_of_node(np_config, np) {
 		ret = stm32_pctrl_dt_subnode_to_map(pctldev, np, map,
 				&reserved_maps, num_maps);
 		if (ret < 0) {
 			pinctrl_utils_free_map(pctldev, *map, *num_maps);
+			of_node_put(np);
 			return ret;
 		}
 	}
@@ -924,7 +806,8 @@ unlock:
 	return err;
 }
 
-static void stm32_pmx_get_mode(struct stm32_gpio_bank *bank, int pin, u32 *mode, u32 *alt)
+void stm32_pmx_get_mode(struct stm32_gpio_bank *bank, int pin, u32 *mode,
+			u32 *alt)
 {
 	u32 val;
 	int alt_shift = (pin % 8) * 4;
@@ -964,11 +847,6 @@ static int stm32_pmx_set_mux(struct pinctrl_dev *pctldev,
 	if (!range) {
 		dev_err(pctl->dev, "No gpio range defined.\n");
 		return -EINVAL;
-	}
-
-	if (function == STM32_PIN_RSVD) {
-		dev_dbg(pctl->dev, "Reserved pins, skipping HW update.\n");
-		return 0;
 	}
 
 	bank = gpiochip_get_data(range->gc);
@@ -1236,7 +1114,7 @@ static int stm32_pconf_parse_conf(struct pinctrl_dev *pctldev,
 	case PIN_CONFIG_BIAS_PULL_DOWN:
 		ret = stm32_pconf_set_bias(bank, offset, 2);
 		break;
-	case PIN_CONFIG_LEVEL:
+	case PIN_CONFIG_OUTPUT:
 		__stm32_gpio_set(bank, offset, arg);
 		ret = stm32_pmx_gpio_set_direction(pctldev, range, pin, false);
 		break;
@@ -1351,7 +1229,7 @@ static void stm32_pconf_dbg_show(struct pinctrl_dev *pctldev,
 	case 0:
 		val = stm32_pconf_get(bank, offset, true);
 		seq_printf(s, "- %s - %s",
-			   str_high_low(val),
+			   val ? "high" : "low",
 			   biasing[bias]);
 		break;
 
@@ -1361,7 +1239,7 @@ static void stm32_pconf_dbg_show(struct pinctrl_dev *pctldev,
 		speed = stm32_pconf_get_speed(bank, offset);
 		val = stm32_pconf_get(bank, offset, false);
 		seq_printf(s, "- %s - %s - %s - %s %s",
-			   str_high_low(val),
+			   val ? "high" : "low",
 			   drive ? "open drain" : "push pull",
 			   biasing[bias],
 			   speeds[speed], "speed");
@@ -1470,7 +1348,7 @@ static int stm32_gpiolib_register_bank(struct stm32_pinctrl *pctl, struct fwnode
 	if (fwnode_property_read_u32(fwnode, "st,bank-ioport", &bank_ioport_nr))
 		bank_ioport_nr = bank_nr;
 
-	bank->gpio_chip.base = -1;
+	bank->gpio_chip.base = bank_nr * STM32_GPIO_PINS_PER_BANK;
 
 	bank->gpio_chip.ngpio = npins;
 	bank->gpio_chip.fwnode = fwnode;
@@ -1478,7 +1356,6 @@ static int stm32_gpiolib_register_bank(struct stm32_pinctrl *pctl, struct fwnode
 	bank->bank_nr = bank_nr;
 	bank->bank_ioport_nr = bank_ioport_nr;
 	bank->secure_control = pctl->match_data->secure_control;
-	bank->rif_control = pctl->match_data->rif_control;
 	spin_lock_init(&bank->lock);
 
 	if (pctl->domain) {
@@ -1526,7 +1403,7 @@ static struct irq_domain *stm32_pctrl_get_irq_domain(struct platform_device *pde
 	struct device_node *parent;
 	struct irq_domain *domain;
 
-	if (!of_property_present(np, "interrupt-parent"))
+	if (!of_find_property(np, "interrupt-parent", NULL))
 		return NULL;
 
 	parent = of_irq_find_parent(np);
@@ -1651,6 +1528,11 @@ int stm32_pctl_probe(struct platform_device *pdev)
 	match_data = device_get_match_data(dev);
 	if (!match_data)
 		return -EINVAL;
+
+	if (!device_property_present(dev, "pins-are-numbered")) {
+		dev_err(dev, "only support pins-are-numbered format\n");
+		return -EINVAL;
+	}
 
 	pctl = devm_kzalloc(dev, sizeof(*pctl), GFP_KERNEL);
 	if (!pctl)
@@ -1795,7 +1677,6 @@ err_register:
 	clk_bulk_disable_unprepare(banks, pctl->clks);
 	return ret;
 }
-EXPORT_SYMBOL(stm32_pctl_probe);
 
 static int __maybe_unused stm32_pinctrl_restore_gpio_regs(
 					struct stm32_pinctrl *pctl, u32 pin)
@@ -1868,7 +1749,6 @@ int __maybe_unused stm32_pinctrl_suspend(struct device *dev)
 
 	return 0;
 }
-EXPORT_SYMBOL(stm32_pinctrl_suspend);
 
 int __maybe_unused stm32_pinctrl_resume(struct device *dev)
 {
@@ -1885,8 +1765,3 @@ int __maybe_unused stm32_pinctrl_resume(struct device *dev)
 
 	return 0;
 }
-EXPORT_SYMBOL(stm32_pinctrl_resume);
-
-MODULE_AUTHOR("Alexandre Torgue <alexandre.torgue@foss.st.com>");
-MODULE_DESCRIPTION("STM32 core pinctrl driver");
-MODULE_LICENSE("GPL");

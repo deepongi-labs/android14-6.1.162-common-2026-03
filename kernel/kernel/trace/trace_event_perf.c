@@ -49,7 +49,7 @@ static int perf_trace_event_perm(struct trace_event_call *tp_event,
 
 	/* The ftrace function trace is allowed only for root. */
 	if (ftrace_event_is_function(tp_event)) {
-		ret = perf_allow_tracepoint();
+		ret = perf_allow_tracepoint(&p_event->attr);
 		if (ret)
 			return ret;
 
@@ -86,7 +86,7 @@ static int perf_trace_event_perm(struct trace_event_call *tp_event,
 	 * ...otherwise raw tracepoint data can be a severe data leak,
 	 * only allow root to have these.
 	 */
-	ret = perf_allow_tracepoint();
+	ret = perf_allow_tracepoint(&p_event->attr);
 	if (ret)
 		return ret;
 
@@ -251,12 +251,16 @@ int perf_kprobe_init(struct perf_event *p_event, bool is_retprobe)
 	struct trace_event_call *tp_event;
 
 	if (p_event->attr.kprobe_func) {
-		func = strndup_user(u64_to_user_ptr(p_event->attr.kprobe_func),
-				    KSYM_NAME_LEN);
-		if (IS_ERR(func)) {
-			ret = PTR_ERR(func);
-			return (ret == -EINVAL) ? -E2BIG : ret;
-		}
+		func = kzalloc(KSYM_NAME_LEN, GFP_KERNEL);
+		if (!func)
+			return -ENOMEM;
+		ret = strncpy_from_user(
+			func, u64_to_user_ptr(p_event->attr.kprobe_func),
+			KSYM_NAME_LEN);
+		if (ret == KSYM_NAME_LEN)
+			ret = -E2BIG;
+		if (ret < 0)
+			goto out;
 
 		if (func[0] == '\0') {
 			kfree(func);

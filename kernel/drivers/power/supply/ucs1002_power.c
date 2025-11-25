@@ -296,17 +296,22 @@ static int ucs1002_set_max_current(struct ucs1002_info *info, u32 val)
 	return 0;
 }
 
+static enum power_supply_usb_type ucs1002_usb_types[] = {
+	POWER_SUPPLY_USB_TYPE_PD,
+	POWER_SUPPLY_USB_TYPE_SDP,
+	POWER_SUPPLY_USB_TYPE_DCP,
+	POWER_SUPPLY_USB_TYPE_CDP,
+	POWER_SUPPLY_USB_TYPE_UNKNOWN,
+};
+
 static int ucs1002_set_usb_type(struct ucs1002_info *info, int val)
 {
 	unsigned int mode;
 
-	switch (val) {
-	/*
-	 * POWER_SUPPLY_USB_TYPE_UNKNOWN == 0, map this to dedicated for
-	 * userspace API compatibility with older versions of this driver
-	 * which mapped 0 to dedicated.
-	 */
-	case POWER_SUPPLY_USB_TYPE_UNKNOWN:
+	if (val < 0 || val >= ARRAY_SIZE(ucs1002_usb_types))
+		return -EINVAL;
+
+	switch (ucs1002_usb_types[val]) {
 	case POWER_SUPPLY_USB_TYPE_PD:
 		mode = V_SET_ACTIVE_MODE_DEDICATED;
 		break;
@@ -423,11 +428,8 @@ static int ucs1002_property_is_writeable(struct power_supply *psy,
 static const struct power_supply_desc ucs1002_charger_desc = {
 	.name			= "ucs1002",
 	.type			= POWER_SUPPLY_TYPE_USB,
-	.usb_types		= BIT(POWER_SUPPLY_USB_TYPE_SDP) |
-				  BIT(POWER_SUPPLY_USB_TYPE_CDP) |
-				  BIT(POWER_SUPPLY_USB_TYPE_DCP) |
-				  BIT(POWER_SUPPLY_USB_TYPE_PD)  |
-				  BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN),
+	.usb_types		= ucs1002_usb_types,
+	.num_usb_types		= ARRAY_SIZE(ucs1002_usb_types),
 	.get_property		= ucs1002_get_property,
 	.set_property		= ucs1002_set_property,
 	.property_is_writeable	= ucs1002_property_is_writeable,
@@ -493,7 +495,7 @@ static irqreturn_t ucs1002_alert_irq(int irq, void *data)
 {
 	struct ucs1002_info *info = data;
 
-	mod_delayed_work(system_percpu_wq, &info->health_poll, 0);
+	mod_delayed_work(system_wq, &info->health_poll, 0);
 
 	return IRQ_HANDLED;
 }
@@ -531,7 +533,8 @@ static const struct regulator_desc ucs1002_regulator_descriptor = {
 	.n_voltages	= 1,
 };
 
-static int ucs1002_probe(struct i2c_client *client)
+static int ucs1002_probe(struct i2c_client *client,
+			 const struct i2c_device_id *dev_id)
 {
 	struct device *dev = &client->dev;
 	struct power_supply_config charger_config = {};
@@ -560,7 +563,7 @@ static int ucs1002_probe(struct i2c_client *client)
 	irq_a_det = of_irq_get_byname(dev->of_node, "a_det");
 	irq_alert = of_irq_get_byname(dev->of_node, "alert");
 
-	charger_config.fwnode = dev_fwnode(dev);
+	charger_config.of_node = dev->of_node;
 	charger_config.drv_data = info;
 
 	ret = regmap_read(info->regmap, UCS1002_REG_PRODUCT_ID, &regval);

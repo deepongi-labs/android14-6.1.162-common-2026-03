@@ -104,8 +104,7 @@ unsigned int ucb1x00_io_read(struct ucb1x00 *ucb)
 	return ucb1x00_reg_read(ucb, UCB_IO_DATA);
 }
 
-static int ucb1x00_gpio_set(struct gpio_chip *chip, unsigned int offset,
-			    int value)
+static void ucb1x00_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
 	struct ucb1x00 *ucb = gpiochip_get_data(chip);
 	unsigned long flags;
@@ -120,8 +119,6 @@ static int ucb1x00_gpio_set(struct gpio_chip *chip, unsigned int offset,
 	ucb1x00_reg_write(ucb, UCB_IO_DATA, ucb->io_out);
 	ucb1x00_disable(ucb);
 	spin_unlock_irqrestore(&ucb->io_lock, flags);
-
-	return 0;
 }
 
 static int ucb1x00_gpio_get(struct gpio_chip *chip, unsigned offset)
@@ -663,6 +660,7 @@ void ucb1x00_unregister_driver(struct ucb1x00_driver *drv)
 	mutex_unlock(&ucb1x00_mutex);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int ucb1x00_suspend(struct device *dev)
 {
 	struct ucb1x00_plat_data *pdata = dev_get_platdata(dev);
@@ -730,15 +728,15 @@ static int ucb1x00_resume(struct device *dev)
 	mutex_unlock(&ucb1x00_mutex);
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(ucb1x00_pm_ops,
-				ucb1x00_suspend, ucb1x00_resume);
+static SIMPLE_DEV_PM_OPS(ucb1x00_pm_ops, ucb1x00_suspend, ucb1x00_resume);
 
 static struct mcp_driver ucb1x00_driver = {
 	.drv		= {
 		.name	= "ucb1x00",
 		.owner	= THIS_MODULE,
-		.pm	= pm_sleep_ptr(&ucb1x00_pm_ops),
+		.pm	= &ucb1x00_pm_ops,
 	},
 	.probe		= ucb1x00_probe,
 	.remove		= ucb1x00_remove,

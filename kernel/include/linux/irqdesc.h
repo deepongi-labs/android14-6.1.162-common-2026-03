@@ -5,6 +5,7 @@
 #include <linux/rcupdate.h>
 #include <linux/kobject.h>
 #include <linux/mutex.h>
+#include <linux/android_vendor.h>
 
 /*
  * Core internal functions to deal with irq descriptors
@@ -16,18 +17,6 @@ struct module;
 struct irq_desc;
 struct irq_domain;
 struct pt_regs;
-
-/**
- * struct irqstat - interrupt statistics
- * @cnt:	real-time interrupt count
- * @ref:	snapshot of interrupt count
- */
-struct irqstat {
-	unsigned int	cnt;
-#ifdef CONFIG_GENERIC_IRQ_STAT_SNAPSHOT
-	unsigned int	ref;
-#endif
-};
 
 /**
  * struct irq_desc - interrupt descriptor
@@ -67,7 +56,7 @@ struct irqstat {
 struct irq_desc {
 	struct irq_common_data	irq_common_data;
 	struct irq_data		irq_data;
-	struct irqstat __percpu	*kstat_irqs;
+	unsigned int __percpu	*kstat_irqs;
 	irq_flow_handler_t	handle_irq;
 	struct irqaction	*action;	/* IRQ action list */
 	unsigned int		status_use_accessors;
@@ -114,9 +103,7 @@ struct irq_desc {
 	int			parent_irq;
 	struct module		*owner;
 	const char		*name;
-#ifdef CONFIG_HARDIRQS_SW_RESEND
-	struct hlist_node	resend_node;
-#endif
+	ANDROID_VENDOR_DATA(1);
 } ____cacheline_internodealigned_in_smp;
 
 #ifdef CONFIG_SPARSE_IRQ
@@ -131,7 +118,7 @@ extern struct irq_desc irq_desc[NR_IRQS];
 static inline unsigned int irq_desc_kstat_cpu(struct irq_desc *desc,
 					      unsigned int cpu)
 {
-	return desc->kstat_irqs ? per_cpu(desc->kstat_irqs->cnt, cpu) : 0;
+	return desc->kstat_irqs ? *per_cpu_ptr(desc->kstat_irqs, cpu) : 0;
 }
 
 static inline struct irq_desc *irq_data_to_desc(struct irq_data *data)

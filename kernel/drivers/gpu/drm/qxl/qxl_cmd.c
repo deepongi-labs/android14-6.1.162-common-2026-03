@@ -421,6 +421,7 @@ int qxl_surface_id_alloc(struct qxl_device *qdev,
 {
 	uint32_t handle;
 	int idr_ret;
+	int count = 0;
 again:
 	idr_preload(GFP_ATOMIC);
 	spin_lock(&qdev->surf_id_idr_lock);
@@ -432,6 +433,7 @@ again:
 	handle = idr_ret;
 
 	if (handle >= qdev->rom->n_surfaces) {
+		count++;
 		spin_lock(&qdev->surf_id_idr_lock);
 		idr_remove(&qdev->surf_id_idr, handle);
 		spin_unlock(&qdev->surf_id_idr_lock);
@@ -577,7 +579,7 @@ void qxl_surface_evict(struct qxl_device *qdev, struct qxl_bo *surf, bool do_upd
 
 static int qxl_reap_surf(struct qxl_device *qdev, struct qxl_bo *surf, bool stall)
 {
-	long ret;
+	int ret;
 
 	ret = qxl_bo_reserve(surf);
 	if (ret)
@@ -586,19 +588,7 @@ static int qxl_reap_surf(struct qxl_device *qdev, struct qxl_bo *surf, bool stal
 	if (stall)
 		mutex_unlock(&qdev->surf_evict_mutex);
 
-	if (stall) {
-		ret = dma_resv_wait_timeout(surf->tbo.base.resv,
-					    DMA_RESV_USAGE_BOOKKEEP, true,
-					    15 * HZ);
-		if (ret > 0)
-			ret = 0;
-		else if (ret == 0)
-			ret = -EBUSY;
-	} else {
-		ret = dma_resv_test_signaled(surf->tbo.base.resv,
-					     DMA_RESV_USAGE_BOOKKEEP);
-		ret = ret ? -EBUSY : 0;
-	}
+	ret = ttm_bo_wait(&surf->tbo, true, !stall);
 
 	if (stall)
 		mutex_lock(&qdev->surf_evict_mutex);

@@ -15,7 +15,6 @@
 #include <linux/slab.h>
 #include <linux/wait.h>
 #include "internal.h"
-#include "trace.h"
 
 /*
  * Not all MHI state transitions are synchronous. Transitions like Linkdown,
@@ -132,7 +131,6 @@ enum mhi_pm_state __must_check mhi_tryset_pm_state(struct mhi_controller *mhi_cn
 	if (unlikely(!(dev_state_transitions[index].to_states & state)))
 		return cur_state;
 
-	trace_mhi_tryset_pm_state(mhi_cntrl, state);
 	mhi_cntrl->pm_state = state;
 	return mhi_cntrl->pm_state;
 }
@@ -173,7 +171,6 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
 	enum mhi_pm_state cur_state;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
 	u32 interval_us = 25000; /* poll register field every 25 milliseconds */
-	u32 timeout_ms;
 	int ret, i;
 
 	/* Check if device entered error state */
@@ -184,18 +181,14 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
 
 	/* Wait for RESET to be cleared and READY bit to be set by the device */
 	ret = mhi_poll_reg_field(mhi_cntrl, mhi_cntrl->regs, MHICTRL,
-				 MHICTRL_RESET_MASK, 0, interval_us,
-				 mhi_cntrl->timeout_ms);
+				 MHICTRL_RESET_MASK, 0, interval_us);
 	if (ret) {
 		dev_err(dev, "Device failed to clear MHI Reset\n");
 		return ret;
 	}
 
-	timeout_ms = mhi_cntrl->ready_timeout_ms ?
-		mhi_cntrl->ready_timeout_ms : mhi_cntrl->timeout_ms;
 	ret = mhi_poll_reg_field(mhi_cntrl, mhi_cntrl->regs, MHISTATUS,
-				 MHISTATUS_READY_MASK, 1, interval_us,
-				 timeout_ms);
+				 MHISTATUS_READY_MASK, 1, interval_us);
 	if (ret) {
 		dev_err(dev, "Device failed to enter MHI Ready\n");
 		return ret;
@@ -418,7 +411,6 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
 	device_for_each_child(&mhi_cntrl->mhi_dev->dev, &current_ee,
 			      mhi_destroy_device);
 	mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_EE_MISSION_MODE);
-	mhi_uevent_notify(mhi_cntrl, mhi_cntrl->ee);
 
 	/* Force MHI to be in M0 state before continuing */
 	ret = __mhi_device_get_sync(mhi_cntrl);
@@ -469,8 +461,7 @@ error_mission_mode:
 }
 
 /* Handle shutdown transitions */
-static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
-				      bool destroy_device)
+static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl)
 {
 	enum mhi_pm_state cur_state;
 	struct mhi_event *mhi_event;
@@ -496,7 +487,7 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 
 		/* Wait for the reset bit to be cleared by the device */
 		ret = mhi_poll_reg_field(mhi_cntrl, mhi_cntrl->regs, MHICTRL,
-				 MHICTRL_RESET_MASK, 0, 25000, mhi_cntrl->timeout_ms);
+				 MHICTRL_RESET_MASK, 0, 25000);
 		if (ret)
 			dev_err(dev, "Device failed to clear MHI Reset\n");
 
@@ -509,8 +500,8 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 		if (!MHI_IN_PBL(mhi_get_exec_env(mhi_cntrl))) {
 			/* wait for ready to be set */
 			ret = mhi_poll_reg_field(mhi_cntrl, mhi_cntrl->regs,
-						 MHISTATUS, MHISTATUS_READY_MASK,
-						 1, 25000, mhi_cntrl->timeout_ms);
+						 MHISTATUS,
+						 MHISTATUS_READY_MASK, 1, 25000);
 			if (ret)
 				dev_err(dev, "Device failed to enter READY state\n");
 		}
@@ -532,16 +523,8 @@ skip_mhi_reset:
 	dev_dbg(dev, "Waiting for all pending threads to complete\n");
 	wake_up_all(&mhi_cntrl->state_event);
 
-	/*
-	 * Only destroy the 'struct device' for channels if indicated by the
-	 * 'destroy_device' flag. Because, during system suspend or hibernation
-	 * state, there is no need to destroy the 'struct device' as the endpoint
-	 * device would still be physically attached to the machine.
-	 */
-	if (destroy_device) {
-		dev_dbg(dev, "Reset all active channels and remove MHI devices\n");
-		device_for_each_child(&mhi_cntrl->mhi_dev->dev, NULL, mhi_destroy_device);
-	}
+	dev_dbg(dev, "Reset all active channels and remove MHI devices\n");
+	device_for_each_child(&mhi_cntrl->mhi_dev->dev, NULL, mhi_destroy_device);
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
@@ -631,8 +614,6 @@ static void mhi_pm_sys_error_transition(struct mhi_controller *mhi_cntrl)
 
 	/* Wake up threads waiting for state transition */
 	wake_up_all(&mhi_cntrl->state_event);
-
-	mhi_uevent_notify(mhi_cntrl, mhi_cntrl->ee);
 
 	if (MHI_REG_ACCESS_VALID(prev_state)) {
 		/*
@@ -802,6 +783,7 @@ void mhi_pm_st_worker(struct work_struct *work)
 	struct mhi_controller *mhi_cntrl = container_of(work,
 							struct mhi_controller,
 							st_worker);
+	struct device *dev = &mhi_cntrl->mhi_dev->dev;
 
 	spin_lock_irq(&mhi_cntrl->transition_lock);
 	list_splice_tail_init(&mhi_cntrl->transition_list, &head);
@@ -809,8 +791,8 @@ void mhi_pm_st_worker(struct work_struct *work)
 
 	list_for_each_entry_safe(itr, tmp, &head, node) {
 		list_del(&itr->node);
-
-		trace_mhi_pm_st_transition(mhi_cntrl, itr->state);
+		dev_dbg(dev, "Handling state transition: %s\n",
+			TO_DEV_STATE_TRANS_STR(itr->state));
 
 		switch (itr->state) {
 		case DEV_ST_TRANSITION_PBL:
@@ -832,8 +814,6 @@ void mhi_pm_st_worker(struct work_struct *work)
 			mhi_create_devices(mhi_cntrl);
 			if (mhi_cntrl->fbc_download)
 				mhi_download_amss_image(mhi_cntrl);
-
-			mhi_uevent_notify(mhi_cntrl, mhi_cntrl->ee);
 			break;
 		case DEV_ST_TRANSITION_MISSION_MODE:
 			mhi_pm_mission_mode_transition(mhi_cntrl);
@@ -843,7 +823,6 @@ void mhi_pm_st_worker(struct work_struct *work)
 			mhi_cntrl->ee = MHI_EE_FP;
 			write_unlock_irq(&mhi_cntrl->pm_lock);
 			mhi_create_devices(mhi_cntrl);
-			mhi_uevent_notify(mhi_cntrl, mhi_cntrl->ee);
 			break;
 		case DEV_ST_TRANSITION_READY:
 			mhi_ready_state_transition(mhi_cntrl);
@@ -852,10 +831,7 @@ void mhi_pm_st_worker(struct work_struct *work)
 			mhi_pm_sys_error_transition(mhi_cntrl);
 			break;
 		case DEV_ST_TRANSITION_DISABLE:
-			mhi_pm_disable_transition(mhi_cntrl, false);
-			break;
-		case DEV_ST_TRANSITION_DISABLE_DESTROY_DEVICE:
-			mhi_pm_disable_transition(mhi_cntrl, true);
+			mhi_pm_disable_transition(mhi_cntrl);
 			break;
 		default:
 			break;
@@ -1165,8 +1141,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
 	if (state == MHI_STATE_SYS_ERR) {
 		mhi_set_mhi_state(mhi_cntrl, MHI_STATE_RESET);
 		ret = mhi_poll_reg_field(mhi_cntrl, mhi_cntrl->regs, MHICTRL,
-				 MHICTRL_RESET_MASK, 0, interval_us,
-				 mhi_cntrl->timeout_ms);
+				 MHICTRL_RESET_MASK, 0, interval_us);
 		if (ret) {
 			dev_info(dev, "Failed to reset MHI due to syserr state\n");
 			goto error_exit;
@@ -1209,8 +1184,7 @@ error_exit:
 }
 EXPORT_SYMBOL_GPL(mhi_async_power_up);
 
-static void __mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful,
-			     bool destroy_device)
+void mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful)
 {
 	enum mhi_pm_state cur_state, transition_state;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
@@ -1246,49 +1220,26 @@ static void __mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful,
 	write_unlock_irq(&mhi_cntrl->pm_lock);
 	mutex_unlock(&mhi_cntrl->pm_mutex);
 
-	mhi_uevent_notify(mhi_cntrl, mhi_cntrl->ee);
-
-	if (destroy_device)
-		mhi_queue_state_transition(mhi_cntrl,
-					   DEV_ST_TRANSITION_DISABLE_DESTROY_DEVICE);
-	else
-		mhi_queue_state_transition(mhi_cntrl,
-					   DEV_ST_TRANSITION_DISABLE);
+	mhi_queue_state_transition(mhi_cntrl, DEV_ST_TRANSITION_DISABLE);
 
 	/* Wait for shutdown to complete */
 	flush_work(&mhi_cntrl->st_worker);
 
 	disable_irq(mhi_cntrl->irq[0]);
 }
-
-void mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful)
-{
-	__mhi_power_down(mhi_cntrl, graceful, true);
-}
 EXPORT_SYMBOL_GPL(mhi_power_down);
-
-void mhi_power_down_keep_dev(struct mhi_controller *mhi_cntrl,
-			       bool graceful)
-{
-	__mhi_power_down(mhi_cntrl, graceful, false);
-}
-EXPORT_SYMBOL_GPL(mhi_power_down_keep_dev);
 
 int mhi_sync_power_up(struct mhi_controller *mhi_cntrl)
 {
 	int ret = mhi_async_power_up(mhi_cntrl);
-	u32 timeout_ms;
 
 	if (ret)
 		return ret;
 
-	/* Some devices need more time to set ready during power up */
-	timeout_ms = mhi_cntrl->ready_timeout_ms ?
-		mhi_cntrl->ready_timeout_ms : mhi_cntrl->timeout_ms;
 	wait_event_timeout(mhi_cntrl->state_event,
 			   MHI_IN_MISSION_MODE(mhi_cntrl->ee) ||
-			   MHI_PM_FATAL_ERROR(mhi_cntrl->pm_state),
-			   msecs_to_jiffies(timeout_ms));
+			   MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state),
+			   msecs_to_jiffies(mhi_cntrl->timeout_ms));
 
 	ret = (MHI_IN_MISSION_MODE(mhi_cntrl->ee)) ? 0 : -ETIMEDOUT;
 	if (ret)
@@ -1320,6 +1271,20 @@ int mhi_force_rddm_mode(struct mhi_controller *mhi_cntrl)
 }
 EXPORT_SYMBOL_GPL(mhi_force_rddm_mode);
 
+void mhi_device_get(struct mhi_device *mhi_dev)
+{
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+
+	mhi_dev->dev_wake++;
+	read_lock_bh(&mhi_cntrl->pm_lock);
+	if (MHI_PM_IN_SUSPEND_STATE(mhi_cntrl->pm_state))
+		mhi_trigger_resume(mhi_cntrl);
+
+	mhi_cntrl->wake_get(mhi_cntrl, true);
+	read_unlock_bh(&mhi_cntrl->pm_lock);
+}
+EXPORT_SYMBOL_GPL(mhi_device_get);
+
 int mhi_device_get_sync(struct mhi_device *mhi_dev)
 {
 	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
@@ -1346,22 +1311,3 @@ void mhi_device_put(struct mhi_device *mhi_dev)
 	read_unlock_bh(&mhi_cntrl->pm_lock);
 }
 EXPORT_SYMBOL_GPL(mhi_device_put);
-
-void mhi_uevent_notify(struct mhi_controller *mhi_cntrl, enum mhi_ee_type ee)
-{
-	struct device *dev = &mhi_cntrl->mhi_dev->dev;
-	char *buf[2];
-	int ret;
-
-	buf[0] = kasprintf(GFP_KERNEL, "EXEC_ENV=%s", TO_MHI_EXEC_STR(ee));
-	buf[1] = NULL;
-
-	if (!buf[0])
-		return;
-
-	ret = kobject_uevent_env(&dev->kobj, KOBJ_CHANGE, buf);
-	if (ret)
-		dev_err(dev, "Failed to send %s uevent\n", TO_MHI_EXEC_STR(ee));
-
-	kfree(buf[0]);
-}

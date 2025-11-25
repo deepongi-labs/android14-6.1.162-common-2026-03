@@ -8,7 +8,6 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/gpio/consumer.h>
-#include <linux/hid.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -24,7 +23,6 @@ struct elan_i2c_hid_chip_data {
 	unsigned int post_power_delay_ms;
 	u16 hid_descriptor_address;
 	const char *main_supply_name;
-	bool power_after_backlight;
 };
 
 struct i2c_hid_of_elan {
@@ -95,11 +93,11 @@ static void elan_i2c_hid_power_down(struct i2chid_ops *ops)
 		regulator_disable(ihid_elan->vcc33);
 }
 
-static int i2c_hid_of_elan_probe(struct i2c_client *client)
+static int i2c_hid_of_elan_probe(struct i2c_client *client,
+				 const struct i2c_device_id *id)
 {
 	struct i2c_hid_of_elan *ihid_elan;
 	int ret;
-	u32 quirks = 0;
 
 	ihid_elan = devm_kzalloc(&client->dev, sizeof(*ihid_elan), GFP_KERNEL);
 	if (!ihid_elan)
@@ -134,12 +132,8 @@ static int i2c_hid_of_elan_probe(struct i2c_client *client)
 		}
 	}
 
-	if (ihid_elan->chip_data->power_after_backlight)
-		quirks = HID_QUIRK_POWER_ON_AFTER_BACKLIGHT;
-
 	ret = i2c_hid_core_probe(client, &ihid_elan->ops,
-				 ihid_elan->chip_data->hid_descriptor_address,
-				 quirks);
+				 ihid_elan->chip_data->hid_descriptor_address, 0);
 	if (ret)
 		goto err_deassert_reset;
 
@@ -157,15 +151,6 @@ static const struct elan_i2c_hid_chip_data elan_ekth6915_chip_data = {
 	.post_gpio_reset_on_delay_ms = 300,
 	.hid_descriptor_address = 0x0001,
 	.main_supply_name = "vcc33",
-	.power_after_backlight = true,
-};
-
-static const struct elan_i2c_hid_chip_data elan_ekth6a12nay_chip_data = {
-	.post_power_delay_ms = 10,
-	.post_gpio_reset_on_delay_ms = 300,
-	.hid_descriptor_address = 0x0001,
-	.main_supply_name = "vcc33",
-	.power_after_backlight = true,
 };
 
 static const struct elan_i2c_hid_chip_data ilitek_ili9882t_chip_data = {
@@ -181,18 +166,9 @@ static const struct elan_i2c_hid_chip_data ilitek_ili9882t_chip_data = {
 	.main_supply_name = NULL,
 };
 
-static const struct elan_i2c_hid_chip_data ilitek_ili2901_chip_data = {
-	.post_power_delay_ms = 10,
-	.post_gpio_reset_on_delay_ms = 100,
-	.hid_descriptor_address = 0x0001,
-	.main_supply_name = "vcc33",
-};
-
 static const struct of_device_id elan_i2c_hid_of_match[] = {
 	{ .compatible = "elan,ekth6915", .data = &elan_ekth6915_chip_data },
-	{ .compatible = "elan,ekth6a12nay", .data = &elan_ekth6a12nay_chip_data },
 	{ .compatible = "ilitek,ili9882t", .data = &ilitek_ili9882t_chip_data },
-	{ .compatible = "ilitek,ili2901", .data = &ilitek_ili2901_chip_data },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, elan_i2c_hid_of_match);

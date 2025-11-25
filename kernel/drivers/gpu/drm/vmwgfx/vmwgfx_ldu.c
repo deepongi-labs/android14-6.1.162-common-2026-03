@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright (c) 2009-2024 Broadcom. All Rights Reserved. The term
- * “Broadcom” refers to Broadcom Inc. and/or its subsidiaries.
+ * Copyright 2009-2022 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -26,14 +25,11 @@
  *
  **************************************************************************/
 
-#include "vmwgfx_bo.h"
-#include "vmwgfx_kms.h"
-#include "vmwgfx_vkms.h"
-
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_fourcc.h>
 
+#include "vmwgfx_kms.h"
 
 #define vmw_crtc_to_ldu(x) \
 	container_of(x, struct vmw_legacy_display_unit, base.crtc)
@@ -138,50 +134,6 @@ static int vmw_ldu_commit_list(struct vmw_private *dev_priv)
 	return 0;
 }
 
-/*
- * Pin the buffer in a location suitable for access by the
- * display system.
- */
-static int vmw_ldu_fb_pin(struct vmw_framebuffer *vfb)
-{
-	struct vmw_private *dev_priv = vmw_priv(vfb->base.dev);
-	struct vmw_bo *buf;
-	int ret;
-
-	buf = vfb->bo ?
-		vmw_framebuffer_to_vfbd(&vfb->base)->buffer :
-		vmw_user_object_buffer(&vmw_framebuffer_to_vfbs(&vfb->base)->uo);
-
-	if (!buf)
-		return 0;
-	WARN_ON(dev_priv->active_display_unit != vmw_du_legacy);
-
-	if (dev_priv->active_display_unit == vmw_du_legacy) {
-		vmw_overlay_pause_all(dev_priv);
-		ret = vmw_bo_pin_in_start_of_vram(dev_priv, buf, false);
-		vmw_overlay_resume_all(dev_priv);
-	} else
-		ret = -EINVAL;
-
-	return ret;
-}
-
-static int vmw_ldu_fb_unpin(struct vmw_framebuffer *vfb)
-{
-	struct vmw_private *dev_priv = vmw_priv(vfb->base.dev);
-	struct vmw_bo *buf;
-
-	buf = vfb->bo ?
-		vmw_framebuffer_to_vfbd(&vfb->base)->buffer :
-		vmw_user_object_buffer(&vmw_framebuffer_to_vfbs(&vfb->base)->uo);
-
-
-	if (WARN_ON(!buf))
-		return 0;
-
-	return vmw_bo_unpin(dev_priv, buf, false);
-}
-
 static int vmw_ldu_del_active(struct vmw_private *vmw_priv,
 			      struct vmw_legacy_display_unit *ldu)
 {
@@ -193,7 +145,8 @@ static int vmw_ldu_del_active(struct vmw_private *vmw_priv,
 	list_del_init(&ldu->active);
 	if (--(ld->num_active) == 0) {
 		BUG_ON(!ld->fb);
-		WARN_ON(vmw_ldu_fb_unpin(ld->fb));
+		if (ld->fb->unpin)
+			ld->fb->unpin(ld->fb);
 		ld->fb = NULL;
 	}
 
@@ -210,10 +163,11 @@ static int vmw_ldu_add_active(struct vmw_private *vmw_priv,
 
 	BUG_ON(!ld->num_active && ld->fb);
 	if (vfb != ld->fb) {
-		if (ld->fb)
-			WARN_ON(vmw_ldu_fb_unpin(ld->fb));
+		if (ld->fb && ld->fb->unpin)
+			ld->fb->unpin(ld->fb);
 		vmw_svga_enable(vmw_priv);
-		WARN_ON(vmw_ldu_fb_pin(vfb));
+		if (vfb->pin)
+			vfb->pin(vfb);
 		ld->fb = vfb;
 	}
 
@@ -246,6 +200,33 @@ static void vmw_ldu_crtc_mode_set_nofb(struct drm_crtc *crtc)
 {
 }
 
+/**
+ * vmw_ldu_crtc_atomic_enable - Noop
+ *
+ * @crtc: CRTC associated with the new screen
+ * @state: Unused
+ *
+ * This is called after a mode set has been completed.  Here's
+ * usually a good place to call vmw_ldu_add_active/vmw_ldu_del_active
+ * but since for LDU the display plane is closely tied to the
+ * CRTC, it makes more sense to do those at plane update time.
+ */
+static void vmw_ldu_crtc_atomic_enable(struct drm_crtc *crtc,
+				       struct drm_atomic_state *state)
+{
+}
+
+/**
+ * vmw_ldu_crtc_atomic_disable - Turns off CRTC
+ *
+ * @crtc: CRTC to be turned off
+ * @state: Unused
+ */
+static void vmw_ldu_crtc_atomic_disable(struct drm_crtc *crtc,
+					struct drm_atomic_state *state)
+{
+}
+
 static const struct drm_crtc_funcs vmw_legacy_crtc_funcs = {
 	.gamma_set = vmw_du_crtc_gamma_set,
 	.destroy = vmw_ldu_crtc_destroy,
@@ -254,9 +235,6 @@ static const struct drm_crtc_funcs vmw_legacy_crtc_funcs = {
 	.atomic_destroy_state = vmw_du_crtc_destroy_state,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
-	.enable_vblank          = vmw_vkms_enable_vblank,
-	.disable_vblank         = vmw_vkms_disable_vblank,
-	.get_vblank_timestamp   = vmw_vkms_get_vblank_timestamp,
 };
 
 
@@ -372,7 +350,7 @@ static const struct drm_plane_funcs vmw_ldu_plane_funcs = {
 static const struct drm_plane_funcs vmw_ldu_cursor_funcs = {
 	.update_plane = drm_atomic_helper_update_plane,
 	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = vmw_cursor_plane_destroy,
+	.destroy = vmw_du_cursor_plane_destroy,
 	.reset = vmw_du_plane_reset,
 	.atomic_duplicate_state = vmw_du_plane_duplicate_state,
 	.atomic_destroy_state = vmw_du_plane_destroy_state,
@@ -383,10 +361,10 @@ static const struct drm_plane_funcs vmw_ldu_cursor_funcs = {
  */
 static const struct
 drm_plane_helper_funcs vmw_ldu_cursor_plane_helper_funcs = {
-	.atomic_check = vmw_cursor_plane_atomic_check,
-	.atomic_update = vmw_cursor_plane_atomic_update,
-	.prepare_fb = vmw_cursor_plane_prepare_fb,
-	.cleanup_fb = vmw_cursor_plane_cleanup_fb,
+	.atomic_check = vmw_du_cursor_plane_atomic_check,
+	.atomic_update = vmw_du_cursor_plane_atomic_update,
+	.prepare_fb = vmw_du_cursor_plane_prepare_fb,
+	.cleanup_fb = vmw_du_cursor_plane_cleanup_fb,
 };
 
 static const struct
@@ -399,9 +377,9 @@ static const struct drm_crtc_helper_funcs vmw_ldu_crtc_helper_funcs = {
 	.mode_set_nofb = vmw_ldu_crtc_mode_set_nofb,
 	.atomic_check = vmw_du_crtc_atomic_check,
 	.atomic_begin = vmw_du_crtc_atomic_begin,
-	.atomic_flush = vmw_vkms_crtc_atomic_flush,
-	.atomic_enable = vmw_vkms_crtc_atomic_enable,
-	.atomic_disable = vmw_vkms_crtc_atomic_disable,
+	.atomic_flush = vmw_du_crtc_atomic_flush,
+	.atomic_enable = vmw_ldu_crtc_atomic_enable,
+	.atomic_disable = vmw_ldu_crtc_atomic_disable,
 };
 
 
@@ -479,6 +457,7 @@ static int vmw_ldu_init(struct vmw_private *dev_priv, unsigned unit)
 	}
 
 	drm_connector_helper_add(connector, &vmw_ldu_connector_helper_funcs);
+	connector->status = vmw_du_connector_detect(connector, true);
 
 	ret = drm_encoder_init(dev, encoder, &vmw_legacy_encoder_funcs,
 			       DRM_MODE_ENCODER_VIRTUAL, NULL);
@@ -520,8 +499,6 @@ static int vmw_ldu_init(struct vmw_private *dev_priv, unsigned unit)
 			(&connector->base,
 			 dev_priv->implicit_placement_property,
 			 1);
-
-	vmw_du_init(&ldu->base);
 
 	return 0;
 

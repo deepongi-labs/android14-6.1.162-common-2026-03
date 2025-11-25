@@ -1,6 +1,7 @@
 [
     {
         "BriefDescription": "Machine clears due to memory ordering issue",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xC3",
         "EventName": "MACHINE_CLEARS.MEMORY_ORDERING",
@@ -10,6 +11,7 @@
     },
     {
         "BriefDescription": "Load uops that split a page (Precise event capable)",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "EventCode": "0x13",
         "EventName": "MISALIGN_MEM_REF.LOAD_PAGE_SPLIT",
@@ -20,6 +22,7 @@
     },
     {
         "BriefDescription": "Store uops that split a page (Precise event capable)",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "EventCode": "0x13",
         "EventName": "MISALIGN_MEM_REF.STORE_PAGE_SPLIT",

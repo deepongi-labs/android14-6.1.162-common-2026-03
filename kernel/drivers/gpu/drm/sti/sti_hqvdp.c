@@ -744,7 +744,7 @@ static bool sti_hqvdp_check_hw_scaling(struct sti_hqvdp *hqvdp,
 
 	inv_zy = DIV_ROUND_UP(src_h, dst_h);
 
-	return inv_zy <= lfw;
+	return (inv_zy <= lfw) ? true : false;
 }
 
 /**
@@ -1356,6 +1356,7 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *vtg_np;
 	struct sti_hqvdp *hqvdp;
+	struct resource *res;
 
 	DRM_DEBUG_DRIVER("\n");
 
@@ -1366,10 +1367,17 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	}
 
 	hqvdp->dev = dev;
-	hqvdp->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(hqvdp->regs)) {
+
+	/* Get Memory resources */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		DRM_ERROR("Get memory resource failed\n");
+		return -ENXIO;
+	}
+	hqvdp->regs = devm_ioremap(dev, res->start, resource_size(res));
+	if (!hqvdp->regs) {
 		DRM_ERROR("Register mapping failed\n");
-		return PTR_ERR(hqvdp->regs);
+		return -ENXIO;
 	}
 
 	/* Get clock resources */
@@ -1395,9 +1403,10 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &sti_hqvdp_ops);
 }
 
-static void sti_hqvdp_remove(struct platform_device *pdev)
+static int sti_hqvdp_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sti_hqvdp_ops);
+	return 0;
 }
 
 static const struct of_device_id hqvdp_of_match[] = {
@@ -1409,6 +1418,7 @@ MODULE_DEVICE_TABLE(of, hqvdp_of_match);
 struct platform_driver sti_hqvdp_driver = {
 	.driver = {
 		.name = "sti-hqvdp",
+		.owner = THIS_MODULE,
 		.of_match_table = hqvdp_of_match,
 	},
 	.probe = sti_hqvdp_probe,

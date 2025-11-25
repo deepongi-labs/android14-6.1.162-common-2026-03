@@ -112,7 +112,7 @@ static void tile_clear_margins(struct vc_data *vc, struct fb_info *info,
 	}
 }
 
-static void tile_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
+static void tile_cursor(struct vc_data *vc, struct fb_info *info, int mode,
 			int fg, int bg)
 {
 	struct fb_tilecursor cursor;
@@ -120,7 +120,7 @@ static void tile_cursor(struct vc_data *vc, struct fb_info *info, bool enable,
 
 	cursor.sx = vc->state.x;
 	cursor.sy = vc->state.y;
-	cursor.mode = enable && !use_sw;
+	cursor.mode = (mode == CM_ERASE || use_sw) ? 0 : 1;
 	cursor.fg = fg;
 	cursor.bg = bg;
 

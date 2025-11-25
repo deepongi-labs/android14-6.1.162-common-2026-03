@@ -9,7 +9,6 @@
 
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/string.h>
 
 #include <asm/ebus_dma.h>
 #include <asm/ns87303.h>
@@ -150,7 +149,7 @@ static int ecpp_probe(struct platform_device *op)
 	sparc_ebus_dmas[slot].info.callback = NULL;
 	sparc_ebus_dmas[slot].info.client_cookie = NULL;
 	sparc_ebus_dmas[slot].info.irq = 0xdeadbeef;
-	strscpy(sparc_ebus_dmas[slot].info.name, "parport");
+	strcpy(sparc_ebus_dmas[slot].info.name, "parport");
 	if (ebus_dma_register(&sparc_ebus_dmas[slot].info))
 		goto out_unmap_regs;
 
@@ -197,7 +196,7 @@ out_err:
 	return err;
 }
 
-static void ecpp_remove(struct platform_device *op)
+static int ecpp_remove(struct platform_device *op)
 {
 	struct parport *p = dev_get_drvdata(&op->dev);
 	int slot = p->dma;
@@ -217,6 +216,8 @@ static void ecpp_remove(struct platform_device *op)
 			   d_len);
 		clear_bit(slot, dma_slot_map);
 	}
+
+	return 0;
 }
 
 static const struct of_device_id ecpp_match[] = {

@@ -42,7 +42,7 @@
 
 /*
  * This is the repository for labels seen so that it is
- * not necessary to keep allocating tiny chunks of memory
+ * not necessary to keep allocating tiny chuncks of memory
  * and so that they can be shared.
  *
  * Labels are never modified in place. Anytime a label
@@ -128,7 +128,7 @@ struct task_smack {
 
 #define	SMK_INODE_INSTANT	0x01	/* inode is instantiated */
 #define	SMK_INODE_TRANSMUTE	0x02	/* directory is transmuting */
-#define	SMK_INODE_CHANGED	0x04	/* smack was transmuted (unused) */
+#define	SMK_INODE_CHANGED	0x04	/* smack was transmuted */
 #define	SMK_INODE_IMPURE	0x08	/* involved in an impure transaction */
 
 /*
@@ -284,7 +284,6 @@ int smk_access(struct smack_known *, struct smack_known *,
 int smk_tskacc(struct task_smack *, struct smack_known *,
 	       u32, struct smk_audit_info *);
 int smk_curacc(struct smack_known *, u32, struct smk_audit_info *);
-int smack_str_from_perm(char *string, int access);
 struct smack_known *smack_from_secid(const u32);
 char *smk_parse_smack(const char *string, int len);
 int smk_netlbl_mls(int, char *, struct netlbl_lsm_secattr *, int);
@@ -362,18 +361,6 @@ static inline struct superblock_smack *smack_superblock(
 	return superblock->s_security + smack_blob_sizes.lbs_superblock;
 }
 
-static inline struct socket_smack *smack_sock(const struct sock *sock)
-{
-	return sock->sk_security + smack_blob_sizes.lbs_sock;
-}
-
-#ifdef CONFIG_KEYS
-static inline struct smack_known **smack_key(const struct key *key)
-{
-	return key->security + smack_blob_sizes.lbs_key;
-}
-#endif /* CONFIG_KEYS */
-
 /*
  * Is the directory transmuting?
  */
@@ -432,18 +419,18 @@ static inline struct smack_known *smk_of_current(void)
 	return smk_of_task(smack_cred(current_cred()));
 }
 
-void smack_log(char *subject_label, char *object_label,
-		int request,
-		int result, struct smk_audit_info *auditdata);
-
-#ifdef CONFIG_AUDIT
-
 /*
  * logging functions
  */
 #define SMACK_AUDIT_DENIED 0x1
 #define SMACK_AUDIT_ACCEPT 0x2
 extern int log_policy;
+
+void smack_log(char *subject_label, char *object_label,
+		int request,
+		int result, struct smk_audit_info *auditdata);
+
+#ifdef CONFIG_AUDIT
 
 /*
  * some inline functions to set up audit data

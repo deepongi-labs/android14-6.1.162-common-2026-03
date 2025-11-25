@@ -10,8 +10,7 @@
 #include <linux/hdmi.h>
 #include <linux/math64.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/pm_opp.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
@@ -20,12 +19,9 @@
 #include <soc/tegra/common.h>
 #include <sound/hdmi-codec.h>
 
-#include <drm/drm_bridge_connector.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_debugfs.h>
-#include <drm/drm_edid.h>
-#include <drm/drm_eld.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_probe_helper.h>
@@ -434,7 +430,7 @@ tegra_hdmi_get_audio_config(unsigned int audio_freq, unsigned int pix_clock,
 
 static void tegra_hdmi_setup_audio_fs_tables(struct tegra_hdmi *hdmi)
 {
-	static const unsigned int freqs[] = {
+	const unsigned int freqs[] = {
 		32000, 44100, 48000, 88200, 96000, 176400, 192000
 	};
 	unsigned int i;
@@ -871,7 +867,14 @@ static int tegra_hdmi_reconfigure_audio(struct tegra_hdmi *hdmi)
 
 static bool tegra_output_is_hdmi(struct tegra_output *output)
 {
-	return output->connector.display_info.is_hdmi;
+	struct edid *edid;
+
+	if (!output->connector.edid_blob_ptr)
+		return false;
+
+	edid = (struct edid *)output->connector.edid_blob_ptr->data;
+
+	return drm_detect_hdmi_monitor(edid);
 }
 
 static enum drm_connector_status
@@ -1118,8 +1121,7 @@ static void tegra_hdmi_early_unregister(struct drm_connector *connector)
 	unsigned int count = ARRAY_SIZE(debugfs_files);
 	struct tegra_hdmi *hdmi = to_hdmi(output);
 
-	drm_debugfs_remove_files(hdmi->debugfs_files, count,
-				 connector->debugfs_entry, minor);
+	drm_debugfs_remove_files(hdmi->debugfs_files, count, minor);
 	kfree(hdmi->debugfs_files);
 	hdmi->debugfs_files = NULL;
 }
@@ -1137,7 +1139,7 @@ static const struct drm_connector_funcs tegra_hdmi_connector_funcs = {
 
 static enum drm_mode_status
 tegra_hdmi_connector_mode_valid(struct drm_connector *connector,
-				const struct drm_display_mode *mode)
+				struct drm_display_mode *mode)
 {
 	struct tegra_output *output = connector_to_output(connector);
 	struct tegra_hdmi *hdmi = to_hdmi(output);
@@ -1549,47 +1551,26 @@ static int tegra_hdmi_init(struct host1x_client *client)
 {
 	struct tegra_hdmi *hdmi = host1x_client_to_hdmi(client);
 	struct drm_device *drm = dev_get_drvdata(client->host);
-	struct drm_connector *connector;
 	int err;
 
 	hdmi->output.dev = client->dev;
+
+	drm_connector_init_with_ddc(drm, &hdmi->output.connector,
+				    &tegra_hdmi_connector_funcs,
+				    DRM_MODE_CONNECTOR_HDMIA,
+				    hdmi->output.ddc);
+	drm_connector_helper_add(&hdmi->output.connector,
+				 &tegra_hdmi_connector_helper_funcs);
+	hdmi->output.connector.dpms = DRM_MODE_DPMS_OFF;
 
 	drm_simple_encoder_init(drm, &hdmi->output.encoder,
 				DRM_MODE_ENCODER_TMDS);
 	drm_encoder_helper_add(&hdmi->output.encoder,
 			       &tegra_hdmi_encoder_helper_funcs);
 
-	if (hdmi->output.bridge) {
-		err = drm_bridge_attach(&hdmi->output.encoder, hdmi->output.bridge,
-					NULL, DRM_BRIDGE_ATTACH_NO_CONNECTOR);
-		if (err) {
-			dev_err(client->dev, "failed to attach bridge: %d\n",
-				err);
-			return err;
-		}
-
-		connector = drm_bridge_connector_init(drm, &hdmi->output.encoder);
-		if (IS_ERR(connector)) {
-			dev_err(client->dev,
-				"failed to initialize bridge connector: %pe\n",
-				connector);
-			return PTR_ERR(connector);
-		}
-
-		drm_connector_attach_encoder(connector, &hdmi->output.encoder);
-	} else {
-		drm_connector_init_with_ddc(drm, &hdmi->output.connector,
-					    &tegra_hdmi_connector_funcs,
-					    DRM_MODE_CONNECTOR_HDMIA,
-					    hdmi->output.ddc);
-		drm_connector_helper_add(&hdmi->output.connector,
-					 &tegra_hdmi_connector_helper_funcs);
-		hdmi->output.connector.dpms = DRM_MODE_DPMS_OFF;
-
-		drm_connector_attach_encoder(&hdmi->output.connector,
-					     &hdmi->output.encoder);
-		drm_connector_register(&hdmi->output.connector);
-	}
+	drm_connector_attach_encoder(&hdmi->output.connector,
+					  &hdmi->output.encoder);
+	drm_connector_register(&hdmi->output.connector);
 
 	err = tegra_output_init(drm, &hdmi->output);
 	if (err < 0) {
@@ -1904,13 +1885,21 @@ remove:
 	return err;
 }
 
-static void tegra_hdmi_remove(struct platform_device *pdev)
+static int tegra_hdmi_remove(struct platform_device *pdev)
 {
 	struct tegra_hdmi *hdmi = platform_get_drvdata(pdev);
+	int err;
 
-	host1x_client_unregister(&hdmi->client);
+	err = host1x_client_unregister(&hdmi->client);
+	if (err < 0) {
+		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
+			err);
+		return err;
+	}
 
 	tegra_output_remove(&hdmi->output);
+
+	return 0;
 }
 
 struct platform_driver tegra_hdmi_driver = {

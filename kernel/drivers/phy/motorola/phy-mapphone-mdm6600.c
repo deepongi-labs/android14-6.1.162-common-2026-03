@@ -177,7 +177,9 @@ static void phy_mdm6600_cmd(struct phy_mdm6600 *ddata, int val)
 
 	values[0] = val;
 
-	gpiod_multi_set_value_cansleep(ddata->cmd_gpios, values);
+	gpiod_set_array_value_cansleep(PHY_MDM6600_NR_CMD_LINES,
+				       ddata->cmd_gpios->desc,
+				       ddata->cmd_gpios->info, values);
 }
 
 /**
@@ -629,7 +631,7 @@ cleanup:
 	return error;
 }
 
-static void phy_mdm6600_remove(struct platform_device *pdev)
+static int phy_mdm6600_remove(struct platform_device *pdev)
 {
 	struct phy_mdm6600 *ddata = platform_get_drvdata(pdev);
 	struct gpio_desc *reset_gpio = ddata->ctrl_gpios[PHY_MDM6600_RESET];
@@ -649,6 +651,8 @@ static void phy_mdm6600_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&ddata->modem_wake_work);
 	cancel_delayed_work_sync(&ddata->bootup_work);
 	cancel_delayed_work_sync(&ddata->status_work);
+
+	return 0;
 }
 
 static struct platform_driver phy_mdm6600_driver = {

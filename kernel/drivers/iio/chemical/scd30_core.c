@@ -5,7 +5,6 @@
  * Copyright (c) 2020 Tomasz Duszynski <tomasz.duszynski@octakon.com>
  */
 #include <linux/bits.h>
-#include <linux/cleanup.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -199,103 +198,112 @@ static int scd30_read_raw(struct iio_dev *indio_dev, struct iio_chan_spec const 
 			  int *val, int *val2, long mask)
 {
 	struct scd30_state *state = iio_priv(indio_dev);
-	int ret;
+	int ret = -EINVAL;
 	u16 tmp;
 
-	guard(mutex)(&state->lock);
+	mutex_lock(&state->lock);
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
 	case IIO_CHAN_INFO_PROCESSED:
 		if (chan->output) {
 			*val = state->pressure_comp;
-			return IIO_VAL_INT;
+			ret = IIO_VAL_INT;
+			break;
 		}
 
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			break;
 
 		ret = scd30_read(state);
 		if (ret) {
-			iio_device_release_direct(indio_dev);
-			return ret;
+			iio_device_release_direct_mode(indio_dev);
+			break;
 		}
 
 		*val = state->meas[chan->address];
-		iio_device_release_direct(indio_dev);
-		return IIO_VAL_INT;
+		iio_device_release_direct_mode(indio_dev);
+		ret = IIO_VAL_INT;
+		break;
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
 		*val2 = 1;
-		return IIO_VAL_INT_PLUS_MICRO;
+		ret = IIO_VAL_INT_PLUS_MICRO;
+		break;
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		ret = scd30_command_read(state, CMD_MEAS_INTERVAL, &tmp);
 		if (ret)
-			return ret;
+			break;
 
 		*val = 0;
 		*val2 = 1000000000 / tmp;
-		return IIO_VAL_INT_PLUS_NANO;
+		ret = IIO_VAL_INT_PLUS_NANO;
+		break;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		ret = scd30_command_read(state, CMD_TEMP_OFFSET, &tmp);
 		if (ret)
-			return ret;
+			break;
 
 		*val = tmp;
-		return IIO_VAL_INT;
-	default:
-		return -EINVAL;
+		ret = IIO_VAL_INT;
+		break;
 	}
+	mutex_unlock(&state->lock);
+
+	return ret;
 }
 
 static int scd30_write_raw(struct iio_dev *indio_dev, struct iio_chan_spec const *chan,
 			   int val, int val2, long mask)
 {
 	struct scd30_state *state = iio_priv(indio_dev);
-	int ret;
+	int ret = -EINVAL;
 
-	guard(mutex)(&state->lock);
+	mutex_lock(&state->lock);
 	switch (mask) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		if (val)
-			return -EINVAL;
+			break;
 
 		val = 1000000000 / val2;
 		if (val < SCD30_MEAS_INTERVAL_MIN_S || val > SCD30_MEAS_INTERVAL_MAX_S)
-			return -EINVAL;
+			break;
 
 		ret = scd30_command_write(state, CMD_MEAS_INTERVAL, val);
 		if (ret)
-			return ret;
+			break;
 
 		state->meas_interval = val;
-		return 0;
+		break;
 	case IIO_CHAN_INFO_RAW:
 		switch (chan->type) {
 		case IIO_PRESSURE:
 			if (val < SCD30_PRESSURE_COMP_MIN_MBAR ||
 			    val > SCD30_PRESSURE_COMP_MAX_MBAR)
-				return -EINVAL;
+				break;
 
 			ret = scd30_command_write(state, CMD_START_MEAS, val);
 			if (ret)
-				return ret;
+				break;
 
 			state->pressure_comp = val;
-			return 0;
+			break;
 		default:
-			return -EINVAL;
+			break;
 		}
+		break;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		if (val < 0 || val > SCD30_TEMP_OFFSET_MAX)
-			return -EINVAL;
+			break;
 		/*
 		 * Manufacturer does not explicitly specify min/max sensible
 		 * values hence check is omitted for simplicity.
 		 */
-		return scd30_command_write(state, CMD_TEMP_OFFSET / 10, val);
-	default:
-		return -EINVAL;
+		ret = scd30_command_write(state, CMD_TEMP_OFFSET / 10, val);
 	}
+	mutex_unlock(&state->lock);
+
+	return ret;
 }
 
 static int scd30_write_raw_get_fmt(struct iio_dev *indio_dev, struct iio_chan_spec const *chan,
@@ -346,7 +354,7 @@ static ssize_t sampling_frequency_available_show(struct device *dev, struct devi
 	ssize_t len = 0;
 
 	do {
-		len += sysfs_emit_at(buf, len, "0.%09u ", 1000000000 / i);
+		len += scnprintf(buf + len, PAGE_SIZE - len, "0.%09u ", 1000000000 / i);
 		/*
 		 * Not all values fit PAGE_SIZE buffer hence print every 6th
 		 * (each frequency differs by 6s in time domain from the
@@ -372,7 +380,7 @@ static ssize_t calibration_auto_enable_show(struct device *dev, struct device_at
 	ret = scd30_command_read(state, CMD_ASC, &val);
 	mutex_unlock(&state->lock);
 
-	return ret ?: sysfs_emit(buf, "%d\n", val);
+	return ret ?: sprintf(buf, "%d\n", val);
 }
 
 static ssize_t calibration_auto_enable_store(struct device *dev, struct device_attribute *attr,
@@ -406,7 +414,7 @@ static ssize_t calibration_forced_value_show(struct device *dev, struct device_a
 	ret = scd30_command_read(state, CMD_FRC, &val);
 	mutex_unlock(&state->lock);
 
-	return ret ?: sysfs_emit(buf, "%d\n", val);
+	return ret ?: sprintf(buf, "%d\n", val);
 }
 
 static ssize_t calibration_forced_value_store(struct device *dev, struct device_attribute *attr,
@@ -586,8 +594,8 @@ static irqreturn_t scd30_trigger_handler(int irq, void *p)
 	struct scd30_state *state = iio_priv(indio_dev);
 	struct {
 		int data[SCD30_MEAS_COUNT];
-		aligned_s64 ts;
-	} scan = { };
+		s64 ts __aligned(8);
+	} scan;
 	int ret;
 
 	mutex_lock(&state->lock);
@@ -595,13 +603,13 @@ static irqreturn_t scd30_trigger_handler(int irq, void *p)
 		ret = scd30_read_poll(state);
 	else
 		ret = scd30_read_meas(state);
+	memset(&scan, 0, sizeof(scan));
 	memcpy(scan.data, state->meas, sizeof(state->meas));
 	mutex_unlock(&state->lock);
 	if (ret)
 		goto out;
 
-	iio_push_to_buffers_with_ts(indio_dev, &scan, sizeof(scan),
-				    iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_timestamp(indio_dev, &scan, iio_get_time_ns(indio_dev));
 out:
 	iio_trigger_notify_done(indio_dev->trig);
 	return IRQ_HANDLED;
@@ -634,8 +642,10 @@ static int scd30_setup_trigger(struct iio_dev *indio_dev)
 
 	trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name,
 				      iio_device_id(indio_dev));
-	if (!trig)
+	if (!trig) {
+		dev_err(dev, "failed to allocate trigger\n");
 		return -ENOMEM;
+	}
 
 	trig->ops = &scd30_trigger_ops;
 	iio_trigger_set_drvdata(trig, indio_dev);
@@ -657,9 +667,9 @@ static int scd30_setup_trigger(struct iio_dev *indio_dev)
 					IRQF_NO_AUTOEN,
 					indio_dev->name, indio_dev);
 	if (ret)
-		return dev_err_probe(dev, ret, "failed to request irq\n");
+		dev_err(dev, "failed to request irq\n");
 
-	return 0;
+	return ret;
 }
 
 int scd30_probe(struct device *dev, int irq, const char *name, void *priv,
@@ -707,13 +717,17 @@ int scd30_probe(struct device *dev, int irq, const char *name, void *priv,
 		return ret;
 
 	ret = scd30_reset(state);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to reset device\n");
+	if (ret) {
+		dev_err(dev, "failed to reset device: %d\n", ret);
+		return ret;
+	}
 
 	if (state->irq > 0) {
 		ret = scd30_setup_trigger(indio_dev);
-		if (ret)
-			return dev_err_probe(dev, ret, "failed to setup trigger\n");
+		if (ret) {
+			dev_err(dev, "failed to setup trigger: %d\n", ret);
+			return ret;
+		}
 	}
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL, scd30_trigger_handler, NULL);
@@ -721,17 +735,23 @@ int scd30_probe(struct device *dev, int irq, const char *name, void *priv,
 		return ret;
 
 	ret = scd30_command_read(state, CMD_FW_VERSION, &val);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to read firmware version\n");
+	if (ret) {
+		dev_err(dev, "failed to read firmware version: %d\n", ret);
+		return ret;
+	}
 	dev_info(dev, "firmware version: %d.%d\n", val >> 8, (char)val);
 
 	ret = scd30_command_write(state, CMD_MEAS_INTERVAL, state->meas_interval);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to set measurement interval\n");
+	if (ret) {
+		dev_err(dev, "failed to set measurement interval: %d\n", ret);
+		return ret;
+	}
 
 	ret = scd30_command_write(state, CMD_START_MEAS, state->pressure_comp);
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to start measurement\n");
+	if (ret) {
+		dev_err(dev, "failed to start measurement: %d\n", ret);
+		return ret;
+	}
 
 	ret = devm_add_action_or_reset(dev, scd30_stop_meas, state);
 	if (ret)
@@ -739,7 +759,7 @@ int scd30_probe(struct device *dev, int irq, const char *name, void *priv,
 
 	return devm_iio_device_register(dev, indio_dev);
 }
-EXPORT_SYMBOL_NS(scd30_probe, "IIO_SCD30");
+EXPORT_SYMBOL_NS(scd30_probe, IIO_SCD30);
 
 MODULE_AUTHOR("Tomasz Duszynski <tomasz.duszynski@octakon.com>");
 MODULE_DESCRIPTION("Sensirion SCD30 carbon dioxide sensor core driver");

@@ -13,7 +13,6 @@
 #define pr_fmt(fmt) "ACPI: " fmt
 
 #include <linux/acpi.h>
-#include <linux/arm-smccc.h>
 #include <linux/cpumask.h>
 #include <linux/efi.h>
 #include <linux/efi-bgrt.h>
@@ -26,11 +25,9 @@
 #include <linux/libfdt.h>
 #include <linux/smp.h>
 #include <linux/serial_core.h>
-#include <linux/suspend.h>
 #include <linux/pgtable.h>
 
 #include <acpi/ghes.h>
-#include <acpi/processor.h>
 #include <asm/cputype.h>
 #include <asm/cpu_ops.h>
 #include <asm/daifflags.h>
@@ -46,7 +43,6 @@ EXPORT_SYMBOL(acpi_pci_disabled);
 static bool param_acpi_off __initdata;
 static bool param_acpi_on __initdata;
 static bool param_acpi_force __initdata;
-static bool param_acpi_nospcr __initdata;
 
 static int __init parse_acpi(char *arg)
 {
@@ -60,8 +56,6 @@ static int __init parse_acpi(char *arg)
 		param_acpi_on = true;
 	else if (strcmp(arg, "force") == 0) /* force ACPI to be enabled */
 		param_acpi_force = true;
-	else if (strcmp(arg, "nospcr") == 0) /* disable SPCR as default console */
-		param_acpi_nospcr = true;
 	else
 		return -EINVAL;	/* Core will print when we return error */
 
@@ -232,27 +226,7 @@ done:
 		if (earlycon_acpi_spcr_enable)
 			early_init_dt_scan_chosen_stdout();
 	} else {
-#ifdef CONFIG_HIBERNATION
-		struct acpi_table_header *facs = NULL;
-		acpi_get_table(ACPI_SIG_FACS, 1, &facs);
-		if (facs) {
-			swsusp_hardware_signature =
-				((struct acpi_table_facs *)facs)->hardware_signature;
-			acpi_put_table(facs);
-		}
-#endif
-
-		/*
-		 * For varying privacy and security reasons, sometimes need
-		 * to completely silence the serial console output, and only
-		 * enable it when needed.
-		 * But there are many existing systems that depend on this
-		 * behaviour, use acpi=nospcr to disable console in ACPI SPCR
-		 * table as default serial console.
-		 */
-		acpi_parse_spcr(earlycon_acpi_spcr_enable,
-			!param_acpi_nospcr);
-
+		acpi_parse_spcr(earlycon_acpi_spcr_enable, true);
 		if (IS_ENABLED(CONFIG_ACPI_BGRT))
 			acpi_table_parse(ACPI_SIG_BGRT, acpi_parse_bgrt);
 	}
@@ -351,16 +325,6 @@ void __iomem *acpi_os_ioremap(acpi_physical_address phys, acpi_size size)
 			 * as long as we take care not to create a writable
 			 * mapping for executable code.
 			 */
-			fallthrough;
-
-		case EFI_ACPI_MEMORY_NVS:
-			/*
-			 * ACPI NVS marks an area reserved for use by the
-			 * firmware, even after exiting the boot service.
-			 * This may be used by the firmware for sharing dynamic
-			 * tables/data (e.g., ACPI CCEL) with the OS. Map it
-			 * as read-only.
-			 */
 			prot = PAGE_KERNEL_RO;
 			break;
 
@@ -387,7 +351,7 @@ void __iomem *acpi_os_ioremap(acpi_physical_address phys, acpi_size size)
 				prot = __acpi_get_writethrough_mem_attribute();
 		}
 	}
-	return ioremap_prot(phys, size, prot);
+	return ioremap_prot(phys, size, pgprot_val(prot));
 }
 
 /*
@@ -411,7 +375,7 @@ int apei_claim_sea(struct pt_regs *regs)
 	return_to_irqs_enabled = !irqs_disabled_flags(arch_local_save_flags());
 
 	if (regs)
-		return_to_irqs_enabled = !regs_irqs_disabled(regs);
+		return_to_irqs_enabled = interrupts_enabled(regs);
 
 	/*
 	 * SEA can interrupt SError, mask it and describe this as an NMI so
@@ -447,24 +411,3 @@ void arch_reserve_mem_area(acpi_physical_address addr, size_t size)
 {
 	memblock_mark_nomap(addr, size);
 }
-
-#ifdef CONFIG_ACPI_HOTPLUG_CPU
-int acpi_map_cpu(acpi_handle handle, phys_cpuid_t physid, u32 apci_id,
-		 int *pcpu)
-{
-	/* If an error code is passed in this stub can't fix it */
-	if (*pcpu < 0) {
-		pr_warn_once("Unable to map CPU to valid ID\n");
-		return *pcpu;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL(acpi_map_cpu);
-
-int acpi_unmap_cpu(int cpu)
-{
-	return 0;
-}
-EXPORT_SYMBOL(acpi_unmap_cpu);
-#endif /* CONFIG_ACPI_HOTPLUG_CPU */

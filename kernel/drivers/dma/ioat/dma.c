@@ -33,7 +33,7 @@ MODULE_PARM_DESC(completion_timeout,
 static int idle_timeout = 2000;
 module_param(idle_timeout, int, 0644);
 MODULE_PARM_DESC(idle_timeout,
-		"set ioat idle timeout [msec] (default 2000 [msec])");
+		"set ioat idel timeout [msec] (default 2000 [msec])");
 
 #define IDLE_TIMEOUT msecs_to_jiffies(idle_timeout)
 #define COMPLETION_TIMEOUT msecs_to_jiffies(completion_timeout)
@@ -159,7 +159,7 @@ void ioat_stop(struct ioatdma_chan *ioat_chan)
 	}
 
 	/* flush inflight timers */
-	timer_delete_sync(&ioat_chan->timer);
+	del_timer_sync(&ioat_chan->timer);
 
 	/* flush inflight tasklet runs */
 	tasklet_kill(&ioat_chan->cleanup_task);
@@ -901,8 +901,7 @@ static void ioat_reboot_chan(struct ioatdma_chan *ioat_chan)
 
 void ioat_timer_event(struct timer_list *t)
 {
-	struct ioatdma_chan *ioat_chan = timer_container_of(ioat_chan, t,
-							    timer);
+	struct ioatdma_chan *ioat_chan = from_timer(ioat_chan, t, timer);
 	dma_addr_t phys_complete;
 	u64 status;
 

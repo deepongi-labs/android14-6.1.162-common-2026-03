@@ -27,6 +27,30 @@
 
 #include "bcmsysport.h"
 
+/* I/O accessors register helpers */
+#define BCM_SYSPORT_IO_MACRO(name, offset) \
+static inline u32 name##_readl(struct bcm_sysport_priv *priv, u32 off)	\
+{									\
+	u32 reg = readl_relaxed(priv->base + offset + off);		\
+	return reg;							\
+}									\
+static inline void name##_writel(struct bcm_sysport_priv *priv,		\
+				  u32 val, u32 off)			\
+{									\
+	writel_relaxed(val, priv->base + offset + off);			\
+}									\
+
+BCM_SYSPORT_IO_MACRO(intrl2_0, SYS_PORT_INTRL2_0_OFFSET);
+BCM_SYSPORT_IO_MACRO(intrl2_1, SYS_PORT_INTRL2_1_OFFSET);
+BCM_SYSPORT_IO_MACRO(umac, SYS_PORT_UMAC_OFFSET);
+BCM_SYSPORT_IO_MACRO(gib, SYS_PORT_GIB_OFFSET);
+BCM_SYSPORT_IO_MACRO(tdma, SYS_PORT_TDMA_OFFSET);
+BCM_SYSPORT_IO_MACRO(rxchk, SYS_PORT_RXCHK_OFFSET);
+BCM_SYSPORT_IO_MACRO(txchk, SYS_PORT_TXCHK_OFFSET);
+BCM_SYSPORT_IO_MACRO(rbuf, SYS_PORT_RBUF_OFFSET);
+BCM_SYSPORT_IO_MACRO(tbuf, SYS_PORT_TBUF_OFFSET);
+BCM_SYSPORT_IO_MACRO(topctrl, SYS_PORT_TOPCTRL_OFFSET);
+
 /* On SYSTEMPORT Lite, any register after RDMA_STATUS has the exact
  * same layout, except it has been moved by 4 bytes up, *sigh*
  */
@@ -271,8 +295,6 @@ static const struct bcm_sysport_stats bcm_sysport_gstrings_stats[] = {
 	/* RBUF misc statistics */
 	STAT_RBUF("rbuf_ovflow_cnt", mib.rbuf_ovflow_cnt, RBUF_OVFL_DISC_CNTR),
 	STAT_RBUF("rbuf_err_cnt", mib.rbuf_err_cnt, RBUF_ERR_PKT_CNTR),
-	/* RDMA misc statistics */
-	STAT_RDMA("rdma_ovflow_cnt", mib.rdma_ovflow_cnt, RDMA_OVFL_DISC_CNTR),
 	STAT_MIB_SOFT("alloc_rx_buff_failed", mib.alloc_rx_buff_failed),
 	STAT_MIB_SOFT("rx_dma_failed", mib.rx_dma_failed),
 	STAT_MIB_SOFT("tx_dma_failed", mib.tx_dma_failed),
@@ -311,7 +333,6 @@ static inline bool bcm_sysport_lite_stat_valid(enum bcm_sysport_stat_type type)
 	case BCM_SYSPORT_STAT_NETDEV64:
 	case BCM_SYSPORT_STAT_RXCHK:
 	case BCM_SYSPORT_STAT_RBUF:
-	case BCM_SYSPORT_STAT_RDMA:
 	case BCM_SYSPORT_STAT_SOFT:
 		return true;
 	default:
@@ -346,22 +367,32 @@ static void bcm_sysport_get_strings(struct net_device *dev,
 {
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 	const struct bcm_sysport_stats *s;
-	int i;
+	char buf[128];
+	int i, j;
 
 	switch (stringset) {
 	case ETH_SS_STATS:
-		for (i = 0; i < BCM_SYSPORT_STATS_LEN; i++) {
+		for (i = 0, j = 0; i < BCM_SYSPORT_STATS_LEN; i++) {
 			s = &bcm_sysport_gstrings_stats[i];
 			if (priv->is_lite &&
 			    !bcm_sysport_lite_stat_valid(s->type))
 				continue;
 
-			ethtool_puts(&data, s->stat_string);
+			memcpy(data + j * ETH_GSTRING_LEN, s->stat_string,
+			       ETH_GSTRING_LEN);
+			j++;
 		}
 
 		for (i = 0; i < dev->num_tx_queues; i++) {
-			ethtool_sprintf(&data, "txq%d_packets", i);
-			ethtool_sprintf(&data, "txq%d_bytes", i);
+			snprintf(buf, sizeof(buf), "txq%d_packets", i);
+			memcpy(data + j * ETH_GSTRING_LEN, buf,
+			       ETH_GSTRING_LEN);
+			j++;
+
+			snprintf(buf, sizeof(buf), "txq%d_bytes", i);
+			memcpy(data + j * ETH_GSTRING_LEN, buf,
+			       ETH_GSTRING_LEN);
+			j++;
 		}
 		break;
 	default:
@@ -405,14 +436,6 @@ static void bcm_sysport_update_mib_counters(struct bcm_sysport_priv *priv)
 			if (val == ~0)
 				rbuf_writel(priv, 0, s->reg_offset);
 			break;
-		case BCM_SYSPORT_STAT_RDMA:
-			if (!priv->is_lite)
-				continue;
-
-			val = rdma_readl(priv, s->reg_offset);
-			if (val == ~0)
-				rdma_writel(priv, 0, s->reg_offset);
-			break;
 		}
 
 		j += s->stat_sizeof;
@@ -434,10 +457,10 @@ static void bcm_sysport_update_tx_stats(struct bcm_sysport_priv *priv,
 	for (q = 0; q < priv->netdev->num_tx_queues; q++) {
 		ring = &priv->tx_rings[q];
 		do {
-			start = u64_stats_fetch_begin(&priv->syncp);
+			start = u64_stats_fetch_begin_irq(&priv->syncp);
 			bytes = ring->bytes;
 			packets = ring->packets;
-		} while (u64_stats_fetch_retry(&priv->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&priv->syncp, start));
 
 		*tx_bytes += bytes;
 		*tx_packets += packets;
@@ -481,9 +504,9 @@ static void bcm_sysport_get_stats(struct net_device *dev,
 		if (s->stat_sizeof == sizeof(u64) &&
 		    s->type == BCM_SYSPORT_STAT_NETDEV64) {
 			do {
-				start = u64_stats_fetch_begin(syncp);
+				start = u64_stats_fetch_begin_irq(syncp);
 				data[i] = *(u64 *)p;
-			} while (u64_stats_fetch_retry(syncp, start));
+			} while (u64_stats_fetch_retry_irq(syncp, start));
 		} else
 			data[i] = *(u32 *)p;
 		j++;
@@ -1019,7 +1042,7 @@ static int bcm_sysport_poll(struct napi_struct *napi, int budget)
 	if (priv->dim.use_dim) {
 		dim_update_sample(priv->dim.event_ctr, priv->dim.packets,
 				  priv->dim.bytes, &dim_sample);
-		net_dim(&priv->dim.dim, &dim_sample);
+		net_dim(&priv->dim.dim, dim_sample);
 	}
 
 	return work_done;
@@ -1856,10 +1879,10 @@ static void bcm_sysport_get_stats64(struct net_device *dev,
 				    &stats->tx_packets);
 
 	do {
-		start = u64_stats_fetch_begin(&priv->syncp);
+		start = u64_stats_fetch_begin_irq(&priv->syncp);
 		stats->rx_packets = stats64->rx_packets;
 		stats->rx_bytes = stats64->rx_bytes;
-	} while (u64_stats_fetch_retry(&priv->syncp, start));
+	} while (u64_stats_fetch_retry_irq(&priv->syncp, start));
 }
 
 static void bcm_sysport_netif_start(struct net_device *dev)
@@ -2401,7 +2424,7 @@ static int bcm_sysport_netdevice_event(struct notifier_block *nb,
 		if (dev->netdev_ops != &bcm_sysport_netdev_ops)
 			return NOTIFY_DONE;
 
-		if (!dsa_user_dev_check(info->upper_dev))
+		if (!dsa_slave_dev_check(info->upper_dev))
 			return NOTIFY_DONE;
 
 		if (info->linking)
@@ -2502,9 +2525,9 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 	priv->irq0 = platform_get_irq(pdev, 0);
 	if (!priv->is_lite) {
 		priv->irq1 = platform_get_irq(pdev, 1);
-		priv->wol_irq = platform_get_irq_optional(pdev, 2);
+		priv->wol_irq = platform_get_irq(pdev, 2);
 	} else {
-		priv->wol_irq = platform_get_irq_optional(pdev, 1);
+		priv->wol_irq = platform_get_irq(pdev, 1);
 	}
 	if (priv->irq0 <= 0 || (priv->irq1 <= 0 && !priv->is_lite)) {
 		ret = -EINVAL;
@@ -2625,7 +2648,7 @@ err_free_netdev:
 	return ret;
 }
 
-static void bcm_sysport_remove(struct platform_device *pdev)
+static int bcm_sysport_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = dev_get_drvdata(&pdev->dev);
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
@@ -2640,6 +2663,8 @@ static void bcm_sysport_remove(struct platform_device *pdev)
 		of_phy_deregister_fixed_link(dn);
 	free_netdev(dev);
 	dev_set_drvdata(&pdev->dev, NULL);
+
+	return 0;
 }
 
 static int bcm_sysport_suspend_to_wol(struct bcm_sysport_priv *priv)
@@ -2881,7 +2906,7 @@ static SIMPLE_DEV_PM_OPS(bcm_sysport_pm_ops,
 
 static struct platform_driver bcm_sysport_driver = {
 	.probe	= bcm_sysport_probe,
-	.remove = bcm_sysport_remove,
+	.remove	= bcm_sysport_remove,
 	.driver =  {
 		.name = "brcm-systemport",
 		.of_match_table = bcm_sysport_of_match,

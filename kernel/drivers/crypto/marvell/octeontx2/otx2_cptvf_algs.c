@@ -11,12 +11,12 @@
 #include <crypto/xts.h>
 #include <crypto/gcm.h>
 #include <crypto/scatterwalk.h>
+#include <linux/rtnetlink.h>
 #include <linux/sort.h>
 #include <linux/module.h>
 #include "otx2_cptvf.h"
 #include "otx2_cptvf_algs.h"
 #include "otx2_cpt_reqmgr.h"
-#include "cn10k_cpt.h"
 
 /* Size of salt in AES GCM mode */
 #define AES_GCM_SALT_SIZE 4
@@ -54,8 +54,6 @@ static struct cpt_device_table se_devices = {
 	.count = ATOMIC_INIT(0)
 };
 
-static struct otx2_cpt_sdesc *alloc_sdesc(struct crypto_shash *alg);
-
 static inline int get_se_device(struct pci_dev **pdev, int *cpu_num)
 {
 	int count;
@@ -89,7 +87,7 @@ static inline int validate_hmac_cipher_null(struct otx2_cpt_req_info *cpt_req)
 
 	req = container_of(cpt_req->areq, struct aead_request, base);
 	tfm = crypto_aead_reqtfm(req);
-	rctx = aead_request_ctx_dma(req);
+	rctx = aead_request_ctx(req);
 	if (memcmp(rctx->fctx.hmac.s.hmac_calc,
 		   rctx->fctx.hmac.s.hmac_recv,
 		   crypto_aead_authsize(tfm)) != 0)
@@ -122,7 +120,7 @@ static void otx2_cpt_aead_callback(int status, void *arg1, void *arg2)
 		otx2_cpt_info_destroy(pdev, inst_info);
 	}
 	if (areq)
-		crypto_request_complete(areq, status);
+		areq->complete(areq, status);
 }
 
 static void output_iv_copyback(struct crypto_async_request *areq)
@@ -139,7 +137,7 @@ static void output_iv_copyback(struct crypto_async_request *areq)
 	ctx = crypto_skcipher_ctx(stfm);
 	if (ctx->cipher_type == OTX2_CPT_AES_CBC ||
 	    ctx->cipher_type == OTX2_CPT_DES3_CBC) {
-		rctx = skcipher_request_ctx_dma(sreq);
+		rctx = skcipher_request_ctx(sreq);
 		req_info = &rctx->cpt_req;
 		ivsize = crypto_skcipher_ivsize(stfm);
 		start = sreq->cryptlen - ivsize;
@@ -172,7 +170,7 @@ static void otx2_cpt_skcipher_callback(int status, void *arg1, void *arg2)
 			pdev = inst_info->pdev;
 			otx2_cpt_info_destroy(pdev, inst_info);
 		}
-		crypto_request_complete(areq, status);
+		areq->complete(areq, status);
 	}
 }
 
@@ -221,7 +219,7 @@ static inline int create_ctx_hdr(struct skcipher_request *req, u32 enc,
 				 u32 *argcnt)
 {
 	struct crypto_skcipher *stfm = crypto_skcipher_reqtfm(req);
-	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx(req);
 	struct otx2_cpt_enc_ctx *ctx = crypto_skcipher_ctx(stfm);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	struct otx2_cpt_fc_ctx *fctx = &rctx->fctx;
@@ -290,7 +288,7 @@ static inline int create_ctx_hdr(struct skcipher_request *req, u32 enc,
 static inline int create_input_list(struct skcipher_request *req, u32 enc,
 				    u32 enc_iv_len)
 {
-	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx(req);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	u32 argcnt =  0;
 	int ret;
@@ -308,7 +306,7 @@ static inline int create_input_list(struct skcipher_request *req, u32 enc,
 static inline void create_output_list(struct skcipher_request *req,
 				      u32 enc_iv_len)
 {
-	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx(req);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	u32 argcnt = 0;
 
@@ -327,7 +325,7 @@ static inline void create_output_list(struct skcipher_request *req,
 static int skcipher_do_fallback(struct skcipher_request *req, bool is_enc)
 {
 	struct crypto_skcipher *stfm = crypto_skcipher_reqtfm(req);
-	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx(req);
 	struct otx2_cpt_enc_ctx *ctx = crypto_skcipher_ctx(stfm);
 	int ret;
 
@@ -350,7 +348,7 @@ static int skcipher_do_fallback(struct skcipher_request *req, bool is_enc)
 static inline int cpt_enc_dec(struct skcipher_request *req, u32 enc)
 {
 	struct crypto_skcipher *stfm = crypto_skcipher_reqtfm(req);
-	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = skcipher_request_ctx(req);
 	struct otx2_cpt_enc_ctx *ctx = crypto_skcipher_ctx(stfm);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	u32 enc_iv_len = crypto_skcipher_ivsize(stfm);
@@ -384,11 +382,7 @@ static inline int cpt_enc_dec(struct skcipher_request *req, u32 enc)
 	req_info->req_type = OTX2_CPT_ENC_DEC_REQ;
 	req_info->is_enc = enc;
 	req_info->is_trunc_hmac = false;
-	req_info->ctrl.s.grp = otx2_cpt_get_eng_grp_num(pdev,
-							OTX2_CPT_SE_TYPES);
-
-	req_info->req.cptr = ctx->er_ctx.hw_ctx;
-	req_info->req.cptr_dma = ctx->er_ctx.cptr_dma;
+	req_info->ctrl.s.grp = otx2_cpt_get_kcrypto_eng_grp_num(pdev);
 
 	/*
 	 * We perform an asynchronous send and once
@@ -418,7 +412,7 @@ static int otx2_cpt_skcipher_xts_setkey(struct crypto_skcipher *tfm,
 	const u8 *key1 = key;
 	int ret;
 
-	ret = xts_verify_key(tfm, key, keylen);
+	ret = xts_check_key(crypto_skcipher_tfm(tfm), key, keylen);
 	if (ret)
 		return ret;
 	ctx->key_len = keylen;
@@ -536,8 +530,6 @@ static int otx2_cpt_enc_dec_init(struct crypto_skcipher *stfm)
 	struct otx2_cpt_enc_ctx *ctx = crypto_skcipher_ctx(stfm);
 	struct crypto_tfm *tfm = crypto_skcipher_tfm(stfm);
 	struct crypto_alg *alg = tfm->__crt_alg;
-	struct pci_dev *pdev;
-	int ret, cpu_num;
 
 	memset(ctx, 0, sizeof(*ctx));
 	/*
@@ -545,18 +537,8 @@ static int otx2_cpt_enc_dec_init(struct crypto_skcipher *stfm)
 	 * allocated since the cryptd daemon uses
 	 * this memory for request_ctx information
 	 */
-	crypto_skcipher_set_reqsize_dma(
-		stfm, sizeof(struct otx2_cpt_req_ctx) +
-		      sizeof(struct skcipher_request));
-
-	ret = get_se_device(&pdev, &cpu_num);
-	if (ret)
-		return ret;
-
-	ctx->pdev = pdev;
-	ret = cn10k_cpt_hw_ctx_init(pdev, &ctx->er_ctx);
-	if (ret)
-		return ret;
+	crypto_skcipher_set_reqsize(stfm, sizeof(struct otx2_cpt_req_ctx) +
+					sizeof(struct skcipher_request));
 
 	return cpt_skcipher_fallback_init(ctx, alg);
 }
@@ -569,7 +551,6 @@ static void otx2_cpt_skcipher_exit(struct crypto_skcipher *tfm)
 		crypto_free_skcipher(ctx->fbk_cipher);
 		ctx->fbk_cipher = NULL;
 	}
-	cn10k_cpt_hw_ctx_clear(ctx->pdev, &ctx->er_ctx);
 }
 
 static int cpt_aead_fallback_init(struct otx2_cpt_aead_ctx *ctx,
@@ -591,65 +572,47 @@ static int cpt_aead_fallback_init(struct otx2_cpt_aead_ctx *ctx,
 
 static int cpt_aead_init(struct crypto_aead *atfm, u8 cipher_type, u8 mac_type)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(atfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(atfm);
 	struct crypto_tfm *tfm = crypto_aead_tfm(atfm);
 	struct crypto_alg *alg = tfm->__crt_alg;
-	struct pci_dev *pdev;
-	int ret, cpu_num;
 
 	ctx->cipher_type = cipher_type;
 	ctx->mac_type = mac_type;
-
-	switch (ctx->mac_type) {
-	case OTX2_CPT_SHA1:
-		ctx->hashalg = crypto_alloc_shash("sha1", 0, 0);
-		break;
-
-	case OTX2_CPT_SHA256:
-		ctx->hashalg = crypto_alloc_shash("sha256", 0, 0);
-		break;
-
-	case OTX2_CPT_SHA384:
-		ctx->hashalg = crypto_alloc_shash("sha384", 0, 0);
-		break;
-
-	case OTX2_CPT_SHA512:
-		ctx->hashalg = crypto_alloc_shash("sha512", 0, 0);
-		break;
-	}
-
-	if (IS_ERR(ctx->hashalg))
-		return PTR_ERR(ctx->hashalg);
-
-	if (ctx->hashalg) {
-		ctx->sdesc = alloc_sdesc(ctx->hashalg);
-		if (!ctx->sdesc) {
-			crypto_free_shash(ctx->hashalg);
-			return -ENOMEM;
-		}
-	}
 
 	/*
 	 * When selected cipher is NULL we use HMAC opcode instead of
 	 * FLEXICRYPTO opcode therefore we don't need to use HASH algorithms
 	 * for calculating ipad and opad
 	 */
-	if (ctx->cipher_type != OTX2_CPT_CIPHER_NULL && ctx->hashalg) {
-		int ss = crypto_shash_statesize(ctx->hashalg);
+	if (ctx->cipher_type != OTX2_CPT_CIPHER_NULL) {
+		switch (ctx->mac_type) {
+		case OTX2_CPT_SHA1:
+			ctx->hashalg = crypto_alloc_shash("sha1", 0,
+							  CRYPTO_ALG_ASYNC);
+			if (IS_ERR(ctx->hashalg))
+				return PTR_ERR(ctx->hashalg);
+			break;
 
-		ctx->ipad = kzalloc(ss, GFP_KERNEL);
-		if (!ctx->ipad) {
-			kfree(ctx->sdesc);
-			crypto_free_shash(ctx->hashalg);
-			return -ENOMEM;
-		}
+		case OTX2_CPT_SHA256:
+			ctx->hashalg = crypto_alloc_shash("sha256", 0,
+							  CRYPTO_ALG_ASYNC);
+			if (IS_ERR(ctx->hashalg))
+				return PTR_ERR(ctx->hashalg);
+			break;
 
-		ctx->opad = kzalloc(ss, GFP_KERNEL);
-		if (!ctx->opad) {
-			kfree(ctx->ipad);
-			kfree(ctx->sdesc);
-			crypto_free_shash(ctx->hashalg);
-			return -ENOMEM;
+		case OTX2_CPT_SHA384:
+			ctx->hashalg = crypto_alloc_shash("sha384", 0,
+							  CRYPTO_ALG_ASYNC);
+			if (IS_ERR(ctx->hashalg))
+				return PTR_ERR(ctx->hashalg);
+			break;
+
+		case OTX2_CPT_SHA512:
+			ctx->hashalg = crypto_alloc_shash("sha512", 0,
+							  CRYPTO_ALG_ASYNC);
+			if (IS_ERR(ctx->hashalg))
+				return PTR_ERR(ctx->hashalg);
+			break;
 		}
 	}
 	switch (ctx->cipher_type) {
@@ -666,16 +629,7 @@ static int cpt_aead_init(struct crypto_aead *atfm, u8 cipher_type, u8 mac_type)
 		ctx->enc_align_len = 1;
 		break;
 	}
-	crypto_aead_set_reqsize_dma(atfm, sizeof(struct otx2_cpt_req_ctx));
-
-	ret = get_se_device(&pdev, &cpu_num);
-	if (ret)
-		return ret;
-
-	ctx->pdev = pdev;
-	ret = cn10k_cpt_hw_ctx_init(pdev, &ctx->er_ctx);
-	if (ret)
-		return ret;
+	crypto_aead_set_reqsize(atfm, sizeof(struct otx2_cpt_req_ctx));
 
 	return cpt_aead_fallback_init(ctx, alg);
 }
@@ -727,24 +681,24 @@ static int otx2_cpt_aead_gcm_aes_init(struct crypto_aead *tfm)
 
 static void otx2_cpt_aead_exit(struct crypto_aead *tfm)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 
 	kfree(ctx->ipad);
 	kfree(ctx->opad);
-	crypto_free_shash(ctx->hashalg);
+	if (ctx->hashalg)
+		crypto_free_shash(ctx->hashalg);
 	kfree(ctx->sdesc);
 
 	if (ctx->fbk_cipher) {
 		crypto_free_aead(ctx->fbk_cipher);
 		ctx->fbk_cipher = NULL;
 	}
-	cn10k_cpt_hw_ctx_clear(ctx->pdev, &ctx->er_ctx);
 }
 
 static int otx2_cpt_aead_gcm_set_authsize(struct crypto_aead *tfm,
 					  unsigned int authsize)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 
 	if (crypto_rfc4106_check_authsize(authsize))
 		return -EINVAL;
@@ -768,7 +722,7 @@ static int otx2_cpt_aead_set_authsize(struct crypto_aead *tfm,
 static int otx2_cpt_aead_null_set_authsize(struct crypto_aead *tfm,
 					   unsigned int authsize)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 
 	ctx->is_trunc_hmac = true;
 	tfm->authsize = authsize;
@@ -805,7 +759,7 @@ static inline void swap_data64(void *buf, u32 len)
 		cpu_to_be64s(src);
 }
 
-static int swap_pad(u8 mac_type, u8 *pad)
+static int copy_pad(u8 mac_type, u8 *out_pad, u8 *in_pad)
 {
 	struct sha512_state *sha512;
 	struct sha256_state *sha256;
@@ -813,19 +767,22 @@ static int swap_pad(u8 mac_type, u8 *pad)
 
 	switch (mac_type) {
 	case OTX2_CPT_SHA1:
-		sha1 = (struct sha1_state *)pad;
+		sha1 = (struct sha1_state *) in_pad;
 		swap_data32(sha1->state, SHA1_DIGEST_SIZE);
+		memcpy(out_pad, &sha1->state, SHA1_DIGEST_SIZE);
 		break;
 
 	case OTX2_CPT_SHA256:
-		sha256 = (struct sha256_state *)pad;
+		sha256 = (struct sha256_state *) in_pad;
 		swap_data32(sha256->state, SHA256_DIGEST_SIZE);
+		memcpy(out_pad, &sha256->state, SHA256_DIGEST_SIZE);
 		break;
 
 	case OTX2_CPT_SHA384:
 	case OTX2_CPT_SHA512:
-		sha512 = (struct sha512_state *)pad;
+		sha512 = (struct sha512_state *) in_pad;
 		swap_data64(sha512->state, SHA512_DIGEST_SIZE);
+		memcpy(out_pad, &sha512->state, SHA512_DIGEST_SIZE);
 		break;
 
 	default:
@@ -835,54 +792,55 @@ static int swap_pad(u8 mac_type, u8 *pad)
 	return 0;
 }
 
-static int aead_hmac_init(struct crypto_aead *cipher,
-			  struct crypto_authenc_keys *keys)
+static int aead_hmac_init(struct crypto_aead *cipher)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(cipher);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(cipher);
+	int state_size = crypto_shash_statesize(ctx->hashalg);
 	int ds = crypto_shash_digestsize(ctx->hashalg);
 	int bs = crypto_shash_blocksize(ctx->hashalg);
-	int authkeylen = keys->authkeylen;
+	int authkeylen = ctx->auth_key_len;
 	u8 *ipad = NULL, *opad = NULL;
-	int icount = 0;
-	int ret;
+	int ret = 0, icount = 0;
+
+	ctx->sdesc = alloc_sdesc(ctx->hashalg);
+	if (!ctx->sdesc)
+		return -ENOMEM;
+
+	ctx->ipad = kzalloc(bs, GFP_KERNEL);
+	if (!ctx->ipad) {
+		ret = -ENOMEM;
+		goto calc_fail;
+	}
+
+	ctx->opad = kzalloc(bs, GFP_KERNEL);
+	if (!ctx->opad) {
+		ret = -ENOMEM;
+		goto calc_fail;
+	}
+
+	ipad = kzalloc(state_size, GFP_KERNEL);
+	if (!ipad) {
+		ret = -ENOMEM;
+		goto calc_fail;
+	}
+
+	opad = kzalloc(state_size, GFP_KERNEL);
+	if (!opad) {
+		ret = -ENOMEM;
+		goto calc_fail;
+	}
 
 	if (authkeylen > bs) {
-		ret = crypto_shash_digest(&ctx->sdesc->shash, keys->authkey,
-					  authkeylen, ctx->key);
+		ret = crypto_shash_digest(&ctx->sdesc->shash, ctx->key,
+					  authkeylen, ipad);
 		if (ret)
 			goto calc_fail;
 
 		authkeylen = ds;
-	} else
-		memcpy(ctx->key, keys->authkey, authkeylen);
-
-	ctx->enc_key_len = keys->enckeylen;
-	ctx->auth_key_len = authkeylen;
-
-	if (ctx->cipher_type == OTX2_CPT_CIPHER_NULL)
-		return keys->enckeylen ? -EINVAL : 0;
-
-	switch (keys->enckeylen) {
-	case AES_KEYSIZE_128:
-		ctx->key_type = OTX2_CPT_AES_128_BIT;
-		break;
-	case AES_KEYSIZE_192:
-		ctx->key_type = OTX2_CPT_AES_192_BIT;
-		break;
-	case AES_KEYSIZE_256:
-		ctx->key_type = OTX2_CPT_AES_256_BIT;
-		break;
-	default:
-		/* Invalid key length */
-		return -EINVAL;
+	} else {
+		memcpy(ipad, ctx->key, authkeylen);
 	}
 
-	memcpy(ctx->key + authkeylen, keys->enckey, keys->enckeylen);
-
-	ipad = ctx->ipad;
-	opad = ctx->opad;
-
-	memcpy(ipad, ctx->key, authkeylen);
 	memset(ipad + authkeylen, 0, bs - authkeylen);
 	memcpy(opad, ipad, bs);
 
@@ -900,7 +858,7 @@ static int aead_hmac_init(struct crypto_aead *cipher,
 	crypto_shash_init(&ctx->sdesc->shash);
 	crypto_shash_update(&ctx->sdesc->shash, ipad, bs);
 	crypto_shash_export(&ctx->sdesc->shash, ipad);
-	ret = swap_pad(ctx->mac_type, ipad);
+	ret = copy_pad(ctx->mac_type, ctx->ipad, ipad);
 	if (ret)
 		goto calc_fail;
 
@@ -908,9 +866,25 @@ static int aead_hmac_init(struct crypto_aead *cipher,
 	crypto_shash_init(&ctx->sdesc->shash);
 	crypto_shash_update(&ctx->sdesc->shash, opad, bs);
 	crypto_shash_export(&ctx->sdesc->shash, opad);
-	ret = swap_pad(ctx->mac_type, opad);
+	ret = copy_pad(ctx->mac_type, ctx->opad, opad);
+	if (ret)
+		goto calc_fail;
+
+	kfree(ipad);
+	kfree(opad);
+
+	return 0;
 
 calc_fail:
+	kfree(ctx->ipad);
+	ctx->ipad = NULL;
+	kfree(ctx->opad);
+	ctx->opad = NULL;
+	kfree(ipad);
+	kfree(opad);
+	kfree(ctx->sdesc);
+	ctx->sdesc = NULL;
+
 	return ret;
 }
 
@@ -918,24 +892,94 @@ static int otx2_cpt_aead_cbc_aes_sha_setkey(struct crypto_aead *cipher,
 					    const unsigned char *key,
 					    unsigned int keylen)
 {
-	struct crypto_authenc_keys authenc_keys;
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(cipher);
+	struct crypto_authenc_key_param *param;
+	int enckeylen = 0, authkeylen = 0;
+	struct rtattr *rta = (void *)key;
 
-	return crypto_authenc_extractkeys(&authenc_keys, key, keylen) ?:
-	       aead_hmac_init(cipher, &authenc_keys);
+	if (!RTA_OK(rta, keylen))
+		return -EINVAL;
+
+	if (rta->rta_type != CRYPTO_AUTHENC_KEYA_PARAM)
+		return -EINVAL;
+
+	if (RTA_PAYLOAD(rta) < sizeof(*param))
+		return -EINVAL;
+
+	param = RTA_DATA(rta);
+	enckeylen = be32_to_cpu(param->enckeylen);
+	key += RTA_ALIGN(rta->rta_len);
+	keylen -= RTA_ALIGN(rta->rta_len);
+	if (keylen < enckeylen)
+		return -EINVAL;
+
+	if (keylen > OTX2_CPT_MAX_KEY_SIZE)
+		return -EINVAL;
+
+	authkeylen = keylen - enckeylen;
+	memcpy(ctx->key, key, keylen);
+
+	switch (enckeylen) {
+	case AES_KEYSIZE_128:
+		ctx->key_type = OTX2_CPT_AES_128_BIT;
+		break;
+	case AES_KEYSIZE_192:
+		ctx->key_type = OTX2_CPT_AES_192_BIT;
+		break;
+	case AES_KEYSIZE_256:
+		ctx->key_type = OTX2_CPT_AES_256_BIT;
+		break;
+	default:
+		/* Invalid key length */
+		return -EINVAL;
+	}
+
+	ctx->enc_key_len = enckeylen;
+	ctx->auth_key_len = authkeylen;
+
+	return aead_hmac_init(cipher);
 }
 
 static int otx2_cpt_aead_ecb_null_sha_setkey(struct crypto_aead *cipher,
 					     const unsigned char *key,
 					     unsigned int keylen)
 {
-	return otx2_cpt_aead_cbc_aes_sha_setkey(cipher, key, keylen);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(cipher);
+	struct crypto_authenc_key_param *param;
+	struct rtattr *rta = (void *)key;
+	int enckeylen = 0;
+
+	if (!RTA_OK(rta, keylen))
+		return -EINVAL;
+
+	if (rta->rta_type != CRYPTO_AUTHENC_KEYA_PARAM)
+		return -EINVAL;
+
+	if (RTA_PAYLOAD(rta) < sizeof(*param))
+		return -EINVAL;
+
+	param = RTA_DATA(rta);
+	enckeylen = be32_to_cpu(param->enckeylen);
+	key += RTA_ALIGN(rta->rta_len);
+	keylen -= RTA_ALIGN(rta->rta_len);
+	if (enckeylen != 0)
+		return -EINVAL;
+
+	if (keylen > OTX2_CPT_MAX_KEY_SIZE)
+		return -EINVAL;
+
+	memcpy(ctx->key, key, keylen);
+	ctx->enc_key_len = enckeylen;
+	ctx->auth_key_len = keylen;
+
+	return 0;
 }
 
 static int otx2_cpt_aead_gcm_aes_setkey(struct crypto_aead *cipher,
 					const unsigned char *key,
 					unsigned int keylen)
 {
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(cipher);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(cipher);
 
 	/*
 	 * For aes gcm we expect to get encryption key (16, 24, 32 bytes)
@@ -968,9 +1012,9 @@ static int otx2_cpt_aead_gcm_aes_setkey(struct crypto_aead *cipher,
 static inline int create_aead_ctx_hdr(struct aead_request *req, u32 enc,
 				      u32 *argcnt)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	struct otx2_cpt_fc_ctx *fctx = &rctx->fctx;
 	int mac_len = crypto_aead_authsize(tfm);
@@ -1059,9 +1103,9 @@ static inline int create_aead_ctx_hdr(struct aead_request *req, u32 enc,
 static inline void create_hmac_ctx_hdr(struct aead_request *req, u32 *argcnt,
 				      u32 enc)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 
 	req_info->ctrl.s.dma_mode = OTX2_CPT_DMA_MODE_SG;
@@ -1083,7 +1127,7 @@ static inline void create_hmac_ctx_hdr(struct aead_request *req, u32 *argcnt,
 
 static inline int create_aead_input_list(struct aead_request *req, u32 enc)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	u32 inputlen =  req->cryptlen + req->assoclen;
 	u32 status, argcnt = 0;
@@ -1100,7 +1144,7 @@ static inline int create_aead_input_list(struct aead_request *req, u32 enc)
 static inline void create_aead_output_list(struct aead_request *req, u32 enc,
 					   u32 mac_len)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct otx2_cpt_req_info *req_info =  &rctx->cpt_req;
 	u32 argcnt = 0, outputlen = 0;
 
@@ -1116,7 +1160,7 @@ static inline void create_aead_output_list(struct aead_request *req, u32 enc,
 static inline void create_aead_null_input_list(struct aead_request *req,
 					       u32 enc, u32 mac_len)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	u32 inputlen, argcnt = 0;
 
@@ -1133,7 +1177,7 @@ static inline void create_aead_null_input_list(struct aead_request *req,
 static inline int create_aead_null_output_list(struct aead_request *req,
 					       u32 enc, u32 mac_len)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct otx2_cpt_req_info *req_info =  &rctx->cpt_req;
 	struct scatterlist *dst;
 	u8 *ptr = NULL;
@@ -1213,9 +1257,9 @@ error_free:
 
 static int aead_do_fallback(struct aead_request *req, bool is_enc)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct crypto_aead *aead = crypto_aead_reqtfm(req);
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(aead);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(aead);
 	int ret;
 
 	if (ctx->fbk_cipher) {
@@ -1237,10 +1281,10 @@ static int aead_do_fallback(struct aead_request *req, bool is_enc)
 
 static int cpt_aead_enc_dec(struct aead_request *req, u8 reg_type, u8 enc)
 {
-	struct otx2_cpt_req_ctx *rctx = aead_request_ctx_dma(req);
+	struct otx2_cpt_req_ctx *rctx = aead_request_ctx(req);
 	struct otx2_cpt_req_info *req_info = &rctx->cpt_req;
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
-	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx_dma(tfm);
+	struct otx2_cpt_aead_ctx *ctx = crypto_aead_ctx(tfm);
 	struct pci_dev *pdev;
 	int status, cpu_num;
 
@@ -1253,9 +1297,6 @@ static int cpt_aead_enc_dec(struct aead_request *req, u8 reg_type, u8 enc)
 	req_info->req_type = reg_type;
 	req_info->is_enc = enc;
 	req_info->is_trunc_hmac = false;
-
-	req_info->req.cptr = ctx->er_ctx.hw_ctx;
-	req_info->req.cptr_dma = ctx->er_ctx.cptr_dma;
 
 	switch (reg_type) {
 	case OTX2_CPT_AEAD_ENC_DEC_REQ:
@@ -1289,8 +1330,7 @@ static int cpt_aead_enc_dec(struct aead_request *req, u8 reg_type, u8 enc)
 	if (status)
 		return status;
 
-	req_info->ctrl.s.grp = otx2_cpt_get_eng_grp_num(pdev,
-							OTX2_CPT_SE_TYPES);
+	req_info->ctrl.s.grp = otx2_cpt_get_kcrypto_eng_grp_num(pdev);
 
 	/*
 	 * We perform an asynchronous send and once
@@ -1418,7 +1458,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha1_cbc_aes",
 		.cra_blocksize = AES_BLOCK_SIZE,
 		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1437,7 +1477,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha256_cbc_aes",
 		.cra_blocksize = AES_BLOCK_SIZE,
 		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1456,7 +1496,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha384_cbc_aes",
 		.cra_blocksize = AES_BLOCK_SIZE,
 		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1475,7 +1515,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha512_cbc_aes",
 		.cra_blocksize = AES_BLOCK_SIZE,
 		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1494,7 +1534,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha1_ecb_null",
 		.cra_blocksize = 1,
 		.cra_flags = CRYPTO_ALG_ASYNC,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1513,7 +1553,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha256_ecb_null",
 		.cra_blocksize = 1,
 		.cra_flags = CRYPTO_ALG_ASYNC,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1532,7 +1572,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha384_ecb_null",
 		.cra_blocksize = 1,
 		.cra_flags = CRYPTO_ALG_ASYNC,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1551,7 +1591,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_hmac_sha512_ecb_null",
 		.cra_blocksize = 1,
 		.cra_flags = CRYPTO_ALG_ASYNC,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1570,7 +1610,7 @@ static struct aead_alg otx2_cpt_aeads[] = { {
 		.cra_driver_name = "cpt_rfc4106_gcm_aes",
 		.cra_blocksize = 1,
 		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK,
-		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx) + CRYPTO_DMA_PADDING,
+		.cra_ctxsize = sizeof(struct otx2_cpt_aead_ctx),
 		.cra_priority = 4001,
 		.cra_alignmask = 0,
 		.cra_module = THIS_MODULE,
@@ -1630,6 +1670,14 @@ static int compare_func(const void *lptr, const void *rptr)
 	return 0;
 }
 
+static void swap_func(void *lptr, void *rptr, int size)
+{
+	struct cpt_device_desc *ldesc = lptr;
+	struct cpt_device_desc *rdesc = rptr;
+
+	swap(*ldesc, *rdesc);
+}
+
 int otx2_cpt_crypto_init(struct pci_dev *pdev, struct module *mod,
 			 int num_queues, int num_devices)
 {
@@ -1659,7 +1707,7 @@ int otx2_cpt_crypto_init(struct pci_dev *pdev, struct module *mod,
 		is_crypto_registered = true;
 	}
 	sort(se_devices.desc, count, sizeof(struct cpt_device_desc),
-	     compare_func, NULL);
+	     compare_func, swap_func);
 
 unlock:
 	mutex_unlock(&mutex);

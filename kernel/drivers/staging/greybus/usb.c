@@ -27,7 +27,7 @@ struct gb_usb_hub_control_request {
 };
 
 struct gb_usb_hub_control_response {
-	DECLARE_FLEX_ARRAY(u8, buf);
+	u8 buf[0];
 };
 
 struct gb_usb_device {
@@ -242,5 +242,4 @@ static struct gbphy_driver usb_driver = {
 };
 
 module_gbphy_driver(usb_driver);
-MODULE_DESCRIPTION("USB host driver for the Greybus 'generic' USB module");
 MODULE_LICENSE("GPL v2");

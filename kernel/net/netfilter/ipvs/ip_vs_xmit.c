@@ -97,7 +97,7 @@ __ip_vs_dst_check(struct ip_vs_dest *dest)
 	if (!dest_dst)
 		return NULL;
 	dst = dest_dst->dst_cache;
-	if (READ_ONCE(dst->obsolete) &&
+	if (dst->obsolete &&
 	    dst->ops->check(dst, dest_dst->dst_cookie) == NULL)
 		return NULL;
 	return dest_dst;
@@ -173,7 +173,7 @@ static inline bool crosses_local_route_boundary(int skb_af, struct sk_buff *skb,
 			(!skb->dev || skb->dev->flags & IFF_LOOPBACK) &&
 			(addr_type & IPV6_ADDR_LOOPBACK);
 		old_rt_is_local = __ip_vs_is_local_route6(
-			dst_rt6_info(skb_dst(skb)));
+			(struct rt6_info *)skb_dst(skb));
 	} else
 #endif
 	{
@@ -311,7 +311,7 @@ __ip_vs_get_out_rt(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 	if (dest) {
 		dest_dst = __ip_vs_dst_check(dest);
 		if (likely(dest_dst))
-			rt = dst_rtable(dest_dst->dst_cache);
+			rt = (struct rtable *) dest_dst->dst_cache;
 		else {
 			dest_dst = ip_vs_dest_dst_alloc();
 			spin_lock_bh(&dest->dst_lock);
@@ -332,7 +332,7 @@ __ip_vs_get_out_rt(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 			spin_unlock_bh(&dest->dst_lock);
 			IP_VS_DBG(10, "new dst %pI4, src %pI4, refcnt=%d\n",
 				  &dest->addr.ip, &dest_dst->dst_saddr.ip,
-				  rcuref_read(&rt->dst.__rcuref));
+				  atomic_read(&rt->dst.__refcnt));
 		}
 		if (ret_saddr)
 			*ret_saddr = dest_dst->dst_saddr.ip;
@@ -379,10 +379,10 @@ __ip_vs_get_out_rt(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 			    skb->ip_summed == CHECKSUM_PARTIAL)
 				mtu -= GUE_PLEN_REMCSUM + GUE_LEN_PRIV;
 		} else if (dest->tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GRE) {
-			IP_TUNNEL_DECLARE_FLAGS(tflags) = { };
+			__be16 tflags = 0;
 
 			if (dest->tun_flags & IP_VS_TUNNEL_ENCAP_FLAG_CSUM)
-				__set_bit(IP_TUNNEL_CSUM_BIT, tflags);
+				tflags |= TUNNEL_CSUM;
 			mtu -= gre_calc_hlen(tflags);
 		}
 		if (mtu < 68) {
@@ -470,7 +470,7 @@ __ip_vs_get_out_rt_v6(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 	if (dest) {
 		dest_dst = __ip_vs_dst_check(dest);
 		if (likely(dest_dst))
-			rt = dst_rt6_info(dest_dst->dst_cache);
+			rt = (struct rt6_info *) dest_dst->dst_cache;
 		else {
 			u32 cookie;
 
@@ -490,13 +490,13 @@ __ip_vs_get_out_rt_v6(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 				ip_vs_dest_dst_free(dest_dst);
 				goto err_unreach;
 			}
-			rt = dst_rt6_info(dst);
+			rt = (struct rt6_info *) dst;
 			cookie = rt6_get_cookie(rt);
 			__ip_vs_dst_set(dest, dest_dst, &rt->dst, cookie);
 			spin_unlock_bh(&dest->dst_lock);
 			IP_VS_DBG(10, "new dst %pI6, src %pI6, refcnt=%d\n",
 				  &dest->addr.in6, &dest_dst->dst_saddr.in6,
-				  rcuref_read(&rt->dst.__rcuref));
+				  atomic_read(&rt->dst.__refcnt));
 		}
 		if (ret_saddr)
 			*ret_saddr = dest_dst->dst_saddr.in6;
@@ -506,7 +506,7 @@ __ip_vs_get_out_rt_v6(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 					      rt_mode);
 		if (!dst)
 			goto err_unreach;
-		rt = dst_rt6_info(dst);
+		rt = (struct rt6_info *) dst;
 	}
 
 	local = __ip_vs_is_local_route6(rt);
@@ -542,10 +542,10 @@ __ip_vs_get_out_rt_v6(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 			    skb->ip_summed == CHECKSUM_PARTIAL)
 				mtu -= GUE_PLEN_REMCSUM + GUE_LEN_PRIV;
 		} else if (dest->tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GRE) {
-			IP_TUNNEL_DECLARE_FLAGS(tflags) = { };
+			__be16 tflags = 0;
 
 			if (dest->tun_flags & IP_VS_TUNNEL_ENCAP_FLAG_CSUM)
-				__set_bit(IP_TUNNEL_CSUM_BIT, tflags);
+				tflags |= TUNNEL_CSUM;
 			mtu -= gre_calc_hlen(tflags);
 		}
 		if (mtu < IPV6_MIN_MTU) {
@@ -695,6 +695,8 @@ ip_vs_bypass_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 {
 	struct iphdr  *iph = ip_hdr(skb);
 
+	EnterFunction(10);
+
 	if (__ip_vs_get_out_rt(cp->ipvs, cp->af, skb, NULL, iph->daddr,
 			       IP_VS_RT_MODE_NON_LOCAL, NULL, ipvsh) < 0)
 		goto tx_error;
@@ -706,10 +708,12 @@ ip_vs_bypass_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	ip_vs_send_or_cont(NFPROTO_IPV4, skb, cp, 0);
 
+	LeaveFunction(10);
 	return NF_STOLEN;
 
  tx_error:
 	kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 
@@ -719,6 +723,8 @@ ip_vs_bypass_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		     struct ip_vs_protocol *pp, struct ip_vs_iphdr *ipvsh)
 {
 	struct ipv6hdr *iph = ipv6_hdr(skb);
+
+	EnterFunction(10);
 
 	if (__ip_vs_get_out_rt_v6(cp->ipvs, cp->af, skb, NULL,
 				  &iph->daddr, NULL,
@@ -730,10 +736,12 @@ ip_vs_bypass_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	ip_vs_send_or_cont(NFPROTO_IPV6, skb, cp, 0);
 
+	LeaveFunction(10);
 	return NF_STOLEN;
 
  tx_error:
 	kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 #endif
@@ -748,6 +756,8 @@ ip_vs_nat_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 {
 	struct rtable *rt;		/* Route to the other host */
 	int local, rc, was_input;
+
+	EnterFunction(10);
 
 	/* check if it is a connection of no-client-port */
 	if (unlikely(cp->flags & IP_VS_CONN_F_NO_CPORT)) {
@@ -818,10 +828,12 @@ ip_vs_nat_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	rc = ip_vs_nat_send_or_cont(NFPROTO_IPV4, skb, cp, local);
 
+	LeaveFunction(10);
 	return rc;
 
   tx_error:
 	kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 
@@ -832,6 +844,8 @@ ip_vs_nat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 {
 	struct rt6_info *rt;		/* Route to the other host */
 	int local, rc;
+
+	EnterFunction(10);
 
 	/* check if it is a connection of no-client-port */
 	if (unlikely(cp->flags & IP_VS_CONN_F_NO_CPORT && !ipvsh->fragoffs)) {
@@ -851,7 +865,7 @@ ip_vs_nat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 				      IP_VS_RT_MODE_RDR);
 	if (local < 0)
 		goto tx_error;
-	rt = dst_rt6_info(skb_dst(skb));
+	rt = (struct rt6_info *) skb_dst(skb);
 	/*
 	 * Avoid duplicate tuple in reply direction for NAT traffic
 	 * to local address when connection is sync-ed
@@ -902,9 +916,11 @@ ip_vs_nat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	rc = ip_vs_nat_send_or_cont(NFPROTO_IPV6, skb, cp, local);
 
+	LeaveFunction(10);
 	return rc;
 
 tx_error:
+	LeaveFunction(10);
 	kfree_skb(skb);
 	return NF_STOLEN;
 }
@@ -1071,11 +1087,11 @@ ipvs_gre_encap(struct net *net, struct sk_buff *skb,
 {
 	__be16 proto = *next_protocol == IPPROTO_IPIP ?
 				htons(ETH_P_IP) : htons(ETH_P_IPV6);
-	IP_TUNNEL_DECLARE_FLAGS(tflags) = { };
+	__be16 tflags = 0;
 	size_t hdrlen;
 
 	if (cp->dest->tun_flags & IP_VS_TUNNEL_ENCAP_FLAG_CSUM)
-		__set_bit(IP_TUNNEL_CSUM_BIT, tflags);
+		tflags |= TUNNEL_CSUM;
 
 	hdrlen = gre_calc_hlen(tflags);
 	gre_build_header(skb, hdrlen, tflags, proto, 0, 0);
@@ -1122,6 +1138,8 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	int tun_type, gso_type;
 	int tun_flags;
 
+	EnterFunction(10);
+
 	local = __ip_vs_get_out_rt(ipvs, cp->af, skb, cp->dest, cp->daddr.ip,
 				   IP_VS_RT_MODE_LOCAL |
 				   IP_VS_RT_MODE_NON_LOCAL |
@@ -1154,11 +1172,11 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 		max_headroom += sizeof(struct udphdr) + gue_hdrlen;
 	} else if (tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GRE) {
-		IP_TUNNEL_DECLARE_FLAGS(tflags) = { };
 		size_t gre_hdrlen;
+		__be16 tflags = 0;
 
 		if (tun_flags & IP_VS_TUNNEL_ENCAP_FLAG_CSUM)
-			__set_bit(IP_TUNNEL_CSUM_BIT, tflags);
+			tflags |= TUNNEL_CSUM;
 		gre_hdrlen = gre_calc_hlen(tflags);
 
 		max_headroom += gre_hdrlen;
@@ -1170,7 +1188,7 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 					 &next_protocol, NULL, &dsfield,
 					 &ttl, dfp);
 	if (IS_ERR(skb))
-		return NF_STOLEN;
+		goto tx_error;
 
 	gso_type = __tun_gso_type_mask(AF_INET, cp->af);
 	if (tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GUE) {
@@ -1239,10 +1257,14 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	else if (ret == NF_DROP)
 		kfree_skb(skb);
 
+	LeaveFunction(10);
+
 	return NF_STOLEN;
 
   tx_error:
-	kfree_skb(skb);
+	if (!IS_ERR(skb))
+		kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 
@@ -1266,6 +1288,8 @@ ip_vs_tunnel_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	int tun_type, gso_type;
 	int tun_flags;
 
+	EnterFunction(10);
+
 	local = __ip_vs_get_out_rt_v6(ipvs, cp->af, skb, cp->dest,
 				      &cp->daddr.in6,
 				      &saddr, ipvsh, 1,
@@ -1277,7 +1301,7 @@ ip_vs_tunnel_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	if (local)
 		return ip_vs_send_or_cont(NFPROTO_IPV6, skb, cp, 1);
 
-	rt = dst_rt6_info(skb_dst(skb));
+	rt = (struct rt6_info *) skb_dst(skb);
 	tdev = rt->dst.dev;
 
 	/*
@@ -1299,11 +1323,11 @@ ip_vs_tunnel_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 		max_headroom += sizeof(struct udphdr) + gue_hdrlen;
 	} else if (tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GRE) {
-		IP_TUNNEL_DECLARE_FLAGS(tflags) = { };
 		size_t gre_hdrlen;
+		__be16 tflags = 0;
 
 		if (tun_flags & IP_VS_TUNNEL_ENCAP_FLAG_CSUM)
-			__set_bit(IP_TUNNEL_CSUM_BIT, tflags);
+			tflags |= TUNNEL_CSUM;
 		gre_hdrlen = gre_calc_hlen(tflags);
 
 		max_headroom += gre_hdrlen;
@@ -1313,7 +1337,7 @@ ip_vs_tunnel_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 					 &next_protocol, &payload_len,
 					 &dsfield, &ttl, NULL);
 	if (IS_ERR(skb))
-		return NF_STOLEN;
+		goto tx_error;
 
 	gso_type = __tun_gso_type_mask(AF_INET6, cp->af);
 	if (tun_type == IP_VS_CONN_F_TUNNEL_TYPE_GUE) {
@@ -1381,10 +1405,14 @@ ip_vs_tunnel_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	else if (ret == NF_DROP)
 		kfree_skb(skb);
 
+	LeaveFunction(10);
+
 	return NF_STOLEN;
 
 tx_error:
-	kfree_skb(skb);
+	if (!IS_ERR(skb))
+		kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 #endif
@@ -1399,6 +1427,8 @@ ip_vs_dr_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	      struct ip_vs_protocol *pp, struct ip_vs_iphdr *ipvsh)
 {
 	int local;
+
+	EnterFunction(10);
 
 	local = __ip_vs_get_out_rt(cp->ipvs, cp->af, skb, cp->dest, cp->daddr.ip,
 				   IP_VS_RT_MODE_LOCAL |
@@ -1416,10 +1446,12 @@ ip_vs_dr_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	ip_vs_send_or_cont(NFPROTO_IPV4, skb, cp, 0);
 
+	LeaveFunction(10);
 	return NF_STOLEN;
 
   tx_error:
 	kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 
@@ -1429,6 +1461,8 @@ ip_vs_dr_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		 struct ip_vs_protocol *pp, struct ip_vs_iphdr *ipvsh)
 {
 	int local;
+
+	EnterFunction(10);
 
 	local = __ip_vs_get_out_rt_v6(cp->ipvs, cp->af, skb, cp->dest,
 				      &cp->daddr.in6,
@@ -1446,10 +1480,12 @@ ip_vs_dr_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 
 	ip_vs_send_or_cont(NFPROTO_IPV6, skb, cp, 0);
 
+	LeaveFunction(10);
 	return NF_STOLEN;
 
 tx_error:
 	kfree_skb(skb);
+	LeaveFunction(10);
 	return NF_STOLEN;
 }
 #endif
@@ -1469,6 +1505,8 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	int local;
 	int rt_mode, was_input;
 
+	EnterFunction(10);
+
 	/* The ICMP packet for VS/TUN, VS/DR and LOCALNODE will be
 	   forwarded directly here, because there is no need to
 	   translate address/port back */
@@ -1479,7 +1517,7 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
 		atomic_inc(&cp->in_pkts);
-		return rc;
+		goto out;
 	}
 
 	/*
@@ -1535,11 +1573,14 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->ignore_df = 1;
 
-	return ip_vs_nat_send_or_cont(NFPROTO_IPV4, skb, cp, local);
+	rc = ip_vs_nat_send_or_cont(NFPROTO_IPV4, skb, cp, local);
+	goto out;
 
   tx_error:
 	kfree_skb(skb);
 	rc = NF_STOLEN;
+  out:
+	LeaveFunction(10);
 	return rc;
 }
 
@@ -1554,6 +1595,8 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	int local;
 	int rt_mode;
 
+	EnterFunction(10);
+
 	/* The ICMP packet for VS/TUN, VS/DR and LOCALNODE will be
 	   forwarded directly here, because there is no need to
 	   translate address/port back */
@@ -1564,7 +1607,7 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
 		atomic_inc(&cp->in_pkts);
-		return rc;
+		goto out;
 	}
 
 	/*
@@ -1579,7 +1622,7 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 				      &cp->daddr.in6, NULL, ipvsh, 0, rt_mode);
 	if (local < 0)
 		goto tx_error;
-	rt = dst_rt6_info(skb_dst(skb));
+	rt = (struct rt6_info *) skb_dst(skb);
 	/*
 	 * Avoid duplicate tuple in reply direction for NAT traffic
 	 * to local address when connection is sync-ed
@@ -1619,11 +1662,14 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->ignore_df = 1;
 
-	return ip_vs_nat_send_or_cont(NFPROTO_IPV6, skb, cp, local);
+	rc = ip_vs_nat_send_or_cont(NFPROTO_IPV6, skb, cp, local);
+	goto out;
 
 tx_error:
 	kfree_skb(skb);
 	rc = NF_STOLEN;
+out:
+	LeaveFunction(10);
 	return rc;
 }
 #endif

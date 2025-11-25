@@ -193,7 +193,7 @@
 #define DME_LocalAFC0ReqTimeOutVal		0xD043
 
 /* PA power modes */
-enum ufs_pa_pwr_mode {
+enum {
 	FAST_MODE	= 1,
 	SLOW_MODE	= 2,
 	FASTAUTO_MODE	= 4,
@@ -205,7 +205,7 @@ enum ufs_pa_pwr_mode {
 #define PWRMODE_RX_OFFSET	4
 
 /* PA TX/RX Frequency Series */
-enum ufs_hs_gear_rate {
+enum {
 	PA_HS_MODE_A	= 1,
 	PA_HS_MODE_B	= 2,
 };
@@ -228,12 +228,6 @@ enum ufs_hs_gear_tag {
 	UFS_HS_G3,		/* HS Gear 3 */
 	UFS_HS_G4,		/* HS Gear 4 */
 	UFS_HS_G5		/* HS Gear 5 */
-};
-
-enum ufs_lanes {
-	UFS_LANE_DONT_CHANGE,	/* Don't change Lane */
-	UFS_LANE_1,		/* Lane 1 (default for reset) */
-	UFS_LANE_2,		/* Lane 2 */
 };
 
 enum ufs_unipro_ver {

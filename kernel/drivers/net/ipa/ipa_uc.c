@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2018-2024 Linaro Ltd.
+ * Copyright (C) 2018-2022 Linaro Ltd.
  */
 
-#include <linux/delay.h>
-#include <linux/io.h>
-#include <linux/pm_runtime.h>
 #include <linux/types.h>
+#include <linux/io.h>
+#include <linux/delay.h>
+#include <linux/pm_runtime.h>
 
 #include "ipa.h"
-#include "ipa_interrupt.h"
-#include "ipa_power.h"
-#include "ipa_reg.h"
 #include "ipa_uc.h"
+#include "ipa_power.h"
 
 /**
  * DOC:  The IPA embedded microcontroller
@@ -126,10 +124,10 @@ static struct ipa_uc_mem_area *ipa_uc_shared(struct ipa *ipa)
 }
 
 /* Microcontroller event IPA interrupt handler */
-static void ipa_uc_event_handler(struct ipa *ipa)
+static void ipa_uc_event_handler(struct ipa *ipa, enum ipa_irq_id irq_id)
 {
 	struct ipa_uc_mem_area *shared = ipa_uc_shared(ipa);
-	struct device *dev = ipa->dev;
+	struct device *dev = &ipa->pdev->dev;
 
 	if (shared->event == IPA_UC_EVENT_ERROR)
 		dev_err(dev, "microcontroller error event\n");
@@ -140,10 +138,10 @@ static void ipa_uc_event_handler(struct ipa *ipa)
 }
 
 /* Microcontroller response IPA interrupt handler */
-static void ipa_uc_response_hdlr(struct ipa *ipa)
+static void ipa_uc_response_hdlr(struct ipa *ipa, enum ipa_irq_id irq_id)
 {
 	struct ipa_uc_mem_area *shared = ipa_uc_shared(ipa);
-	struct device *dev = ipa->dev;
+	struct device *dev = &ipa->pdev->dev;
 
 	/* An INIT_COMPLETED response message is sent to the AP by the
 	 * microcontroller when it is operational.  Other than this, the AP
@@ -172,31 +170,22 @@ static void ipa_uc_response_hdlr(struct ipa *ipa)
 	}
 }
 
-void ipa_uc_interrupt_handler(struct ipa *ipa, enum ipa_irq_id irq_id)
-{
-	/* Silently ignore anything unrecognized */
-	if (irq_id == IPA_IRQ_UC_0)
-		ipa_uc_event_handler(ipa);
-	else if (irq_id == IPA_IRQ_UC_1)
-		ipa_uc_response_hdlr(ipa);
-}
-
 /* Configure the IPA microcontroller subsystem */
 void ipa_uc_config(struct ipa *ipa)
 {
 	ipa->uc_powered = false;
 	ipa->uc_loaded = false;
-	ipa_interrupt_enable(ipa, IPA_IRQ_UC_0);
-	ipa_interrupt_enable(ipa, IPA_IRQ_UC_1);
+	ipa_interrupt_add(ipa->interrupt, IPA_IRQ_UC_0, ipa_uc_event_handler);
+	ipa_interrupt_add(ipa->interrupt, IPA_IRQ_UC_1, ipa_uc_response_hdlr);
 }
 
 /* Inverse of ipa_uc_config() */
 void ipa_uc_deconfig(struct ipa *ipa)
 {
-	struct device *dev = ipa->dev;
+	struct device *dev = &ipa->pdev->dev;
 
-	ipa_interrupt_disable(ipa, IPA_IRQ_UC_1);
-	ipa_interrupt_disable(ipa, IPA_IRQ_UC_0);
+	ipa_interrupt_remove(ipa->interrupt, IPA_IRQ_UC_1);
+	ipa_interrupt_remove(ipa->interrupt, IPA_IRQ_UC_0);
 	if (ipa->uc_loaded)
 		ipa_power_retention(ipa, false);
 
@@ -210,8 +199,8 @@ void ipa_uc_deconfig(struct ipa *ipa)
 /* Take a proxy power reference for the microcontroller */
 void ipa_uc_power(struct ipa *ipa)
 {
-	struct device *dev = ipa->dev;
 	static bool already;
+	struct device *dev;
 	int ret;
 
 	if (already)
@@ -219,6 +208,7 @@ void ipa_uc_power(struct ipa *ipa)
 	already = true;		/* Only do this on first boot */
 
 	/* This power reference dropped in ipa_uc_response_hdlr() above */
+	dev = &ipa->pdev->dev;
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
 		pm_runtime_put_noidle(dev);
@@ -232,7 +222,7 @@ void ipa_uc_power(struct ipa *ipa)
 static void send_uc_command(struct ipa *ipa, u32 command, u32 command_param)
 {
 	struct ipa_uc_mem_area *shared = ipa_uc_shared(ipa);
-	const struct reg *reg;
+	const struct ipa_reg *reg;
 	u32 val;
 
 	/* Fill in the command data */
@@ -244,9 +234,9 @@ static void send_uc_command(struct ipa *ipa, u32 command, u32 command_param)
 
 	/* Use an interrupt to tell the microcontroller the command is ready */
 	reg = ipa_reg(ipa, IPA_IRQ_UC);
-	val = reg_bit(reg, UC_INTR);
+	val = ipa_reg_bit(reg, UC_INTR);
 
-	iowrite32(val, ipa->reg_virt + reg_offset(reg));
+	iowrite32(val, ipa->reg_virt + ipa_reg_offset(reg));
 }
 
 /* Tell the microcontroller the AP is shutting down */

@@ -5,7 +5,6 @@
 
 #include <linux/highmem.h>
 
-#include "display/intel_display.h"
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "i915_scatterlist.h"
@@ -221,8 +220,7 @@ static int fence_update(struct i915_fence_reg *fence,
 				return ret;
 		}
 
-		GEM_BUG_ON(vma->fence_size > i915_vma_size(vma));
-		fence->start = i915_ggtt_offset(vma);
+		fence->start = vma->node.start;
 		fence->size = vma->fence_size;
 		fence->stride = i915_gem_object_get_stride(vma->obj);
 		fence->tiling = i915_gem_object_get_tiling(vma->obj);
@@ -328,7 +326,6 @@ static bool fence_is_active(const struct i915_fence_reg *fence)
 
 static struct i915_fence_reg *fence_find(struct i915_ggtt *ggtt)
 {
-	struct intel_display *display = ggtt->vm.i915->display;
 	struct i915_fence_reg *active = NULL;
 	struct i915_fence_reg *fence, *fn;
 
@@ -354,7 +351,7 @@ static struct i915_fence_reg *fence_find(struct i915_ggtt *ggtt)
 	}
 
 	/* Wait for completion of pending flips which consume fences */
-	if (intel_has_pending_fb_unpin(display))
+	if (intel_has_pending_fb_unpin(ggtt->vm.i915))
 		return ERR_PTR(-EAGAIN);
 
 	return ERR_PTR(-ENOBUFS);
@@ -419,6 +416,7 @@ out_unpin:
  * For an untiled surface, this removes any existing fence.
  *
  * Returns:
+ *
  * 0 on success, negative error code on failure.
  */
 int i915_vma_pin_fence(struct i915_vma *vma)
@@ -750,7 +748,7 @@ static void swizzle_page(struct page *page)
 	char *vaddr;
 	int i;
 
-	vaddr = kmap_local_page(page);
+	vaddr = kmap(page);
 
 	for (i = 0; i < PAGE_SIZE; i += 128) {
 		memcpy(temp, &vaddr[i], 64);
@@ -758,7 +756,7 @@ static void swizzle_page(struct page *page)
 		memcpy(&vaddr[i + 64], temp, 64);
 	}
 
-	kunmap_local(vaddr);
+	kunmap(page);
 }
 
 /**
@@ -819,8 +817,8 @@ i915_gem_object_save_bit_17_swizzle(struct drm_i915_gem_object *obj,
 	if (obj->bit_17 == NULL) {
 		obj->bit_17 = bitmap_zalloc(page_count, GFP_KERNEL);
 		if (obj->bit_17 == NULL) {
-			drm_err(obj->base.dev,
-				"Failed to allocate memory for bit 17 record\n");
+			DRM_ERROR("Failed to allocate memory for bit 17 "
+				  "record\n");
 			return;
 		}
 	}

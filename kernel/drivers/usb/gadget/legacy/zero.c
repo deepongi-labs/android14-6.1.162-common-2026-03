@@ -194,7 +194,7 @@ static void zero_suspend(struct usb_composite_dev *cdev)
 static void zero_resume(struct usb_composite_dev *cdev)
 {
 	DBG(cdev, "%s\n", __func__);
-	timer_delete(&autoresume_timer);
+	del_timer(&autoresume_timer);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -398,7 +398,7 @@ err_put_func_inst_ss:
 
 static int zero_unbind(struct usb_composite_dev *cdev)
 {
-	timer_delete_sync(&autoresume_timer);
+	del_timer_sync(&autoresume_timer);
 	if (!IS_ERR_OR_NULL(func_ss))
 		usb_put_function(func_ss);
 	usb_put_function_instance(func_inst_ss);
@@ -425,5 +425,4 @@ static struct usb_composite_driver zero_driver = {
 module_usb_composite_driver(zero_driver);
 
 MODULE_AUTHOR("David Brownell");
-MODULE_DESCRIPTION("Gadget Zero, for USB development");
 MODULE_LICENSE("GPL");

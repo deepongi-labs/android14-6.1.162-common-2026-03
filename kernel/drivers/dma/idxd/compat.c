@@ -7,6 +7,7 @@
 #include <linux/device/bus.h>
 #include "idxd.h"
 
+extern int device_driver_attach(struct device_driver *drv, struct device *dev);
 extern void device_driver_detach(struct device *dev);
 
 #define DRIVER_ATTR_IGNORE_LOCKDEP(_name, _mode, _show, _store)	\
@@ -15,7 +16,7 @@ extern void device_driver_detach(struct device *dev);
 
 static ssize_t unbind_store(struct device_driver *drv, const char *buf, size_t count)
 {
-	const struct bus_type *bus = drv->bus;
+	struct bus_type *bus = drv->bus;
 	struct device *dev;
 	int rc = -ENODEV;
 
@@ -31,7 +32,7 @@ static DRIVER_ATTR_IGNORE_LOCKDEP(unbind, 0200, NULL, unbind_store);
 
 static ssize_t bind_store(struct device_driver *drv, const char *buf, size_t count)
 {
-	const struct bus_type *bus = drv->bus;
+	struct bus_type *bus = drv->bus;
 	struct device *dev;
 	struct device_driver *alt_drv = NULL;
 	int rc = -ENODEV;
@@ -103,4 +104,4 @@ struct idxd_device_driver dsa_drv = {
 };
 
 module_idxd_driver(dsa_drv);
-MODULE_IMPORT_NS("IDXD");
+MODULE_IMPORT_NS(IDXD);

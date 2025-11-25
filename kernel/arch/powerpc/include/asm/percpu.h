@@ -23,7 +23,7 @@ DECLARE_STATIC_KEY_FALSE(__percpu_first_chunk_is_paged);
 		(static_key_enabled(&__percpu_first_chunk_is_paged.key))
 #else
 #define percpu_first_chunk_is_paged	false
-#endif
+#endif /* CONFIG_PPC64 && CONFIG_SMP */
 
 #include <asm-generic/percpu.h>
 

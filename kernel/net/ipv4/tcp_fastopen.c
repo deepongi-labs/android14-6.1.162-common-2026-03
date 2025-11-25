@@ -50,7 +50,7 @@ void tcp_fastopen_ctx_destroy(struct net *net)
 {
 	struct tcp_fastopen_context *ctxt;
 
-	ctxt = unrcu_pointer(xchg(&net->ipv4.tcp_fastopen_ctx, NULL));
+	ctxt = xchg((__force struct tcp_fastopen_context **)&net->ipv4.tcp_fastopen_ctx, NULL);
 
 	if (ctxt)
 		call_rcu(&ctxt->rcu, tcp_fastopen_ctx_free);
@@ -81,10 +81,9 @@ int tcp_fastopen_reset_cipher(struct net *net, struct sock *sk,
 
 	if (sk) {
 		q = &inet_csk(sk)->icsk_accept_queue.fastopenq;
-		octx = unrcu_pointer(xchg(&q->ctx, RCU_INITIALIZER(ctx)));
+		octx = xchg((__force struct tcp_fastopen_context **)&q->ctx, ctx);
 	} else {
-		octx = unrcu_pointer(xchg(&net->ipv4.tcp_fastopen_ctx,
-					  RCU_INITIALIZER(ctx)));
+		octx = xchg((__force struct tcp_fastopen_context **)&net->ipv4.tcp_fastopen_ctx, ctx);
 	}
 
 	if (octx)
@@ -275,8 +274,8 @@ static struct sock *tcp_fastopen_create_child(struct sock *sk,
 	 * because it's been added to the accept queue directly.
 	 */
 	req->timeout = tcp_timeout_init(child);
-	tcp_reset_xmit_timer(child, ICSK_TIME_RETRANS,
-			     req->timeout, false);
+	inet_csk_reset_xmit_timer(child, ICSK_TIME_RETRANS,
+				  req->timeout, TCP_RTO_MAX);
 
 	refcount_set(&req->rsk_refcnt, 2);
 
@@ -404,7 +403,6 @@ fastopen:
 				}
 				NET_INC_STATS(sock_net(sk),
 					      LINUX_MIB_TCPFASTOPENPASSIVE);
-				tcp_sk(child)->syn_fastopen_child = 1;
 				return child;
 			}
 			NET_INC_STATS(sock_net(sk),
@@ -456,7 +454,7 @@ bool tcp_fastopen_defer_connect(struct sock *sk, int *err)
 
 	if (tp->fastopen_connect && !tp->fastopen_req) {
 		if (tcp_fastopen_cookie_check(sk, &mss, &cookie)) {
-			inet_set_bit(DEFER_CONNECT, sk);
+			inet_sk(sk)->defer_connect = 1;
 			return true;
 		}
 
@@ -472,7 +470,7 @@ bool tcp_fastopen_defer_connect(struct sock *sk, int *err)
 	}
 	return false;
 }
-EXPORT_IPV6_MOD(tcp_fastopen_defer_connect);
+EXPORT_SYMBOL(tcp_fastopen_defer_connect);
 
 /*
  * The following code block is to deal with middle box issues with TFO:
@@ -559,7 +557,6 @@ bool tcp_fastopen_active_should_disable(struct sock *sk)
 void tcp_fastopen_active_disable_ofo_check(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct net_device *dev;
 	struct dst_entry *dst;
 	struct sk_buff *skb;
 
@@ -576,12 +573,10 @@ void tcp_fastopen_active_disable_ofo_check(struct sock *sk)
 		}
 	} else if (tp->syn_fastopen_ch &&
 		   atomic_read(&sock_net(sk)->ipv4.tfo_active_disable_times)) {
-		rcu_read_lock();
-		dst = __sk_dst_get(sk);
-		dev = dst ? dst_dev_rcu(dst) : NULL;
-		if (!(dev && (dev->flags & IFF_LOOPBACK)))
+		dst = sk_dst_get(sk);
+		if (!(dst && dst->dev && (dst->dev->flags & IFF_LOOPBACK)))
 			atomic_set(&sock_net(sk)->ipv4.tfo_active_disable_times, 0);
-		rcu_read_unlock();
+		dst_release(dst);
 	}
 }
 

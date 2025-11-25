@@ -32,8 +32,8 @@
 int memcmp(const void *s1, const void *s2, size_t len)
 {
 	bool diff;
-	asm("repe cmpsb"
-	    : "=@ccnz" (diff), "+D" (s1), "+S" (s2), "+c" (len));
+	asm("repe; cmpsb" CC_SET(nz)
+	    : CC_OUT(nz) (diff), "+D" (s1), "+S" (s2), "+c" (len));
 	return diff;
 }
 
@@ -49,7 +49,7 @@ int strcmp(const char *str1, const char *str2)
 {
 	const unsigned char *s1 = (const unsigned char *)str1;
 	const unsigned char *s2 = (const unsigned char *)str2;
-	int delta;
+	int delta = 0;
 
 	while (*s1 || *s2) {
 		delta = *s1 - *s2;
@@ -86,6 +86,14 @@ size_t strnlen(const char *s, size_t maxlen)
 	}
 
 	return (es - s);
+}
+
+unsigned int atou(const char *s)
+{
+	unsigned int i = 0;
+	while (isdigit(*s))
+		i = i * 10 + (*s++ - '0');
+	return i;
 }
 
 /* Works only for digits and letters, but small and fast */
@@ -342,7 +350,7 @@ static int _kstrtoul(const char *s, unsigned int base, unsigned long *res)
 }
 
 /**
- * boot_kstrtoul - convert a string to an unsigned long
+ * kstrtoul - convert a string to an unsigned long
  * @s: The start of the string. The string must be null-terminated, and may also
  *  include a single newline before its terminating null. The first character
  *  may also be a plus sign, but not a minus sign.

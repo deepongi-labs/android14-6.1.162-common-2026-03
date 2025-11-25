@@ -22,10 +22,11 @@
 
 #include <linux/debugfs.h>
 #include <linux/scatterlist.h>
+#include <linux/crypto.h>
 #include <crypto/aes.h>
+#include <crypto/algapi.h>
 #include <crypto/hash.h>
 #include <crypto/kpp.h>
-#include <crypto/utils.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -55,9 +56,7 @@
 /* Keys which are not distributed with Secure Connections */
 #define SMP_SC_NO_DIST (SMP_DIST_ENC_KEY | SMP_DIST_LINK_KEY)
 
-#define SMP_TIMEOUT	secs_to_jiffies(30)
-
-#define ID_ADDR_TIMEOUT	msecs_to_jiffies(200)
+#define SMP_TIMEOUT	msecs_to_jiffies(30000)
 
 #define AUTH_REQ_MASK(dev)	(hci_dev_test_flag(dev, HCI_SC_ENABLED) ? \
 				 0x3f : 0x07)
@@ -608,7 +607,7 @@ static void smp_send_cmd(struct l2cap_conn *conn, u8 code, u16 len, void *data)
 
 	iov_iter_kvec(&msg.msg_iter, ITER_SOURCE, iv, 2, 1 + len);
 
-	l2cap_chan_send(chan, &msg, 1 + len, NULL);
+	l2cap_chan_send(chan, &msg, 1 + len);
 
 	if (!chan->data)
 		return;
@@ -1069,12 +1068,7 @@ static void smp_notify_keys(struct l2cap_conn *conn)
 		if (hcon->type == LE_LINK) {
 			bacpy(&hcon->dst, &smp->remote_irk->bdaddr);
 			hcon->dst_type = smp->remote_irk->addr_type;
-			/* Use a short delay to make sure the new address is
-			 * propagated _before_ the channels.
-			 */
-			queue_delayed_work(hdev->workqueue,
-					   &conn->id_addr_timer,
-					   ID_ADDR_TIMEOUT);
+			queue_work(hdev->workqueue, &conn->id_addr_update_work);
 		}
 	}
 
@@ -1379,7 +1373,7 @@ static void smp_timeout(struct work_struct *work)
 
 	bt_dev_dbg(conn->hcon->hdev, "conn %p", conn);
 
-	hci_disconnect(conn->hcon, HCI_ERROR_AUTH_FAILURE);
+	hci_disconnect(conn->hcon, HCI_ERROR_REMOTE_USER_TERM);
 }
 
 static struct smp_chan *smp_chan_create(struct l2cap_conn *conn)
@@ -2977,25 +2971,8 @@ static int smp_sig_channel(struct l2cap_chan *chan, struct sk_buff *skb)
 	if (code > SMP_CMD_MAX)
 		goto drop;
 
-	if (smp && !test_and_clear_bit(code, &smp->allow_cmd)) {
-		/* If there is a context and the command is not allowed consider
-		 * it a failure so the session is cleanup properly.
-		 */
-		switch (code) {
-		case SMP_CMD_IDENT_INFO:
-		case SMP_CMD_IDENT_ADDR_INFO:
-		case SMP_CMD_SIGN_INFO:
-			/* 3.6.1. Key distribution and generation
-			 *
-			 * A device may reject a distributed key by sending the
-			 * Pairing Failed command with the reason set to
-			 * "Key Rejected".
-			 */
-			smp_failure(conn, SMP_KEY_REJECTED);
-			break;
-		}
+	if (smp && !test_and_clear_bit(code, &smp->allow_cmd))
 		goto drop;
-	}
 
 	/* If we don't have a context the only allowed commands are
 	 * pairing request and security request.
@@ -3189,7 +3166,7 @@ static void smp_ready_cb(struct l2cap_chan *chan)
 	/* No need to call l2cap_chan_hold() here since we already own
 	 * the reference taken in smp_new_conn_cb(). This is just the
 	 * first time that we tie it to a specific pointer. The code in
-	 * l2cap_core.c ensures that there's no risk this function won't
+	 * l2cap_core.c ensures that there's no risk this function wont
 	 * get called if smp_new_conn_cb was previously called.
 	 */
 	conn->smp = chan;

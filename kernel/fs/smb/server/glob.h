@@ -12,6 +12,8 @@
 #include "unicode.h"
 #include "vfs_cache.h"
 
+#define KSMBD_VERSION	"3.4.2"
+
 extern int ksmbd_debug_types;
 
 #define KSMBD_DEBUG_SMB		BIT(0)
@@ -43,7 +45,5 @@ extern int ksmbd_debug_types;
 	} while (0)
 
 #define UNICODE_LEN(x)		((x) * 2)
-
-#define KSMBD_DEFAULT_GFP	(GFP_KERNEL | __GFP_RETRY_MAYFAIL)
 
 #endif /* __KSMBD_GLOB_H */

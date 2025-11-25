@@ -156,7 +156,7 @@ static struct pci_driver sil_pci_driver = {
 #endif
 };
 
-static const struct scsi_host_template sil_sht = {
+static struct scsi_host_template sil_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	/** These controllers support Large Block Transfer which allows
 	    transfer chunks up to 2GB and which cross 64KB boundaries,
@@ -351,7 +351,7 @@ static int sil_set_mode(struct ata_link *link, struct ata_device **r_failed)
 	u32 tmp, dev_mode[2] = { };
 	int rc;
 
-	rc = ata_set_mode(link, r_failed);
+	rc = ata_do_set_mode(link, r_failed);
 	if (rc)
 		return rc;
 
@@ -616,7 +616,7 @@ static void sil_dev_config(struct ata_device *dev)
 	unsigned char model_num[ATA_ID_PROD_LEN + 1];
 
 	/* This controller doesn't support trim */
-	dev->quirks |= ATA_QUIRK_NOTRIM;
+	dev->horkage |= ATA_HORKAGE_NOTRIM;
 
 	ata_id_c_string(dev->id, model_num, ATA_ID_PROD, sizeof(model_num));
 

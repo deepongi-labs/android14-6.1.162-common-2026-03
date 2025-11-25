@@ -29,7 +29,6 @@ enum bpf_link_type___local {
 };
 
 extern const void bpf_link_fops __ksym;
-extern const void bpf_link_fops_poll __ksym __weak;
 extern const void bpf_map_fops __ksym;
 extern const void bpf_prog_fops __ksym;
 extern const void btf_fops __ksym;
@@ -85,11 +84,7 @@ int iter(struct bpf_iter__task_file *ctx)
 		fops = &btf_fops;
 		break;
 	case BPF_OBJ_LINK:
-		if (&bpf_link_fops_poll &&
-		    file->f_op == &bpf_link_fops_poll)
-			fops = &bpf_link_fops_poll;
-		else
-			fops = &bpf_link_fops;
+		fops = &bpf_link_fops;
 		break;
 	default:
 		return 0;

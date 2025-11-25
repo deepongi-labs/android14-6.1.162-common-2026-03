@@ -623,10 +623,16 @@ static int receive(struct net_device *dev, int cnt)
 
 /* --------------------------------------------------------------------- */
 
+#if defined(__i386__) && !defined(CONFIG_UML)
+#include <asm/msr.h>
 #define GETTICK(x)						\
 ({								\
-	x = (unsigned int)get_cycles();				\
+	if (boot_cpu_has(X86_FEATURE_TSC))			\
+		x = (unsigned int)rdtsc();			\
 })
+#else /* __i386__  && !CONFIG_UML */
+#define GETTICK(x)
+#endif /* __i386__  && !CONFIG_UML */
 
 static void epp_bh(struct work_struct *work)
 {
@@ -1074,7 +1080,7 @@ static int baycom_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
 		return 0;
 
 	case HDLCDRVCTL_DRIVERNAME:
-		strscpy_pad(hi.data.drivername, "baycom_epp");
+		strncpy(hi.data.drivername, "baycom_epp", sizeof(hi.data.drivername));
 		break;
 		
 	case HDLCDRVCTL_GETMODE:
@@ -1091,7 +1097,8 @@ static int baycom_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
 		return baycom_setmode(bc, hi.data.modename);
 
 	case HDLCDRVCTL_MODELIST:
-		strscpy_pad(hi.data.modename, "intclk,extclk,intmodem,extmodem,divider=x");
+		strncpy(hi.data.modename, "intclk,extclk,intmodem,extmodem,divider=x",
+			sizeof(hi.data.modename));
 		break;
 
 	case HDLCDRVCTL_MODEMPARMASK:
@@ -1192,6 +1199,7 @@ static int baycom_epp_par_probe(struct pardevice *par_dev)
 static struct parport_driver baycom_epp_par_driver = {
 	.name = "bce",
 	.probe = baycom_epp_par_probe,
+	.devmodel = true,
 };
 
 static void __init baycom_epp_dev_setup(struct net_device *dev)

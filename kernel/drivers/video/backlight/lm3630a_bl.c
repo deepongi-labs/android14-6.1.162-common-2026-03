@@ -180,7 +180,7 @@ static int lm3630a_pwm_ctrl(struct lm3630a_chip *pchip, int br, int br_max)
 
 	pchip->pwmd_state.enabled = pchip->pwmd_state.duty_cycle ? true : false;
 
-	return pwm_apply_might_sleep(pchip->pwmd, &pchip->pwmd_state);
+	return pwm_apply_state(pchip->pwmd, &pchip->pwmd_state);
 }
 
 /* update and get brightness */
@@ -189,11 +189,10 @@ static int lm3630a_bank_a_update_status(struct backlight_device *bl)
 	int ret;
 	struct lm3630a_chip *pchip = bl_get_data(bl);
 	enum lm3630a_pwm_ctrl pwm_ctrl = pchip->pdata->pwm_ctrl;
-	int brightness = backlight_get_brightness(bl);
 
 	/* pwm control */
 	if ((pwm_ctrl & LM3630A_PWM_BANK_A) != 0)
-		return lm3630a_pwm_ctrl(pchip, brightness,
+		return lm3630a_pwm_ctrl(pchip, bl->props.brightness,
 					bl->props.max_brightness);
 
 	/* disable sleep */
@@ -202,10 +201,8 @@ static int lm3630a_bank_a_update_status(struct backlight_device *bl)
 		goto out_i2c_err;
 	usleep_range(1000, 2000);
 	/* minimum brightness is 0x04 */
-	ret = lm3630a_write(pchip, REG_BRT_A, brightness);
-
-	if (brightness < 0x4)
-		/* turn the string off  */
+	ret = lm3630a_write(pchip, REG_BRT_A, bl->props.brightness);
+	if (bl->props.brightness < 0x4)
 		ret |= lm3630a_update(pchip, REG_CTRL, LM3630A_LEDA_ENABLE, 0);
 	else
 		ret |= lm3630a_update(pchip, REG_CTRL,
@@ -264,11 +261,10 @@ static int lm3630a_bank_b_update_status(struct backlight_device *bl)
 	int ret;
 	struct lm3630a_chip *pchip = bl_get_data(bl);
 	enum lm3630a_pwm_ctrl pwm_ctrl = pchip->pdata->pwm_ctrl;
-	int brightness = backlight_get_brightness(bl);
 
 	/* pwm control */
 	if ((pwm_ctrl & LM3630A_PWM_BANK_B) != 0)
-		return lm3630a_pwm_ctrl(pchip, brightness,
+		return lm3630a_pwm_ctrl(pchip, bl->props.brightness,
 					bl->props.max_brightness);
 
 	/* disable sleep */
@@ -277,10 +273,8 @@ static int lm3630a_bank_b_update_status(struct backlight_device *bl)
 		goto out_i2c_err;
 	usleep_range(1000, 2000);
 	/* minimum brightness is 0x04 */
-	ret = lm3630a_write(pchip, REG_BRT_B, brightness);
-
-	if (brightness < 0x4)
-		/* turn the string off  */
+	ret = lm3630a_write(pchip, REG_BRT_B, bl->props.brightness);
+	if (bl->props.brightness < 0x4)
 		ret |= lm3630a_update(pchip, REG_CTRL, LM3630A_LEDB_ENABLE, 0);
 	else
 		ret |= lm3630a_update(pchip, REG_CTRL,
@@ -492,7 +486,8 @@ static int lm3630a_parse_node(struct lm3630a_chip *pchip,
 	return ret;
 }
 
-static int lm3630a_probe(struct i2c_client *client)
+static int lm3630a_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct lm3630a_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct lm3630a_chip *pchip;
@@ -540,8 +535,10 @@ static int lm3630a_probe(struct i2c_client *client)
 
 	pchip->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable",
 						GPIOD_OUT_HIGH);
-	if (IS_ERR(pchip->enable_gpio))
-		return PTR_ERR(pchip->enable_gpio);
+	if (IS_ERR(pchip->enable_gpio)) {
+		rval = PTR_ERR(pchip->enable_gpio);
+		return rval;
+	}
 
 	/* chip initialize */
 	rval = lm3630a_chip_init(pchip);
@@ -558,9 +555,10 @@ static int lm3630a_probe(struct i2c_client *client)
 	/* pwm */
 	if (pdata->pwm_ctrl != LM3630A_PWM_DISABLE) {
 		pchip->pwmd = devm_pwm_get(pchip->dev, "lm3630a-pwm");
-		if (IS_ERR(pchip->pwmd))
-			return dev_err_probe(&client->dev, PTR_ERR(pchip->pwmd),
-					     "fail : get pwm device\n");
+		if (IS_ERR(pchip->pwmd)) {
+			dev_err(&client->dev, "fail : get pwm device\n");
+			return PTR_ERR(pchip->pwmd);
+		}
 
 		pwm_init_state(pchip->pwmd, &pchip->pwmd_state);
 	}
@@ -596,7 +594,7 @@ static void lm3630a_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id lm3630a_id[] = {
-	{ LM3630A_NAME },
+	{LM3630A_NAME, 0},
 	{}
 };
 

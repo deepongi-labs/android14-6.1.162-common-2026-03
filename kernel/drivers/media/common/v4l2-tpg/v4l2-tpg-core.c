@@ -904,7 +904,7 @@ static void precalculate_color(struct tpg_data *tpg, int k)
 	} else if (tpg->pattern == TPG_PAT_NOISE) {
 		r = g = b = get_random_u8();
 	} else if (k == TPG_COLOR_RANDOM) {
-		r = g = b = tpg->qual_offset + get_random_u32_below(196);
+		r = g = b = tpg->qual_offset + prandom_u32_max(196);
 	} else if (k >= TPG_COLOR_RAMP) {
 		r = g = b = k - TPG_COLOR_RAMP;
 	}
@@ -2249,10 +2249,10 @@ void tpg_log_status(struct tpg_data *tpg)
 		tpg->src_width, tpg->src_height,
 		tpg_color_enc_str(tpg->color_enc));
 	pr_info("tpg field: %u\n", tpg->field);
-	pr_info("tpg crop: (%d,%d)/%ux%u\n", tpg->crop.left, tpg->crop.top,
-		tpg->crop.width, tpg->crop.height);
-	pr_info("tpg compose: (%d,%d)/%ux%u\n", tpg->compose.left, tpg->compose.top,
-		tpg->compose.width, tpg->compose.height);
+	pr_info("tpg crop: %ux%u@%dx%d\n", tpg->crop.width, tpg->crop.height,
+			tpg->crop.left, tpg->crop.top);
+	pr_info("tpg compose: %ux%u@%dx%d\n", tpg->compose.width, tpg->compose.height,
+			tpg->compose.left, tpg->compose.top);
 	pr_info("tpg colorspace: %d\n", tpg->colorspace);
 	pr_info("tpg transfer function: %d/%d\n", tpg->xfer_func, tpg->real_xfer_func);
 	if (tpg->color_enc == TGP_COLOR_ENC_HSV)
@@ -2321,7 +2321,7 @@ static void tpg_fill_params_extras(const struct tpg_data *tpg,
 		params->wss_width = tpg->crop.width;
 	params->wss_width = tpg_hscale_div(tpg, p, params->wss_width);
 	params->wss_random_offset =
-		params->twopixsize * get_random_u32_below(tpg->src_width / 2);
+		params->twopixsize * prandom_u32_max(tpg->src_width / 2);
 
 	if (tpg->crop.left < tpg->border.left) {
 		left_pillar_width = tpg->border.left - tpg->crop.left;
@@ -2530,9 +2530,9 @@ static void tpg_fill_plane_pattern(const struct tpg_data *tpg,
 		linestart_newer = tpg->black_line[p];
 	} else if (tpg->pattern == TPG_PAT_NOISE || tpg->qual == TPG_QUAL_NOISE) {
 		linestart_older = tpg->random_line[p] +
-				  twopixsize * get_random_u32_below(tpg->src_width / 2);
+				  twopixsize * prandom_u32_max(tpg->src_width / 2);
 		linestart_newer = tpg->random_line[p] +
-				  twopixsize * get_random_u32_below(tpg->src_width / 2);
+				  twopixsize * prandom_u32_max(tpg->src_width / 2);
 	} else {
 		unsigned frame_line_old =
 			(frame_line + mv_vert_old) % tpg->src_height;

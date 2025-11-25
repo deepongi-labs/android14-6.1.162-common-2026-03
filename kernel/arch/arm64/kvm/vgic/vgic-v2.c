@@ -72,7 +72,7 @@ void vgic_v2_fold_lr_state(struct kvm_vcpu *vcpu)
 			kvm_notify_acked_irq(vcpu->kvm, 0,
 					     intid - VGIC_NR_PRIVATE_IRQS);
 
-		irq = vgic_get_vcpu_irq(vcpu, intid);
+		irq = vgic_get_irq(vcpu->kvm, vcpu, intid);
 
 		raw_spin_lock(&irq->irq_lock);
 
@@ -464,7 +464,7 @@ void vgic_v2_load(struct kvm_vcpu *vcpu)
 		       kvm_vgic_global_state.vctrl_base + GICH_APR);
 }
 
-void vgic_v2_put(struct kvm_vcpu *vcpu)
+void vgic_v2_put(struct kvm_vcpu *vcpu, bool blocking)
 {
 	struct vgic_v2_cpu_if *cpu_if = &vcpu->arch.vgic_cpu.vgic_v2;
 

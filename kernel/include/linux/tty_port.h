@@ -7,6 +7,7 @@
 #include <linux/mutex.h>
 #include <linux/tty_buffer.h>
 #include <linux/wait.h>
+#include <linux/android_kabi.h>
 
 struct attribute_group;
 struct tty_driver;
@@ -15,8 +16,8 @@ struct tty_struct;
 
 /**
  * struct tty_port_operations -- operations on tty_port
- * @carrier_raised: return true if the carrier is raised on @port
- * @dtr_rts: raise the DTR line if @active is true, otherwise lower DTR
+ * @carrier_raised: return 1 if the carrier is raised on @port
+ * @dtr_rts: raise the DTR line if @raise is nonzero, otherwise lower DTR
  * @shutdown: called when the last close completes or a hangup finishes IFF the
  *	port was initialized. Do not use to free resources. Turn off the device
  *	only. Called under the port mutex to serialize against @activate and
@@ -31,18 +32,19 @@ struct tty_struct;
  *	the port itself.
  */
 struct tty_port_operations {
-	bool (*carrier_raised)(struct tty_port *port);
-	void (*dtr_rts)(struct tty_port *port, bool active);
+	int (*carrier_raised)(struct tty_port *port);
+	void (*dtr_rts)(struct tty_port *port, int raise);
 	void (*shutdown)(struct tty_port *port);
 	int (*activate)(struct tty_port *port, struct tty_struct *tty);
 	void (*destruct)(struct tty_port *port);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct tty_port_client_operations {
-	size_t (*receive_buf)(struct tty_port *port, const u8 *cp, const u8 *fp,
-			      size_t count);
-	void (*lookahead_buf)(struct tty_port *port, const u8 *cp,
-			      const u8 *fp, size_t count);
+	int (*receive_buf)(struct tty_port *port, const unsigned char *, const unsigned char *, size_t);
+	void (*lookahead_buf)(struct tty_port *port, const unsigned char *cp,
+			      const unsigned char *fp, unsigned int count);
 	void (*write_wakeup)(struct tty_port *port);
 };
 
@@ -114,13 +116,15 @@ struct tty_port {
 	unsigned char		console:1;
 	struct mutex		mutex;
 	struct mutex		buf_mutex;
-	u8			*xmit_buf;
-	DECLARE_KFIFO_PTR(xmit_fifo, u8);
+	unsigned char		*xmit_buf;
+	DECLARE_KFIFO_PTR(xmit_fifo, unsigned char);
 	unsigned int		close_delay;
 	unsigned int		closing_wait;
 	int			drain_delay;
 	struct kref		kref;
 	void			*client_data;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /* tty_port::iflags bits -- use atomic bit ops */
@@ -147,9 +151,12 @@ struct device *tty_port_register_device_attr(struct tty_port *port,
 		struct tty_driver *driver, unsigned index,
 		struct device *device, void *drvdata,
 		const struct attribute_group **attr_grp);
+struct device *tty_port_register_device_serdev(struct tty_port *port,
+		struct tty_driver *driver, unsigned index,
+		struct device *device);
 struct device *tty_port_register_device_attr_serdev(struct tty_port *port,
 		struct tty_driver *driver, unsigned index,
-		struct device *host, struct device *parent, void *drvdata,
+		struct device *device, void *drvdata,
 		const struct attribute_group **attr_grp);
 void tty_port_unregister_device(struct tty_port *port,
 		struct tty_driver *driver, unsigned index);
@@ -228,11 +235,11 @@ static inline void tty_port_set_kopened(struct tty_port *port, bool val)
 
 struct tty_struct *tty_port_tty_get(struct tty_port *port);
 void tty_port_tty_set(struct tty_port *port, struct tty_struct *tty);
-bool tty_port_carrier_raised(struct tty_port *port);
+int tty_port_carrier_raised(struct tty_port *port);
 void tty_port_raise_dtr_rts(struct tty_port *port);
 void tty_port_lower_dtr_rts(struct tty_port *port);
 void tty_port_hangup(struct tty_port *port);
-void __tty_port_tty_hangup(struct tty_port *port, bool check_clocal, bool async);
+void tty_port_tty_hangup(struct tty_port *port, bool check_clocal);
 void tty_port_tty_wakeup(struct tty_port *port);
 int tty_port_block_til_ready(struct tty_port *port, struct tty_struct *tty,
 		struct file *filp);
@@ -250,38 +257,5 @@ static inline int tty_port_users(struct tty_port *port)
 {
 	return port->count + port->blocked_open;
 }
-
-/**
- * tty_port_tty_hangup - helper to hang up a tty asynchronously
- * @port: tty port
- * @check_clocal: hang only ttys with %CLOCAL unset?
- */
-static inline void tty_port_tty_hangup(struct tty_port *port, bool check_clocal)
-{
-	__tty_port_tty_hangup(port, check_clocal, true);
-}
-
-/**
- * tty_port_tty_vhangup - helper to hang up a tty synchronously
- * @port: tty port
- */
-static inline void tty_port_tty_vhangup(struct tty_port *port)
-{
-	__tty_port_tty_hangup(port, false, false);
-}
-
-#ifdef CONFIG_TTY
-void tty_kref_put(struct tty_struct *tty);
-__DEFINE_CLASS_IS_CONDITIONAL(tty_port_tty, true);
-__DEFINE_UNLOCK_GUARD(tty_port_tty, struct tty_struct, tty_kref_put(_T->lock));
-static inline class_tty_port_tty_t class_tty_port_tty_constructor(struct tty_port *tport)
-{
-	class_tty_port_tty_t _t = {
-		.lock = tty_port_tty_get(tport),
-	};
-	return _t;
-}
-#define scoped_tty()	((struct tty_struct *)(__guard_ptr(tty_port_tty)(&scope)))
-#endif
 
 #endif

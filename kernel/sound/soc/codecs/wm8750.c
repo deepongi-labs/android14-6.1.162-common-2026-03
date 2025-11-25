@@ -15,10 +15,10 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
-#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
 #include <linux/slab.h>
+#include <linux/of_device.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -522,10 +522,10 @@ static int wm8750_set_dai_fmt(struct snd_soc_dai *codec_dai,
 
 	/* set master/slave audio interface */
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	case SND_SOC_DAIFMT_CBM_CFM:
 		iface = 0x0040;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
 	default:
 		return -EINVAL;
@@ -735,7 +735,7 @@ static const struct regmap_config wm8750_regmap = {
 
 	.reg_defaults = wm8750_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(wm8750_reg_defaults),
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 
 #if defined(CONFIG_SPI_MASTER)
@@ -802,8 +802,8 @@ static int wm8750_i2c_probe(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id wm8750_i2c_id[] = {
-	{ "wm8750" },
-	{ "wm8987" },
+	{ "wm8750", 0 },
+	{ "wm8987", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wm8750_i2c_id);
@@ -813,7 +813,7 @@ static struct i2c_driver wm8750_i2c_driver = {
 		.name = "wm8750",
 		.of_match_table = wm8750_of_match,
 	},
-	.probe = wm8750_i2c_probe,
+	.probe_new = wm8750_i2c_probe,
 	.id_table = wm8750_i2c_id,
 };
 #endif

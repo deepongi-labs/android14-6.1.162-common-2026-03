@@ -42,7 +42,6 @@
 #include <linux/idr.h>
 #include <linux/skbuff.h>
 #include <linux/notifier.h>
-#include <linux/xarray.h>
 
 struct user_namespace;
 struct proc_dir_entry;
@@ -67,8 +66,10 @@ struct net {
 						 */
 	spinlock_t		rules_mod_lock;
 
+	atomic_t		dev_unreg_count;
+
 	unsigned int		dev_base_seq;	/* protected by rtnl_mutex */
-	u32			ifindex;
+	int			ifindex;
 
 	spinlock_t		nsid_lock;
 	atomic_t		fnhe_genid;
@@ -80,11 +81,7 @@ struct net {
 						 * or to unregister pernet ops
 						 * (pernet_ops_rwsem write locked).
 						 */
-	struct llist_node	defer_free_list;
 	struct llist_node	cleanup_list;	/* namespaces on death row */
-
-	struct list_head ptype_all;
-	struct list_head ptype_specific;
 
 #ifdef CONFIG_KEYS
 	struct key_tag		*key_domain;	/* Key domain of operation tag */
@@ -95,9 +92,7 @@ struct net {
 
 	struct ns_common	ns;
 	struct ref_tracker_dir  refcnt_tracker;
-	struct ref_tracker_dir  notrefcnt_tracker; /* tracker for objects not
-						    * refcounted against netns
-						    */
+
 	struct list_head 	dev_base_head;
 	struct proc_dir_entry 	*proc_net;
 	struct proc_dir_entry 	*proc_net_stat;
@@ -113,7 +108,6 @@ struct net {
 
 	struct hlist_head 	*dev_name_head;
 	struct hlist_head	*dev_index_head;
-	struct xarray		dev_by_index;
 	struct raw_notifier_head	netdev_chain;
 
 	/* Note that @hash_mix can be read millions times per second,
@@ -192,11 +186,37 @@ struct net {
 #if IS_ENABLED(CONFIG_SMC)
 	struct netns_smc	smc;
 #endif
-#ifdef CONFIG_DEBUG_NET_SMALL_RTNL
-	/* Move to a better place when the config guard is removed. */
-	struct mutex		rtnl_mutex;
-#endif
 } __randomize_layout;
+
+/*
+ * To work around a KMI issue, hooks_bridge[] could not be
+ * added to struct netns_nf. Since the only use of netns_nf
+ * is embedded in struct net, struct ext_net is added to
+ * contain struct net plus the new field. Users of the new
+ * field must use get_nf_hooks_bridge() to access the field.
+ */
+struct ext_net {
+	struct net net;
+#ifdef CONFIG_NETFILTER_FAMILY_BRIDGE
+	struct nf_hook_entries __rcu *hooks_bridge[NF_INET_NUMHOOKS];
+#endif
+	ANDROID_VENDOR_DATA(1);
+};
+
+#ifdef CONFIG_NETFILTER_FAMILY_BRIDGE
+extern struct net init_net;
+extern struct nf_hook_entries **init_nf_hooks_bridgep;
+
+static inline struct nf_hook_entries __rcu **get_nf_hooks_bridge(const struct net *net)
+{
+	struct ext_net *ext_net;
+
+	if (net == &init_net)
+		return init_nf_hooks_bridgep;
+	ext_net = container_of(net, struct ext_net, net);
+	return ext_net->hooks_bridge;
+}
+#endif
 
 #include <linux/seq_file_net.h>
 
@@ -204,7 +224,7 @@ struct net {
 extern struct net init_net;
 
 #ifdef CONFIG_NET_NS
-struct net *copy_net_ns(u64 flags, struct user_namespace *user_ns,
+struct net *copy_net_ns(unsigned long flags, struct user_namespace *user_ns,
 			struct net *old_net);
 
 void net_ns_get_ownership(const struct net *net, kuid_t *uid, kgid_t *gid);
@@ -213,12 +233,10 @@ void net_ns_barrier(void);
 
 struct ns_common *get_net_ns(struct ns_common *ns);
 struct net *get_net_ns_by_fd(int fd);
-extern struct task_struct *cleanup_net_task;
-
 #else /* CONFIG_NET_NS */
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
-static inline struct net *copy_net_ns(u64 flags,
+static inline struct net *copy_net_ns(unsigned long flags,
 	struct user_namespace *user_ns, struct net *old_net)
 {
 	if (flags & CLONE_NEWNET)
@@ -262,15 +280,10 @@ void ipx_unregister_sysctl(void);
 #ifdef CONFIG_NET_NS
 void __put_net(struct net *net);
 
-static inline struct net *to_net_ns(struct ns_common *ns)
-{
-	return container_of(ns, struct net, ns);
-}
-
 /* Try using get_net_track() instead */
 static inline struct net *get_net(struct net *net)
 {
-	ns_ref_inc(net);
+	refcount_inc(&net->ns.count);
 	return net;
 }
 
@@ -281,7 +294,7 @@ static inline struct net *maybe_get_net(struct net *net)
 	 * exists.  If the reference count is zero this
 	 * function fails and returns NULL.
 	 */
-	if (!ns_ref_get(net))
+	if (!refcount_inc_not_zero(&net->ns.count))
 		net = NULL;
 	return net;
 }
@@ -289,7 +302,7 @@ static inline struct net *maybe_get_net(struct net *net)
 /* Try using put_net_track() instead */
 static inline void put_net(struct net *net)
 {
-	if (ns_ref_put(net))
+	if (refcount_dec_and_test(&net->ns.count))
 		__put_net(net);
 }
 
@@ -301,11 +314,10 @@ int net_eq(const struct net *net1, const struct net *net2)
 
 static inline int check_net(const struct net *net)
 {
-	return ns_ref_read(net) != 0;
+	return refcount_read(&net->ns.count) != 0;
 }
 
 void net_drop_ns(void *);
-void net_passive_dec(struct net *net);
 
 #else
 
@@ -335,49 +347,22 @@ static inline int check_net(const struct net *net)
 }
 
 #define net_drop_ns NULL
-
-static inline void net_passive_dec(struct net *net)
-{
-	refcount_dec(&net->passive);
-}
 #endif
 
-static inline void net_passive_inc(struct net *net)
-{
-	refcount_inc(&net->passive);
-}
 
-/* Returns true if the netns initialization is completed successfully */
-static inline bool net_initialized(const struct net *net)
-{
-	return READ_ONCE(net->list.next);
-}
-
-static inline void __netns_tracker_alloc(struct net *net,
-					 netns_tracker *tracker,
-					 bool refcounted,
-					 gfp_t gfp)
+static inline void netns_tracker_alloc(struct net *net,
+				       netns_tracker *tracker, gfp_t gfp)
 {
 #ifdef CONFIG_NET_NS_REFCNT_TRACKER
-	ref_tracker_alloc(refcounted ? &net->refcnt_tracker :
-				       &net->notrefcnt_tracker,
-			  tracker, gfp);
+	ref_tracker_alloc(&net->refcnt_tracker, tracker, gfp);
 #endif
 }
 
-static inline void netns_tracker_alloc(struct net *net, netns_tracker *tracker,
-				       gfp_t gfp)
-{
-	__netns_tracker_alloc(net, tracker, true, gfp);
-}
-
-static inline void __netns_tracker_free(struct net *net,
-					netns_tracker *tracker,
-					bool refcounted)
+static inline void netns_tracker_free(struct net *net,
+				      netns_tracker *tracker)
 {
 #ifdef CONFIG_NET_NS_REFCNT_TRACKER
-       ref_tracker_free(refcounted ? &net->refcnt_tracker :
-				     &net->notrefcnt_tracker, tracker);
+       ref_tracker_free(&net->refcnt_tracker, tracker);
 #endif
 }
 
@@ -391,7 +376,7 @@ static inline struct net *get_net_track(struct net *net,
 
 static inline void put_net_track(struct net *net, netns_tracker *tracker)
 {
-	__netns_tracker_free(net, tracker, true);
+	netns_tracker_free(net, tracker);
 	put_net(net);
 }
 
@@ -479,11 +464,8 @@ struct pernet_operations {
 	void (*pre_exit)(struct net *net);
 	void (*exit)(struct net *net);
 	void (*exit_batch)(struct list_head *net_exit_list);
-	/* Following method is called with RTNL held. */
-	void (*exit_rtnl)(struct net *net,
-			  struct list_head *dev_kill_list);
-	unsigned int * const id;
-	const size_t size;
+	unsigned int *id;
+	size_t size;
 };
 
 /*
@@ -512,17 +494,15 @@ void unregister_pernet_device(struct pernet_operations *);
 
 struct ctl_table;
 
-#define register_net_sysctl(net, path, table)	\
-	register_net_sysctl_sz(net, path, table, ARRAY_SIZE(table))
 #ifdef CONFIG_SYSCTL
 int net_sysctl_init(void);
-struct ctl_table_header *register_net_sysctl_sz(struct net *net, const char *path,
-					     struct ctl_table *table, size_t table_size);
+struct ctl_table_header *register_net_sysctl(struct net *net, const char *path,
+					     struct ctl_table *table);
 void unregister_net_sysctl_table(struct ctl_table_header *header);
 #else
 static inline int net_sysctl_init(void) { return 0; }
-static inline struct ctl_table_header *register_net_sysctl_sz(struct net *net,
-	const char *path, struct ctl_table *table, size_t table_size)
+static inline struct ctl_table_header *register_net_sysctl(struct net *net,
+	const char *path, struct ctl_table *table)
 {
 	return NULL;
 }

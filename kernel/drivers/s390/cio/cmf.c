@@ -46,7 +46,7 @@
 /* indices for READCMB */
 enum cmb_index {
 	avg_utilization = -1,
- /* basic and extended format: */
+ /* basic and exended format: */
 	cmb_ssch_rsch_count = 0,
 	cmb_sample_count,
 	cmb_device_connect_time,
@@ -135,7 +135,7 @@ static inline u64 time_to_nsec(u32 value)
  * Users are usually interested in average times,
  * not accumulated time.
  * This also helps us with atomicity problems
- * when reading single values.
+ * when reading sinlge values.
  */
 static inline u64 time_to_avg_nsec(u32 value, u32 count)
 {
@@ -167,10 +167,9 @@ static inline void cmf_activate(void *area, unsigned int onoff)
 	asm volatile(
 		"	lgr	1,%[r1]\n"
 		"	lgr	2,%[mbo]\n"
-		"	schm"
+		"	schm\n"
 		:
-		: [r1] "d" ((unsigned long)onoff),
-		  [mbo] "d" (virt_to_phys(area))
+		: [r1] "d" ((unsigned long)onoff), [mbo] "d" (area)
 		: "1", "2");
 }
 
@@ -502,7 +501,8 @@ static int alloc_cmb(struct ccw_device *cdev)
 		WARN_ON(!list_empty(&cmb_area.list));
 
 		spin_unlock(&cmb_area.lock);
-		mem = (void *)__get_free_pages(GFP_KERNEL, get_order(size));
+		mem = (void*)__get_free_pages(GFP_KERNEL | GFP_DMA,
+				 get_order(size));
 		spin_lock(&cmb_area.lock);
 
 		if (cmb_area.mem) {
@@ -977,7 +977,8 @@ static struct cmb_operations cmbops_extended = {
 
 static ssize_t cmb_show_attr(struct device *dev, char *buf, enum cmb_index idx)
 {
-	return sysfs_emit(buf, "%lld\n", cmf_read(to_ccwdev(dev), idx));
+	return sprintf(buf, "%lld\n",
+		(unsigned long long) cmf_read(to_ccwdev(dev), idx));
 }
 
 static ssize_t cmb_show_avg_sample_interval(struct device *dev,
@@ -997,7 +998,7 @@ static ssize_t cmb_show_avg_sample_interval(struct device *dev,
 	} else
 		interval = -1;
 	spin_unlock_irq(cdev->ccwlock);
-	return sysfs_emit(buf, "%ld\n", interval);
+	return sprintf(buf, "%ld\n", interval);
 }
 
 static ssize_t cmb_show_avg_utilization(struct device *dev,
@@ -1006,7 +1007,7 @@ static ssize_t cmb_show_avg_utilization(struct device *dev,
 {
 	unsigned long u = cmf_read(to_ccwdev(dev), avg_utilization);
 
-	return sysfs_emit(buf, "%02lu.%01lu%%\n", u / 10, u % 10);
+	return sprintf(buf, "%02lu.%01lu%%\n", u / 10, u % 10);
 }
 
 #define cmf_attr(name) \
@@ -1079,7 +1080,7 @@ static ssize_t cmb_enable_show(struct device *dev,
 {
 	struct ccw_device *cdev = to_ccwdev(dev);
 
-	return sysfs_emit(buf, "%d\n", cmf_enabled(cdev));
+	return sprintf(buf, "%d\n", cmf_enabled(cdev));
 }
 
 static ssize_t cmb_enable_store(struct device *dev,
@@ -1226,7 +1227,7 @@ int cmf_readall(struct ccw_device *cdev, struct cmbdata *data)
 	return cmbops->readall(cdev, data);
 }
 
-/* Re-enable cmf when a disconnected device becomes available again. */
+/* Reenable cmf when a disconnected device becomes available again. */
 int cmf_reenable(struct ccw_device *cdev)
 {
 	cmbops->reset(cdev);

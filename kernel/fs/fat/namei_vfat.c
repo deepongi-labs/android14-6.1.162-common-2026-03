@@ -43,13 +43,17 @@ static inline void vfat_d_version_set(struct dentry *dentry,
  * If it happened, the negative dentry isn't actually negative
  * anymore.  So, drop it.
  */
-static bool vfat_revalidate_shortname(struct dentry *dentry, struct inode *dir)
+static int vfat_revalidate_shortname(struct dentry *dentry)
 {
-	return inode_eq_iversion(dir, vfat_d_version(dentry));
+	int ret = 1;
+	spin_lock(&dentry->d_lock);
+	if (!inode_eq_iversion(d_inode(dentry->d_parent), vfat_d_version(dentry)))
+		ret = 0;
+	spin_unlock(&dentry->d_lock);
+	return ret;
 }
 
-static int vfat_revalidate(struct inode *dir, const struct qstr *name,
-			   struct dentry *dentry, unsigned int flags)
+static int vfat_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
@@ -57,11 +61,10 @@ static int vfat_revalidate(struct inode *dir, const struct qstr *name,
 	/* This is not negative dentry. Always valid. */
 	if (d_really_is_positive(dentry))
 		return 1;
-	return vfat_revalidate_shortname(dentry, dir);
+	return vfat_revalidate_shortname(dentry);
 }
 
-static int vfat_revalidate_ci(struct inode *dir, const struct qstr *name,
-			      struct dentry *dentry, unsigned int flags)
+static int vfat_revalidate_ci(struct dentry *dentry, unsigned int flags)
 {
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
@@ -94,7 +97,7 @@ static int vfat_revalidate_ci(struct inode *dir, const struct qstr *name,
 	if (flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
 		return 0;
 
-	return vfat_revalidate_shortname(dentry, dir);
+	return vfat_revalidate_shortname(dentry);
 }
 
 /* returns the length of a struct qstr, ignoring trailing dots */
@@ -197,7 +200,7 @@ static const struct dentry_operations vfat_dentry_ops = {
 
 /* Characters that are undesirable in an MS-DOS file name */
 
-static inline bool vfat_bad_char(wchar_t w)
+static inline wchar_t vfat_bad_char(wchar_t w)
 {
 	return (w < 0x0020)
 	    || (w == '*') || (w == '?') || (w == '<') || (w == '>')
@@ -205,7 +208,7 @@ static inline bool vfat_bad_char(wchar_t w)
 	    || (w == '\\');
 }
 
-static inline bool vfat_replace_char(wchar_t w)
+static inline wchar_t vfat_replace_char(wchar_t w)
 {
 	return (w == '[') || (w == ']') || (w == ';') || (w == ',')
 	    || (w == '+') || (w == '=');
@@ -753,7 +756,7 @@ error:
 	return ERR_PTR(err);
 }
 
-static int vfat_create(struct mnt_idmap *idmap, struct inode *dir,
+static int vfat_create(struct user_namespace *mnt_userns, struct inode *dir,
 		       struct dentry *dentry, umode_t mode, bool excl)
 {
 	struct super_block *sb = dir->i_sb;
@@ -841,8 +844,8 @@ out:
 	return err;
 }
 
-static struct dentry *vfat_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-				  struct dentry *dentry, umode_t mode)
+static int vfat_mkdir(struct user_namespace *mnt_userns, struct inode *dir,
+		      struct dentry *dentry, umode_t mode)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode;
@@ -877,13 +880,13 @@ static struct dentry *vfat_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	d_instantiate(dentry, inode);
 
 	mutex_unlock(&MSDOS_SB(sb)->s_lock);
-	return NULL;
+	return 0;
 
 out_free:
 	fat_free_clusters(dir, cluster);
 out:
 	mutex_unlock(&MSDOS_SB(sb)->s_lock);
-	return ERR_PTR(err);
+	return err;
 }
 
 static int vfat_get_dotdot_de(struct inode *inode, struct buffer_head **bh,
@@ -1155,7 +1158,7 @@ error_exchange:
 	goto out;
 }
 
-static int vfat_rename2(struct mnt_idmap *idmap, struct inode *old_dir,
+static int vfat_rename2(struct user_namespace *mnt_userns, struct inode *old_dir,
 			struct dentry *old_dentry, struct inode *new_dir,
 			struct dentry *new_dentry, unsigned int flags)
 {
@@ -1187,53 +1190,29 @@ static void setup(struct super_block *sb)
 {
 	MSDOS_SB(sb)->dir_ops = &vfat_dir_inode_operations;
 	if (MSDOS_SB(sb)->options.name_check != 's')
-		set_default_d_op(sb, &vfat_ci_dentry_ops);
+		sb->s_d_op = &vfat_ci_dentry_ops;
 	else
-		set_default_d_op(sb, &vfat_dentry_ops);
+		sb->s_d_op = &vfat_dentry_ops;
 }
 
-static int vfat_fill_super(struct super_block *sb, struct fs_context *fc)
+static int vfat_fill_super(struct super_block *sb, void *data, int silent)
 {
-	return fat_fill_super(sb, fc, setup);
+	return fat_fill_super(sb, data, silent, 1, setup);
 }
 
-static int vfat_get_tree(struct fs_context *fc)
+static struct dentry *vfat_mount(struct file_system_type *fs_type,
+		       int flags, const char *dev_name,
+		       void *data)
 {
-	return get_tree_bdev(fc, vfat_fill_super);
-}
-
-static int vfat_parse_param(struct fs_context *fc, struct fs_parameter *param)
-{
-	return fat_parse_param(fc, param, true);
-}
-
-static const struct fs_context_operations vfat_context_ops = {
-	.parse_param	= vfat_parse_param,
-	.get_tree	= vfat_get_tree,
-	.reconfigure	= fat_reconfigure,
-	.free		= fat_free_fc,
-};
-
-static int vfat_init_fs_context(struct fs_context *fc)
-{
-	int err;
-
-	/* Initialize with is_vfat == true */
-	err = fat_init_fs_context(fc, true);
-	if (err)
-		return err;
-
-	fc->ops = &vfat_context_ops;
-	return 0;
+	return mount_bdev(fs_type, flags, dev_name, data, vfat_fill_super);
 }
 
 static struct file_system_type vfat_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "vfat",
+	.mount		= vfat_mount,
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV | FS_ALLOW_IDMAP,
-	.init_fs_context = vfat_init_fs_context,
-	.parameters     = fat_param_spec,
 };
 MODULE_ALIAS_FS("vfat");
 

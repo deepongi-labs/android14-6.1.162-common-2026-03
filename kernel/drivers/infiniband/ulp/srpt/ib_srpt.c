@@ -667,9 +667,9 @@ static int srpt_refresh_port(struct srpt_port *sport)
 						  srpt_mad_recv_handler,
 						  sport, 0);
 		if (IS_ERR(mad_agent)) {
-			pr_err("%s-%d: MAD agent registration failed (%pe). Note: this is expected if SR-IOV is enabled.\n",
+			pr_err("%s-%d: MAD agent registration failed (%ld). Note: this is expected if SR-IOV is enabled.\n",
 			       dev_name(&sport->sdev->device->dev), sport->port,
-			       mad_agent);
+			       PTR_ERR(mad_agent));
 			sport->mad_agent = NULL;
 			memset(&port_modify, 0, sizeof(port_modify));
 			port_modify.clr_port_cap_mask = IB_PORT_DEVICE_MGMT_SUP;
@@ -1865,8 +1865,8 @@ retry:
 				 IB_POLL_WORKQUEUE);
 	if (IS_ERR(ch->cq)) {
 		ret = PTR_ERR(ch->cq);
-		pr_err("failed to create CQ cqe= %d ret= %pe\n",
-		       ch->rq_size + sq_size, ch->cq);
+		pr_err("failed to create CQ cqe= %d ret= %d\n",
+		       ch->rq_size + sq_size, ret);
 		goto out;
 	}
 	ch->cq_size = ch->rq_size + sq_size;
@@ -3132,7 +3132,7 @@ static int srpt_alloc_srq(struct srpt_device *sdev)
 	WARN_ON_ONCE(sdev->srq);
 	srq = ib_create_srq(sdev->pd, &srq_attr);
 	if (IS_ERR(srq)) {
-		pr_debug("ib_create_srq() failed: %pe\n", srq);
+		pr_debug("ib_create_srq() failed: %ld\n", PTR_ERR(srq));
 		return PTR_ERR(srq);
 	}
 
@@ -3236,7 +3236,8 @@ static int srpt_add_one(struct ib_device *device)
 	if (rdma_port_get_link_layer(device, 1) == IB_LINK_LAYER_INFINIBAND)
 		sdev->cm_id = ib_create_cm_id(device, srpt_cm_handler, sdev);
 	if (IS_ERR(sdev->cm_id)) {
-		pr_info("ib_create_cm_id() failed: %pe\n", sdev->cm_id);
+		pr_info("ib_create_cm_id() failed: %ld\n",
+			PTR_ERR(sdev->cm_id));
 		ret = PTR_ERR(sdev->cm_id);
 		sdev->cm_id = NULL;
 		if (!rdma_cm_id)
@@ -3362,6 +3363,11 @@ static int srpt_check_true(struct se_portal_group *se_tpg)
 	return 1;
 }
 
+static int srpt_check_false(struct se_portal_group *se_tpg)
+{
+	return 0;
+}
+
 static struct srpt_port *srpt_tpg_to_sport(struct se_portal_group *tpg)
 {
 	return tpg->se_tpg_wwn->priv;
@@ -3387,6 +3393,11 @@ static char *srpt_get_fabric_wwn(struct se_portal_group *tpg)
 }
 
 static u16 srpt_get_tag(struct se_portal_group *tpg)
+{
+	return 1;
+}
+
+static u32 srpt_tpg_get_inst_index(struct se_portal_group *se_tpg)
 {
 	return 1;
 }
@@ -3428,6 +3439,24 @@ static void srpt_close_session(struct se_session *se_sess)
 	struct srpt_rdma_ch *ch = se_sess->fabric_sess_ptr;
 
 	srpt_disconnect_ch_sync(ch);
+}
+
+/**
+ * srpt_sess_get_index - return the value of scsiAttIntrPortIndex (SCSI-MIB)
+ * @se_sess: SCSI target session.
+ *
+ * A quote from RFC 4455 (SCSI-MIB) about this MIB object:
+ * This object represents an arbitrary integer used to uniquely identify a
+ * particular attached remote initiator port to a particular SCSI target port
+ * within a particular SCSI target device within a particular SCSI instance.
+ */
+static u32 srpt_sess_get_index(struct se_session *se_sess)
+{
+	return 0;
+}
+
+static void srpt_set_default_node_attrs(struct se_node_acl *nacl)
+{
 }
 
 /* Note: only used from inside debug printk's by the TCM core. */
@@ -3686,7 +3715,8 @@ static struct rdma_cm_id *srpt_create_rdma_id(struct sockaddr *listen_addr)
 	rdma_cm_id = rdma_create_id(&init_net, srpt_rdma_cm_handler,
 				    NULL, RDMA_PS_TCP, IB_QPT_RC);
 	if (IS_ERR(rdma_cm_id)) {
-		pr_err("RDMA/CM ID creation failed: %pe\n", rdma_cm_id);
+		pr_err("RDMA/CM ID creation failed: %ld\n",
+		       PTR_ERR(rdma_cm_id));
 		goto out;
 	}
 
@@ -3899,13 +3929,18 @@ static const struct target_core_fabric_ops srpt_template = {
 	.fabric_name			= "srpt",
 	.tpg_get_wwn			= srpt_get_fabric_wwn,
 	.tpg_get_tag			= srpt_get_tag,
+	.tpg_check_demo_mode		= srpt_check_false,
 	.tpg_check_demo_mode_cache	= srpt_check_true,
 	.tpg_check_demo_mode_write_protect = srpt_check_true,
+	.tpg_check_prod_mode_write_protect = srpt_check_false,
+	.tpg_get_inst_index		= srpt_tpg_get_inst_index,
 	.release_cmd			= srpt_release_cmd,
 	.check_stop_free		= srpt_check_stop_free,
 	.close_session			= srpt_close_session,
+	.sess_get_index			= srpt_sess_get_index,
 	.sess_get_initiator_sid		= NULL,
 	.write_pending			= srpt_write_pending,
+	.set_default_node_attributes	= srpt_set_default_node_attrs,
 	.get_cmd_state			= srpt_get_tcm_cmd_state,
 	.queue_data_in			= srpt_queue_data_in,
 	.queue_status			= srpt_queue_status,
@@ -3925,9 +3960,6 @@ static const struct target_core_fabric_ops srpt_template = {
 	.tfc_discovery_attrs		= srpt_da_attrs,
 	.tfc_wwn_attrs			= srpt_wwn_attrs,
 	.tfc_tpg_attrib_attrs		= srpt_tpg_attrib_attrs,
-
-	.default_submit_type		= TARGET_DIRECT_SUBMIT,
-	.direct_submit_supp		= 1,
 };
 
 /**

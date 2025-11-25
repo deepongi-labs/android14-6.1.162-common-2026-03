@@ -20,7 +20,7 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 /*
  * The GSC suffers from an errata where occasionally during
@@ -160,7 +160,7 @@ static const struct of_device_id gsc_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, gsc_of_match);
 
-static const struct regmap_bus gsc_regmap_bus = {
+static struct regmap_bus gsc_regmap_bus = {
 	.reg_read = gsc_read,
 	.reg_write = gsc_write,
 };
@@ -189,7 +189,8 @@ static const struct regmap_irq_chip gsc_irq_chip = {
 	.num_irqs = ARRAY_SIZE(gsc_irqs),
 	.num_regs = 1,
 	.status_base = GSC_IRQ_STATUS,
-	.unmask_base = GSC_IRQ_ENABLE,
+	.mask_base = GSC_IRQ_ENABLE,
+	.mask_invert = true,
 	.ack_base = GSC_IRQ_STATUS,
 	.ack_invert = true,
 };
@@ -264,7 +265,7 @@ static struct i2c_driver gsc_driver = {
 		.name	= "gateworks-gsc",
 		.of_match_table = gsc_of_match,
 	},
-	.probe		= gsc_probe,
+	.probe_new	= gsc_probe,
 	.remove		= gsc_remove,
 };
 module_i2c_driver(gsc_driver);

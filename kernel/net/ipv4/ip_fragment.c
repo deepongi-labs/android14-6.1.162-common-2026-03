@@ -76,8 +76,7 @@ static u8 ip4_frag_ecn(u8 tos)
 static struct inet_frags ip4_frags;
 
 static int ip_frag_reasm(struct ipq *qp, struct sk_buff *skb,
-			 struct sk_buff *prev_tail, struct net_device *dev,
-			 int *refs);
+			 struct sk_buff *prev_tail, struct net_device *dev);
 
 
 static void ip4_frag_init(struct inet_frag_queue *q, const void *a)
@@ -108,6 +107,22 @@ static void ip4_frag_free(struct inet_frag_queue *q)
 		inet_putpeer(qp->peer);
 }
 
+
+/* Destruction primitives. */
+
+static void ipq_put(struct ipq *ipq)
+{
+	inet_frag_put(&ipq->q);
+}
+
+/* Kill ipq entry. It is not destroyed immediately,
+ * because caller (and someone more) holds reference count.
+ */
+static void ipq_kill(struct ipq *ipq)
+{
+	inet_frag_kill(&ipq->q);
+}
+
 static bool frag_expire_skip_icmp(u32 user)
 {
 	return user == IP_DEFRAG_AF_PACKET ||
@@ -122,13 +137,12 @@ static bool frag_expire_skip_icmp(u32 user)
  */
 static void ip_expire(struct timer_list *t)
 {
-	enum skb_drop_reason reason = SKB_DROP_REASON_FRAG_REASM_TIMEOUT;
-	struct inet_frag_queue *frag = timer_container_of(frag, t, timer);
+	struct inet_frag_queue *frag = from_timer(frag, t, timer);
 	const struct iphdr *iph;
 	struct sk_buff *head = NULL;
 	struct net *net;
 	struct ipq *qp;
-	int refs = 1;
+	int err;
 
 	qp = container_of(frag, struct ipq, q);
 	net = qp->q.fqdir->net;
@@ -144,8 +158,7 @@ static void ip_expire(struct timer_list *t)
 	if (qp->q.flags & INET_FRAG_COMPLETE)
 		goto out;
 
-	qp->q.flags |= INET_FRAG_DROP;
-	inet_frag_kill(&qp->q, &refs);
+	ipq_kill(qp);
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMFAILS);
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMTIMEOUT);
 
@@ -166,15 +179,14 @@ static void ip_expire(struct timer_list *t)
 
 	/* skb has no dst, perform route lookup again */
 	iph = ip_hdr(head);
-	reason = ip_route_input_noref(head, iph->daddr, iph->saddr,
-				      ip4h_dscp(iph), head->dev);
-	if (reason)
+	err = ip_route_input_noref(head, iph->daddr, iph->saddr,
+					   iph->tos, head->dev);
+	if (err)
 		goto out;
 
 	/* Only an end host needs to send an ICMP
 	 * "Fragment Reassembly Timeout" message, per RFC792.
 	 */
-	reason = SKB_DROP_REASON_FRAG_REASM_TIMEOUT;
 	if (frag_expire_skip_icmp(qp->q.key.v4.user) &&
 	    (skb_rtable(head)->rt_type != RTN_LOCAL))
 		goto out;
@@ -187,8 +199,8 @@ out:
 	spin_unlock(&qp->q.lock);
 out_rcu_unlock:
 	rcu_read_unlock();
-	kfree_skb_reason(head, reason);
-	inet_frag_putn(&qp->q, refs);
+	kfree_skb(head);
+	ipq_put(qp);
 }
 
 /* Find the correct entry in the "incomplete datagrams" queue for
@@ -247,8 +259,7 @@ static int ip_frag_reinit(struct ipq *qp)
 		return -ETIMEDOUT;
 	}
 
-	sum_truesize = inet_frag_rbtree_purge(&qp->q.rb_fragments,
-					      SKB_DROP_REASON_FRAG_TOO_FAR);
+	sum_truesize = inet_frag_rbtree_purge(&qp->q.rb_fragments);
 	sub_frag_mem_limit(qp->q.fqdir, sum_truesize);
 
 	qp->q.flags = 0;
@@ -264,7 +275,7 @@ static int ip_frag_reinit(struct ipq *qp)
 }
 
 /* Add new segment to existing queue. */
-static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
+static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb)
 {
 	struct net *net = qp->q.fqdir->net;
 	int ihl, end, flags, offset;
@@ -272,19 +283,15 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 	struct net_device *dev;
 	unsigned int fragsize;
 	int err = -ENOENT;
-	SKB_DR(reason);
 	u8 ecn;
 
-	/* If reassembly is already done, @skb must be a duplicate frag. */
-	if (qp->q.flags & INET_FRAG_COMPLETE) {
-		SKB_DR_SET(reason, DUP_FRAG);
+	if (qp->q.flags & INET_FRAG_COMPLETE)
 		goto err;
-	}
 
 	if (!(IPCB(skb)->flags & IPSKB_FRAG_COMPLETE) &&
 	    unlikely(ip_frag_too_far(qp)) &&
 	    unlikely(err = ip_frag_reinit(qp))) {
-		inet_frag_kill(&qp->q, refs);
+		ipq_kill(qp);
 		goto err;
 	}
 
@@ -347,7 +354,7 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 		qp->iif = dev->ifindex;
 
 	qp->q.stamp = skb->tstamp;
-	qp->q.tstamp_type = skb->tstamp_type;
+	qp->q.mono_delivery_time = skb->mono_delivery_time;
 	qp->q.meat += skb->len;
 	qp->ecn |= ecn;
 	add_frag_mem_limit(qp->q.fqdir, skb->truesize);
@@ -368,10 +375,10 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 		unsigned long orefdst = skb->_skb_refdst;
 
 		skb->_skb_refdst = 0UL;
-		err = ip_frag_reasm(qp, skb, prev_tail, dev, refs);
+		err = ip_frag_reasm(qp, skb, prev_tail, dev);
 		skb->_skb_refdst = orefdst;
 		if (err)
-			inet_frag_kill(&qp->q, refs);
+			inet_frag_kill(&qp->q);
 		return err;
 	}
 
@@ -381,17 +388,16 @@ static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb, int *refs)
 
 insert_error:
 	if (err == IPFRAG_DUP) {
-		SKB_DR_SET(reason, DUP_FRAG);
-		err = -EINVAL;
-		goto err;
+		kfree_skb(skb);
+		return -EINVAL;
 	}
 	err = -EINVAL;
 	__IP_INC_STATS(net, IPSTATS_MIB_REASM_OVERLAPS);
 discard_qp:
-	inet_frag_kill(&qp->q, refs);
+	inet_frag_kill(&qp->q);
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMFAILS);
 err:
-	kfree_skb_reason(skb, reason);
+	kfree_skb(skb);
 	return err;
 }
 
@@ -402,8 +408,7 @@ static bool ip_frag_coalesce_ok(const struct ipq *qp)
 
 /* Build a new IP datagram from all its fragments. */
 static int ip_frag_reasm(struct ipq *qp, struct sk_buff *skb,
-			 struct sk_buff *prev_tail, struct net_device *dev,
-			 int *refs)
+			 struct sk_buff *prev_tail, struct net_device *dev)
 {
 	struct net *net = qp->q.fqdir->net;
 	struct iphdr *iph;
@@ -411,7 +416,7 @@ static int ip_frag_reasm(struct ipq *qp, struct sk_buff *skb,
 	int len, err;
 	u8 ecn;
 
-	inet_frag_kill(&qp->q, refs);
+	ipq_kill(qp);
 
 	ecn = ip_frag_ecn_table[qp->ecn];
 	if (unlikely(ecn == 0xff)) {
@@ -476,30 +481,25 @@ out_fail:
 /* Process an incoming IP datagram fragment. */
 int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 {
-	struct net_device *dev;
+	struct net_device *dev = skb->dev ? : skb_dst(skb)->dev;
+	int vif = l3mdev_master_ifindex_rcu(dev);
 	struct ipq *qp;
-	int vif;
 
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMREQDS);
 
 	/* Lookup (or create) queue header */
-	rcu_read_lock();
-	dev = skb->dev ? : skb_dst_dev_rcu(skb);
-	vif = l3mdev_master_ifindex_rcu(dev);
 	qp = ip_find(net, ip_hdr(skb), user, vif);
 	if (qp) {
-		int ret, refs = 0;
+		int ret;
 
 		spin_lock(&qp->q.lock);
 
-		ret = ip_frag_queue(qp, skb, &refs);
+		ret = ip_frag_queue(qp, skb);
 
 		spin_unlock(&qp->q.lock);
-		rcu_read_unlock();
-		inet_frag_putn(&qp->q, refs);
+		ipq_put(qp);
 		return ret;
 	}
-	rcu_read_unlock();
 
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMFAILS);
 	kfree_skb(skb);
@@ -578,6 +578,7 @@ static struct ctl_table ip4_frags_ns_ctl_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &dist_min,
 	},
+	{ }
 };
 
 /* secret interval has been deprecated */
@@ -590,6 +591,7 @@ static struct ctl_table ip4_frags_ctl_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_jiffies,
 	},
+	{ }
 };
 
 static int __net_init ip4_frags_ns_ctl_register(struct net *net)
@@ -611,8 +613,7 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
 	table[2].data	= &net->ipv4.fqdir->timeout;
 	table[3].data	= &net->ipv4.fqdir->max_dist;
 
-	hdr = register_net_sysctl_sz(net, "net/ipv4", table,
-				     ARRAY_SIZE(ip4_frags_ns_ctl_table));
+	hdr = register_net_sysctl(net, "net/ipv4", table);
 	if (!hdr)
 		goto err_reg;
 
@@ -628,7 +629,7 @@ err_alloc:
 
 static void __net_exit ip4_frags_ns_ctl_unregister(struct net *net)
 {
-	const struct ctl_table *table;
+	struct ctl_table *table;
 
 	table = net->ipv4.frags_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->ipv4.frags_hdr);

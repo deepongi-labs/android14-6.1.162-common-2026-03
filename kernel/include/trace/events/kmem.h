@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/tracepoint.h>
 #include <trace/events/mmflags.h>
+#include <linux/dma-buf.h>
 
 TRACE_EVENT(kmem_cache_alloc,
 
@@ -22,7 +23,6 @@ TRACE_EVENT(kmem_cache_alloc,
 	TP_STRUCT__entry(
 		__field(	unsigned long,	call_site	)
 		__field(	const void *,	ptr		)
-		__string(	name,		s->name		)
 		__field(	size_t,		bytes_req	)
 		__field(	size_t,		bytes_alloc	)
 		__field(	unsigned long,	gfp_flags	)
@@ -33,20 +33,18 @@ TRACE_EVENT(kmem_cache_alloc,
 	TP_fast_assign(
 		__entry->call_site	= call_site;
 		__entry->ptr		= ptr;
-		__assign_str(name);
 		__entry->bytes_req	= s->object_size;
 		__entry->bytes_alloc	= s->size;
 		__entry->gfp_flags	= (__force unsigned long)gfp_flags;
 		__entry->node		= node;
-		__entry->accounted	= IS_ENABLED(CONFIG_MEMCG) ?
+		__entry->accounted	= IS_ENABLED(CONFIG_MEMCG_KMEM) ?
 					  ((gfp_flags & __GFP_ACCOUNT) ||
 					  (s->flags & SLAB_ACCOUNT)) : false;
 	),
 
-	TP_printk("call_site=%pS ptr=%p name=%s bytes_req=%zu bytes_alloc=%zu gfp_flags=%s node=%d accounted=%s",
+	TP_printk("call_site=%pS ptr=%p bytes_req=%zu bytes_alloc=%zu gfp_flags=%s node=%d accounted=%s",
 		(void *)__entry->call_site,
 		__entry->ptr,
-		__get_str(name),
 		__entry->bytes_req,
 		__entry->bytes_alloc,
 		show_gfp_flags(__entry->gfp_flags),
@@ -90,7 +88,7 @@ TRACE_EVENT(kmalloc,
 		__entry->bytes_alloc,
 		show_gfp_flags(__entry->gfp_flags),
 		__entry->node,
-		(IS_ENABLED(CONFIG_MEMCG) &&
+		(IS_ENABLED(CONFIG_MEMCG_KMEM) &&
 		 (__entry->gfp_flags & (__force unsigned long)__GFP_ACCOUNT)) ? "true" : "false")
 );
 
@@ -129,7 +127,7 @@ TRACE_EVENT(kmem_cache_free,
 	TP_fast_assign(
 		__entry->call_site	= call_site;
 		__entry->ptr		= ptr;
-		__assign_str(name);
+		__assign_str(name, s->name);
 	),
 
 	TP_printk("call_site=%pS ptr=%p name=%s",
@@ -307,6 +305,44 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		__entry->change_ownership)
 );
 
+TRACE_EVENT(mm_alloc_contig_migrate_range_info,
+
+	TP_PROTO(unsigned long start,
+		 unsigned long end,
+		 unsigned long nr_migrated,
+		 unsigned long nr_reclaimed,
+		 unsigned long nr_mapped,
+		 int migratetype),
+
+	TP_ARGS(start, end, nr_migrated, nr_reclaimed, nr_mapped, migratetype),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, start)
+		__field(unsigned long, end)
+		__field(unsigned long, nr_migrated)
+		__field(unsigned long, nr_reclaimed)
+		__field(unsigned long, nr_mapped)
+		__field(int, migratetype)
+	),
+
+	TP_fast_assign(
+		__entry->start = start;
+		__entry->end = end;
+		__entry->nr_migrated = nr_migrated;
+		__entry->nr_reclaimed = nr_reclaimed;
+		__entry->nr_mapped = nr_mapped;
+		__entry->migratetype = migratetype;
+	),
+
+	TP_printk("start=0x%lx end=0x%lx migratetype=%d nr_migrated=%lu nr_reclaimed=%lu nr_mapped=%lu",
+		  __entry->start,
+		  __entry->end,
+		  __entry->migratetype,
+		  __entry->nr_migrated,
+		  __entry->nr_reclaimed,
+		  __entry->nr_mapped)
+);
+
 TRACE_EVENT(mm_setup_per_zone_wmarks,
 
 	TP_PROTO(struct zone *zone),
@@ -324,7 +360,7 @@ TRACE_EVENT(mm_setup_per_zone_wmarks,
 
 	TP_fast_assign(
 		__entry->node_id = zone->zone_pgdat->node_id;
-		__assign_str(name);
+		__assign_str(name, zone->name);
 		__entry->watermark_min = zone->_watermark[WMARK_MIN];
 		__entry->watermark_low = zone->_watermark[WMARK_LOW];
 		__entry->watermark_high = zone->_watermark[WMARK_HIGH];
@@ -355,8 +391,8 @@ TRACE_EVENT(mm_setup_per_zone_lowmem_reserve,
 
 	TP_fast_assign(
 		__entry->node_id = zone->zone_pgdat->node_id;
-		__assign_str(name);
-		__assign_str(upper_name);
+		__assign_str(name, zone->name);
+		__assign_str(upper_name, zone->name);
 		__entry->lowmem_reserve = lowmem_reserve;
 	),
 
@@ -427,9 +463,10 @@ TRACE_MM_PAGES
 TRACE_EVENT(rss_stat,
 
 	TP_PROTO(struct mm_struct *mm,
-		int member),
+		int member,
+		long count),
 
-	TP_ARGS(mm, member),
+	TP_ARGS(mm, member, count),
 
 	TP_STRUCT__entry(
 		__field(unsigned int, mm_id)
@@ -442,8 +479,7 @@ TRACE_EVENT(rss_stat,
 		__entry->mm_id = mm_ptr_to_hash(mm);
 		__entry->curr = !!(current->mm == mm);
 		__entry->member = member;
-		__entry->size = (percpu_counter_sum_positive(&mm->rss_stat[member])
-							    << PAGE_SHIFT);
+		__entry->size = (count << PAGE_SHIFT);
 	),
 
 	TP_printk("mm_id=%u curr=%d type=%s size=%ldB",
@@ -451,6 +487,30 @@ TRACE_EVENT(rss_stat,
 		__entry->curr,
 		__print_symbolic(__entry->member, TRACE_MM_PAGES),
 		__entry->size)
+	);
+
+TRACE_EVENT(dmabuf_rss_stat,
+
+	TP_PROTO(size_t rss, ssize_t rss_delta, struct dma_buf *dmabuf),
+
+	TP_ARGS(rss, rss_delta, dmabuf),
+
+	TP_STRUCT__entry(
+		__field(size_t, rss)
+		__field(ssize_t, rss_delta)
+		__field(unsigned long, i_ino)
+	),
+
+	TP_fast_assign(
+		__entry->rss = rss;
+		__entry->rss_delta = rss_delta;
+		__entry->i_ino = file_inode(dmabuf->file)->i_ino;
+	),
+
+	TP_printk("rss=%zu delta=%zd i_ino=%lu",
+		__entry->rss,
+		__entry->rss_delta,
+		__entry->i_ino)
 	);
 #endif /* _TRACE_KMEM_H */
 

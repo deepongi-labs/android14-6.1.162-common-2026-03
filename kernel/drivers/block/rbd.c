@@ -491,12 +491,12 @@ static bool single_major = true;
 module_param(single_major, bool, 0444);
 MODULE_PARM_DESC(single_major, "Use a single major number for all rbd devices (default: true)");
 
-static ssize_t add_store(const struct bus_type *bus, const char *buf, size_t count);
-static ssize_t remove_store(const struct bus_type *bus, const char *buf,
+static ssize_t add_store(struct bus_type *bus, const char *buf, size_t count);
+static ssize_t remove_store(struct bus_type *bus, const char *buf,
 			    size_t count);
-static ssize_t add_single_major_store(const struct bus_type *bus, const char *buf,
+static ssize_t add_single_major_store(struct bus_type *bus, const char *buf,
 				      size_t count);
-static ssize_t remove_single_major_store(const struct bus_type *bus, const char *buf,
+static ssize_t remove_single_major_store(struct bus_type *bus, const char *buf,
 					 size_t count);
 static int rbd_dev_image_probe(struct rbd_device *rbd_dev, int depth);
 
@@ -538,7 +538,7 @@ static bool rbd_is_lock_owner(struct rbd_device *rbd_dev)
 	return is_lock_owner;
 }
 
-static ssize_t supported_features_show(const struct bus_type *bus, char *buf)
+static ssize_t supported_features_show(struct bus_type *bus, char *buf)
 {
 	return sprintf(buf, "0x%llx\n", RBD_FEATURES_SUPPORTED);
 }
@@ -575,7 +575,7 @@ static const struct attribute_group rbd_bus_group = {
 };
 __ATTRIBUTE_GROUPS(rbd_bus);
 
-static const struct bus_type rbd_bus_type = {
+static struct bus_type rbd_bus_type = {
 	.name		= "rbd",
 	.bus_groups	= rbd_bus_groups,
 };
@@ -659,9 +659,9 @@ static bool pending_result_dec(struct pending_result *pending, int *result)
 	return true;
 }
 
-static int rbd_open(struct gendisk *disk, blk_mode_t mode)
+static int rbd_open(struct block_device *bdev, fmode_t mode)
 {
-	struct rbd_device *rbd_dev = disk->private_data;
+	struct rbd_device *rbd_dev = bdev->bd_disk->private_data;
 	bool removing = false;
 
 	spin_lock_irq(&rbd_dev->lock);
@@ -678,7 +678,7 @@ static int rbd_open(struct gendisk *disk, blk_mode_t mode)
 	return 0;
 }
 
-static void rbd_release(struct gendisk *disk)
+static void rbd_release(struct gendisk *disk, fmode_t mode)
 {
 	struct rbd_device *rbd_dev = disk->private_data;
 	unsigned long open_count_before;
@@ -3086,12 +3086,13 @@ static int setup_copyup_bvecs(struct rbd_obj_request *obj_req, u64 obj_overlap)
 
 	for (i = 0; i < obj_req->copyup_bvec_count; i++) {
 		unsigned int len = min(obj_overlap, (u64)PAGE_SIZE);
-		struct page *page = alloc_page(GFP_NOIO);
 
-		if (!page)
+		obj_req->copyup_bvecs[i].bv_page = alloc_page(GFP_NOIO);
+		if (!obj_req->copyup_bvecs[i].bv_page)
 			return -ENOMEM;
 
-		bvec_set_page(&obj_req->copyup_bvecs[i], page, len, 0);
+		obj_req->copyup_bvecs[i].bv_offset = 0;
+		obj_req->copyup_bvecs[i].bv_len = len;
 		obj_overlap -= len;
 	}
 
@@ -4949,21 +4950,16 @@ static const struct blk_mq_ops rbd_mq_ops = {
 static int rbd_init_disk(struct rbd_device *rbd_dev)
 {
 	struct gendisk *disk;
+	struct request_queue *q;
 	unsigned int objset_bytes =
 	    rbd_dev->layout.object_size * rbd_dev->layout.stripe_count;
-	struct queue_limits lim = {
-		.max_hw_sectors		= objset_bytes >> SECTOR_SHIFT,
-		.io_opt			= objset_bytes,
-		.io_min			= rbd_dev->opts->alloc_size,
-		.max_segments		= USHRT_MAX,
-		.max_segment_size	= UINT_MAX,
-	};
 	int err;
 
 	memset(&rbd_dev->tag_set, 0, sizeof(rbd_dev->tag_set));
 	rbd_dev->tag_set.ops = &rbd_mq_ops;
 	rbd_dev->tag_set.queue_depth = rbd_dev->opts->queue_depth;
 	rbd_dev->tag_set.numa_node = NUMA_NO_NODE;
+	rbd_dev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 	rbd_dev->tag_set.nr_hw_queues = num_present_cpus();
 	rbd_dev->tag_set.cmd_size = sizeof(struct rbd_img_request);
 
@@ -4971,20 +4967,12 @@ static int rbd_init_disk(struct rbd_device *rbd_dev)
 	if (err)
 		return err;
 
-	if (rbd_dev->opts->trim) {
-		lim.discard_granularity = rbd_dev->opts->alloc_size;
-		lim.max_hw_discard_sectors = objset_bytes >> SECTOR_SHIFT;
-		lim.max_write_zeroes_sectors = objset_bytes >> SECTOR_SHIFT;
-	}
-
-	if (!ceph_test_opt(rbd_dev->rbd_client->client, NOCRC))
-		lim.features |= BLK_FEAT_STABLE_WRITES;
-
-	disk = blk_mq_alloc_disk(&rbd_dev->tag_set, &lim, rbd_dev);
+	disk = blk_mq_alloc_disk(&rbd_dev->tag_set, rbd_dev);
 	if (IS_ERR(disk)) {
 		err = PTR_ERR(disk);
 		goto out_tag_set;
 	}
+	q = disk->queue;
 
 	snprintf(disk->disk_name, sizeof(disk->disk_name), RBD_DRV_NAME "%d",
 		 rbd_dev->dev_id);
@@ -4996,6 +4984,26 @@ static int rbd_init_disk(struct rbd_device *rbd_dev)
 		disk->minors = RBD_MINORS_PER_MAJOR;
 	disk->fops = &rbd_bd_ops;
 	disk->private_data = rbd_dev;
+
+	blk_queue_flag_set(QUEUE_FLAG_NONROT, q);
+	/* QUEUE_FLAG_ADD_RANDOM is off by default for blk-mq */
+
+	blk_queue_max_hw_sectors(q, objset_bytes >> SECTOR_SHIFT);
+	q->limits.max_sectors = queue_max_hw_sectors(q);
+	blk_queue_max_segments(q, USHRT_MAX);
+	blk_queue_max_segment_size(q, UINT_MAX);
+	blk_queue_io_min(q, rbd_dev->opts->alloc_size);
+	blk_queue_io_opt(q, rbd_dev->opts->alloc_size);
+
+	if (rbd_dev->opts->trim) {
+		q->limits.discard_granularity = rbd_dev->opts->alloc_size;
+		blk_queue_max_discard_sectors(q, objset_bytes >> SECTOR_SHIFT);
+		blk_queue_max_write_zeroes_sectors(q, objset_bytes >> SECTOR_SHIFT);
+	}
+
+	if (!ceph_test_opt(rbd_dev->rbd_client->client, NOCRC))
+		blk_queue_flag_set(QUEUE_FLAG_STABLE_WRITES, q);
+
 	rbd_dev->disk = disk;
 
 	return 0;
@@ -5325,7 +5333,7 @@ static void rbd_dev_release(struct device *dev)
 
 	if (need_put) {
 		destroy_workqueue(rbd_dev->task_wq);
-		ida_free(&rbd_dev_id_ida, rbd_dev->dev_id);
+		ida_simple_remove(&rbd_dev_id_ida, rbd_dev->dev_id);
 	}
 
 	rbd_dev_free(rbd_dev);
@@ -5401,9 +5409,9 @@ static struct rbd_device *rbd_dev_create(struct rbd_client *rbdc,
 		return NULL;
 
 	/* get an id and fill in device name */
-	rbd_dev->dev_id = ida_alloc_max(&rbd_dev_id_ida,
-					minor_to_rbd_dev_id(1 << MINORBITS) - 1,
-					GFP_KERNEL);
+	rbd_dev->dev_id = ida_simple_get(&rbd_dev_id_ida, 0,
+					 minor_to_rbd_dev_id(1 << MINORBITS),
+					 GFP_KERNEL);
 	if (rbd_dev->dev_id < 0)
 		goto fail_rbd_dev;
 
@@ -5424,7 +5432,7 @@ static struct rbd_device *rbd_dev_create(struct rbd_client *rbdc,
 	return rbd_dev;
 
 fail_dev_id:
-	ida_free(&rbd_dev_id_ida, rbd_dev->dev_id);
+	ida_simple_remove(&rbd_dev_id_ida, rbd_dev->dev_id);
 fail_rbd_dev:
 	rbd_dev_free(rbd_dev);
 	return NULL;
@@ -7075,7 +7083,9 @@ out:
 	return ret;
 }
 
-static ssize_t do_rbd_add(const char *buf, size_t count)
+static ssize_t do_rbd_add(struct bus_type *bus,
+			  const char *buf,
+			  size_t count)
 {
 	struct rbd_device *rbd_dev = NULL;
 	struct ceph_options *ceph_opts = NULL;
@@ -7187,18 +7197,18 @@ err_out_args:
 	goto out;
 }
 
-static ssize_t add_store(const struct bus_type *bus, const char *buf, size_t count)
+static ssize_t add_store(struct bus_type *bus, const char *buf, size_t count)
 {
 	if (single_major)
 		return -EINVAL;
 
-	return do_rbd_add(buf, count);
+	return do_rbd_add(bus, buf, count);
 }
 
-static ssize_t add_single_major_store(const struct bus_type *bus, const char *buf,
+static ssize_t add_single_major_store(struct bus_type *bus, const char *buf,
 				      size_t count)
 {
-	return do_rbd_add(buf, count);
+	return do_rbd_add(bus, buf, count);
 }
 
 static void rbd_dev_remove_parent(struct rbd_device *rbd_dev)
@@ -7228,9 +7238,12 @@ static void rbd_dev_remove_parent(struct rbd_device *rbd_dev)
 	}
 }
 
-static ssize_t do_rbd_remove(const char *buf, size_t count)
+static ssize_t do_rbd_remove(struct bus_type *bus,
+			     const char *buf,
+			     size_t count)
 {
 	struct rbd_device *rbd_dev = NULL;
+	struct list_head *tmp;
 	int dev_id;
 	char opt_buf[6];
 	bool force = false;
@@ -7257,7 +7270,8 @@ static ssize_t do_rbd_remove(const char *buf, size_t count)
 
 	ret = -ENOENT;
 	spin_lock(&rbd_dev_list_lock);
-	list_for_each_entry(rbd_dev, &rbd_dev_list, node) {
+	list_for_each(tmp, &rbd_dev_list) {
+		rbd_dev = list_entry(tmp, struct rbd_device, node);
 		if (rbd_dev->dev_id == dev_id) {
 			ret = 0;
 			break;
@@ -7281,10 +7295,8 @@ static ssize_t do_rbd_remove(const char *buf, size_t count)
 		 * Prevent new IO from being queued and wait for existing
 		 * IO to complete/fail.
 		 */
-		unsigned int memflags = blk_mq_freeze_queue(rbd_dev->disk->queue);
-
+		blk_mq_freeze_queue(rbd_dev->disk->queue);
 		blk_mark_disk_dead(rbd_dev->disk);
-		blk_mq_unfreeze_queue(rbd_dev->disk->queue, memflags);
 	}
 
 	del_gendisk(rbd_dev->disk);
@@ -7300,18 +7312,18 @@ static ssize_t do_rbd_remove(const char *buf, size_t count)
 	return count;
 }
 
-static ssize_t remove_store(const struct bus_type *bus, const char *buf, size_t count)
+static ssize_t remove_store(struct bus_type *bus, const char *buf, size_t count)
 {
 	if (single_major)
 		return -EINVAL;
 
-	return do_rbd_remove(buf, count);
+	return do_rbd_remove(bus, buf, count);
 }
 
-static ssize_t remove_single_major_store(const struct bus_type *bus, const char *buf,
+static ssize_t remove_single_major_store(struct bus_type *bus, const char *buf,
 					 size_t count)
 {
-	return do_rbd_remove(buf, count);
+	return do_rbd_remove(bus, buf, count);
 }
 
 /*
@@ -7389,7 +7401,7 @@ static int __init rbd_init(void)
 	 * The number of active work items is limited by the number of
 	 * rbd devices * queue depth, so leave @max_active at default.
 	 */
-	rbd_wq = alloc_workqueue(RBD_DRV_NAME, WQ_MEM_RECLAIM | WQ_PERCPU, 0);
+	rbd_wq = alloc_workqueue(RBD_DRV_NAME, WQ_MEM_RECLAIM, 0);
 	if (!rbd_wq) {
 		rc = -ENOMEM;
 		goto err_out_slab;

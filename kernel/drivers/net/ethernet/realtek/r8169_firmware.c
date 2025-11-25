@@ -151,6 +151,9 @@ void rtl_fw_write_firmware(struct rtl8169_private *tp, struct rtl_fw *rtl_fw)
 		u32 regno = (action & 0x0fff0000) >> 16;
 		enum rtl_fw_opcode opcode = action >> 28;
 
+		if (!action)
+			break;
+
 		switch (opcode) {
 		case PHY_READ:
 			predata = fw_read(tp, regno);
@@ -215,7 +218,7 @@ int rtl_fw_request_firmware(struct rtl_fw *rtl_fw)
 {
 	int rc;
 
-	rc = firmware_request_nowarn(&rtl_fw->fw, rtl_fw->fw_name, rtl_fw->dev);
+	rc = request_firmware(&rtl_fw->fw, rtl_fw->fw_name, rtl_fw->dev);
 	if (rc < 0)
 		goto out;
 
@@ -227,7 +230,7 @@ int rtl_fw_request_firmware(struct rtl_fw *rtl_fw)
 
 	return 0;
 out:
-	dev_warn(rtl_fw->dev, "Unable to load firmware %s (%d)\n",
-		 rtl_fw->fw_name, rc);
+	dev_err(rtl_fw->dev, "Unable to load firmware %s (%d)\n",
+		rtl_fw->fw_name, rc);
 	return rc;
 }

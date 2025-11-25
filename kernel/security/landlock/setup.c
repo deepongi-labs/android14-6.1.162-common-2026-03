@@ -9,27 +9,18 @@
 #include <linux/bits.h>
 #include <linux/init.h>
 #include <linux/lsm_hooks.h>
-#include <uapi/linux/lsm.h>
 
 #include "common.h"
 #include "cred.h"
 #include "errata.h"
 #include "fs.h"
-#include "id.h"
-#include "net.h"
+#include "ptrace.h"
 #include "setup.h"
-#include "task.h"
 
-bool landlock_initialized __ro_after_init = false;
+bool landlock_initialized __lsm_ro_after_init = false;
 
-const struct lsm_id landlock_lsmid = {
-	.name = LANDLOCK_NAME,
-	.id = LSM_ID_LANDLOCK,
-};
-
-struct lsm_blob_sizes landlock_blob_sizes __ro_after_init = {
+struct lsm_blob_sizes landlock_blob_sizes __lsm_ro_after_init = {
 	.lbs_cred = sizeof(struct landlock_cred_security),
-	.lbs_file = sizeof(struct landlock_file_security),
 	.lbs_inode = sizeof(struct landlock_inode_security),
 	.lbs_superblock = sizeof(struct landlock_superblock_security),
 };
@@ -65,10 +56,8 @@ static int __init landlock_init(void)
 {
 	compute_errata();
 	landlock_add_cred_hooks();
-	landlock_add_task_hooks();
+	landlock_add_ptrace_hooks();
 	landlock_add_fs_hooks();
-	landlock_add_net_hooks();
-	landlock_init_id();
 	landlock_initialized = true;
 	pr_info("Up and running.\n");
 	return 0;

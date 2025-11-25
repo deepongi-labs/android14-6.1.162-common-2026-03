@@ -25,7 +25,7 @@
  * Copyright (C) 2004  Chris Kennedy <c@groovy.org>
  *
  * VBI additions & cleanup:
- * Copyright (C) 2004, 2005 Hans Verkuil <hverkuil@kernel.org>
+ * Copyright (C) 2004, 2005 Hans Verkuil <hverkuil@xs4all.nl>
  *
  * Note: the saa7126 is identical to the saa7127, and the saa7128 is
  * identical to the saa7129, except that the saa7126 and saa7128 have
@@ -708,9 +708,9 @@ static const struct v4l2_subdev_ops saa7127_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int saa7127_probe(struct i2c_client *client)
+static int saa7127_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct saa7127_state *state;
 	struct v4l2_subdev *sd;
 	struct v4l2_sliced_vbi_data vbi = { 0, 0, 0, 0 };  /* set to disabled */

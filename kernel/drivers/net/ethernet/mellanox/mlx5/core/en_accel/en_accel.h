@@ -42,8 +42,6 @@
 #include <en_accel/macsec.h>
 #include "en.h"
 #include "en/txrx.h"
-#include "en_accel/psp.h"
-#include "en_accel/psp_rxtx.h"
 
 #if IS_ENABLED(CONFIG_GENEVE)
 #include <net/geneve.h>
@@ -121,9 +119,6 @@ struct mlx5e_accel_tx_state {
 #ifdef CONFIG_MLX5_EN_IPSEC
 	struct mlx5e_accel_tx_ipsec_state ipsec;
 #endif
-#ifdef CONFIG_MLX5_EN_PSP
-	struct mlx5e_accel_tx_psp_state psp_st;
-#endif
 };
 
 static inline bool mlx5e_accel_tx_begin(struct net_device *dev,
@@ -135,18 +130,11 @@ static inline bool mlx5e_accel_tx_begin(struct net_device *dev,
 		mlx5e_udp_gso_handle_tx_skb(skb);
 
 #ifdef CONFIG_MLX5_EN_TLS
-	/* May send WQEs. */
-	if (tls_is_skb_tx_device_offloaded(skb))
+	/* May send SKBs and WQEs. */
+	if (mlx5e_ktls_skb_offloaded(skb))
 		if (unlikely(!mlx5e_ktls_handle_tx_skb(dev, sq, skb,
 						       &state->tls)))
 			return false;
-#endif
-
-#ifdef CONFIG_MLX5_EN_PSP
-	if (mlx5e_psp_is_offload(skb, dev)) {
-		if (unlikely(!mlx5e_psp_handle_tx_skb(dev, skb, &state->psp_st)))
-			return false;
-	}
 #endif
 
 #ifdef CONFIG_MLX5_EN_IPSEC
@@ -156,7 +144,7 @@ static inline bool mlx5e_accel_tx_begin(struct net_device *dev,
 	}
 #endif
 
-#ifdef CONFIG_MLX5_MACSEC
+#ifdef CONFIG_MLX5_EN_MACSEC
 	if (unlikely(mlx5e_macsec_skb_is_offload(skb))) {
 		struct mlx5e_priv *priv = netdev_priv(dev);
 
@@ -169,14 +157,8 @@ static inline bool mlx5e_accel_tx_begin(struct net_device *dev,
 }
 
 static inline unsigned int mlx5e_accel_tx_ids_len(struct mlx5e_txqsq *sq,
-						  struct sk_buff *skb,
 						  struct mlx5e_accel_tx_state *state)
 {
-#ifdef CONFIG_MLX5_EN_PSP
-	if (mlx5e_psp_is_offload_state(&state->psp_st))
-		return mlx5e_psp_tx_ids_len(&state->psp_st);
-#endif
-
 #ifdef CONFIG_MLX5_EN_IPSEC
 	if (test_bit(MLX5E_SQ_STATE_IPSEC, &sq->state))
 		return mlx5e_ipsec_tx_ids_len(&state->ipsec);
@@ -190,20 +172,14 @@ static inline unsigned int mlx5e_accel_tx_ids_len(struct mlx5e_txqsq *sq,
 
 static inline void mlx5e_accel_tx_eseg(struct mlx5e_priv *priv,
 				       struct sk_buff *skb,
-				       struct mlx5e_accel_tx_state *accel,
 				       struct mlx5_wqe_eth_seg *eseg, u16 ihs)
 {
-#ifdef CONFIG_MLX5_EN_PSP
-	if (mlx5e_psp_is_offload_state(&accel->psp_st))
-		mlx5e_psp_tx_build_eseg(priv, skb, &accel->psp_st, eseg);
-#endif
-
 #ifdef CONFIG_MLX5_EN_IPSEC
 	if (xfrm_offload(skb))
 		mlx5e_ipsec_tx_build_eseg(priv, skb, eseg);
 #endif
 
-#ifdef CONFIG_MLX5_MACSEC
+#ifdef CONFIG_MLX5_EN_MACSEC
 	if (unlikely(mlx5e_macsec_skb_is_offload(skb)))
 		mlx5e_macsec_tx_build_eseg(priv->macsec, skb, eseg);
 #endif
@@ -223,11 +199,6 @@ static inline void mlx5e_accel_tx_finish(struct mlx5e_txqsq *sq,
 	mlx5e_ktls_handle_tx_wqe(&wqe->ctrl, &state->tls);
 #endif
 
-#ifdef CONFIG_MLX5_EN_PSP
-	if (mlx5e_psp_is_offload_state(&state->psp_st))
-		mlx5e_psp_handle_tx_wqe(wqe, &state->psp_st, inlseg);
-#endif
-
 #ifdef CONFIG_MLX5_EN_IPSEC
 	if (test_bit(MLX5E_SQ_STATE_IPSEC, &sq->state) &&
 	    state->ipsec.xo && state->ipsec.tailen)
@@ -237,40 +208,21 @@ static inline void mlx5e_accel_tx_finish(struct mlx5e_txqsq *sq,
 
 static inline int mlx5e_accel_init_rx(struct mlx5e_priv *priv)
 {
-	int err;
-
-	err = mlx5_accel_psp_fs_init_rx_tables(priv);
-	if (err)
-		goto out;
-
-	err = mlx5e_ktls_init_rx(priv);
-	if (err)
-		mlx5_accel_psp_fs_cleanup_rx_tables(priv);
-
-out:
-	return err;
+	return mlx5e_ktls_init_rx(priv);
 }
 
 static inline void mlx5e_accel_cleanup_rx(struct mlx5e_priv *priv)
 {
 	mlx5e_ktls_cleanup_rx(priv);
-	mlx5_accel_psp_fs_cleanup_rx_tables(priv);
 }
 
 static inline int mlx5e_accel_init_tx(struct mlx5e_priv *priv)
 {
-	int err;
-
-	err = mlx5_accel_psp_fs_init_tx_tables(priv);
-	if (err)
-		return err;
-
 	return mlx5e_ktls_init_tx(priv);
 }
 
 static inline void mlx5e_accel_cleanup_tx(struct mlx5e_priv *priv)
 {
 	mlx5e_ktls_cleanup_tx(priv);
-	mlx5_accel_psp_fs_cleanup_tx_tables(priv);
 }
 #endif /* __MLX5E_EN_ACCEL_H__ */

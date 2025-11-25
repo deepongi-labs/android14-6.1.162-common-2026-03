@@ -44,30 +44,25 @@ static int fan_get_max_state(struct thermal_cooling_device *cdev, unsigned long
 	return 0;
 }
 
-int acpi_fan_get_fst(acpi_handle handle, struct acpi_fan_fst *fst)
+int acpi_fan_get_fst(struct acpi_device *device, struct acpi_fan_fst *fst)
 {
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *obj;
 	acpi_status status;
 	int ret = 0;
 
-	status = acpi_evaluate_object(handle, "_FST", NULL, &buffer);
-	if (ACPI_FAILURE(status))
-		return -EIO;
-
-	obj = buffer.pointer;
-	if (!obj)
-		return -ENODATA;
-
-	if (obj->type != ACPI_TYPE_PACKAGE || obj->package.count != 3) {
-		ret = -EPROTO;
-		goto err;
+	status = acpi_evaluate_object(device->handle, "_FST", NULL, &buffer);
+	if (ACPI_FAILURE(status)) {
+		dev_err(&device->dev, "Get fan state failed\n");
+		return -ENODEV;
 	}
 
-	if (obj->package.elements[0].type != ACPI_TYPE_INTEGER ||
-	    obj->package.elements[1].type != ACPI_TYPE_INTEGER ||
-	    obj->package.elements[2].type != ACPI_TYPE_INTEGER) {
-		ret = -EPROTO;
+	obj = buffer.pointer;
+	if (!obj || obj->type != ACPI_TYPE_PACKAGE ||
+	    obj->package.count != 3 ||
+	    obj->package.elements[1].type != ACPI_TYPE_INTEGER) {
+		dev_err(&device->dev, "Invalid _FST data\n");
+		ret = -EINVAL;
 		goto err;
 	}
 
@@ -86,7 +81,7 @@ static int fan_get_state_acpi4(struct acpi_device *device, unsigned long *state)
 	struct acpi_fan_fst fst;
 	int status, i;
 
-	status = acpi_fan_get_fst(device->handle, &fst);
+	status = acpi_fan_get_fst(device, &fst);
 	if (status)
 		return status;
 
@@ -107,7 +102,7 @@ match_fps:
 			break;
 	}
 	if (i == fan->fps_count) {
-		dev_dbg(&device->dev, "No matching fps control value\n");
+		dev_dbg(&device->dev, "Invalid control value returned\n");
 		return -EINVAL;
 	}
 
@@ -208,6 +203,14 @@ static const struct thermal_cooling_device_ops fan_cooling_ops = {
  * --------------------------------------------------------------------------
 */
 
+static bool acpi_fan_is_acpi4(struct acpi_device *device)
+{
+	return acpi_has_method(device->handle, "_FIF") &&
+	       acpi_has_method(device->handle, "_FPS") &&
+	       acpi_has_method(device->handle, "_FSL") &&
+	       acpi_has_method(device->handle, "_FST");
+}
+
 static int acpi_fan_get_fif(struct acpi_device *device)
 {
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
@@ -233,7 +236,6 @@ static int acpi_fan_get_fif(struct acpi_device *device)
 	if (ACPI_FAILURE(status)) {
 		dev_err(&device->dev, "Invalid _FIF element\n");
 		status = -EINVAL;
-		goto err;
 	}
 
 	fan->fif.revision = fields[0];
@@ -316,27 +318,15 @@ static int acpi_fan_probe(struct platform_device *pdev)
 	struct acpi_device *device = ACPI_COMPANION(&pdev->dev);
 	char *name;
 
-	if (!device)
-		return -ENODEV;
-
 	fan = devm_kzalloc(&pdev->dev, sizeof(*fan), GFP_KERNEL);
 	if (!fan) {
 		dev_err(&device->dev, "No memory for fan\n");
 		return -ENOMEM;
 	}
-
-	fan->handle = device->handle;
 	device->driver_data = fan;
 	platform_set_drvdata(pdev, fan);
 
-	if (acpi_has_method(device->handle, "_FST")) {
-		fan->has_fst = true;
-		fan->acpi4 = acpi_has_method(device->handle, "_FIF") &&
-				acpi_has_method(device->handle, "_FPS") &&
-				acpi_has_method(device->handle, "_FSL");
-	}
-
-	if (fan->acpi4) {
+	if (acpi_fan_is_acpi4(device)) {
 		result = acpi_fan_get_fif(device);
 		if (result)
 			return result;
@@ -344,19 +334,13 @@ static int acpi_fan_probe(struct platform_device *pdev)
 		result = acpi_fan_get_fps(device);
 		if (result)
 			return result;
-	}
-
-	if (fan->has_fst) {
-		result = devm_acpi_fan_create_hwmon(&pdev->dev);
-		if (result)
-			return result;
 
 		result = acpi_fan_create_attributes(device);
 		if (result)
 			return result;
-	}
 
-	if (!fan->acpi4) {
+		fan->acpi4 = true;
+	} else {
 		result = acpi_device_update_power(device, NULL);
 		if (result) {
 			dev_err(&device->dev, "Failed to set initial power state\n");
@@ -402,17 +386,17 @@ err_remove_link:
 err_unregister:
 	thermal_cooling_device_unregister(cdev);
 err_end:
-	if (fan->has_fst)
+	if (fan->acpi4)
 		acpi_fan_delete_attributes(device);
 
 	return result;
 }
 
-static void acpi_fan_remove(struct platform_device *pdev)
+static int acpi_fan_remove(struct platform_device *pdev)
 {
 	struct acpi_fan *fan = platform_get_drvdata(pdev);
 
-	if (fan->has_fst) {
+	if (fan->acpi4) {
 		struct acpi_device *device = ACPI_COMPANION(&pdev->dev);
 
 		acpi_fan_delete_attributes(device);
@@ -420,6 +404,8 @@ static void acpi_fan_remove(struct platform_device *pdev)
 	sysfs_remove_link(&pdev->dev.kobj, "thermal_cooling");
 	sysfs_remove_link(&fan->cdev->device.kobj, "device");
 	thermal_cooling_device_unregister(fan->cdev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

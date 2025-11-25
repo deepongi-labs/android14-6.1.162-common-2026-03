@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/pinctrl/pinctrl.h>
 
 #include "pinctrl-sunxi.h"
@@ -46,7 +47,6 @@ static const struct sunxi_desc_pin d1_pins[] = {
 		SUNXI_FUNCTION(0x5, "i2s2_din"),	/* DIN2 */
 		SUNXI_FUNCTION(0x6, "lcd0"),		/* D18 */
 		SUNXI_FUNCTION(0x7, "uart4"),		/* TX */
-		SUNXI_FUNCTION(0x8, "can0"),		/* TX */
 		SUNXI_FUNCTION_IRQ_BANK(0xe, 0, 2)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 3),
 		SUNXI_FUNCTION(0x0, "gpio_in"),
@@ -57,7 +57,6 @@ static const struct sunxi_desc_pin d1_pins[] = {
 		SUNXI_FUNCTION(0x5, "i2s2_din"),	/* DIN0 */
 		SUNXI_FUNCTION(0x6, "lcd0"),		/* D19 */
 		SUNXI_FUNCTION(0x7, "uart4"),		/* RX */
-		SUNXI_FUNCTION(0x8, "can0"),		/* RX */
 		SUNXI_FUNCTION_IRQ_BANK(0xe, 0, 3)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 4),
 		SUNXI_FUNCTION(0x0, "gpio_in"),
@@ -68,7 +67,6 @@ static const struct sunxi_desc_pin d1_pins[] = {
 		SUNXI_FUNCTION(0x5, "i2s2_din"),	/* DIN1 */
 		SUNXI_FUNCTION(0x6, "lcd0"),		/* D20 */
 		SUNXI_FUNCTION(0x7, "uart5"),		/* TX */
-		SUNXI_FUNCTION(0x8, "can1"),		/* TX */
 		SUNXI_FUNCTION_IRQ_BANK(0xe, 0, 4)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 5),
 		SUNXI_FUNCTION(0x0, "gpio_in"),
@@ -79,7 +77,6 @@ static const struct sunxi_desc_pin d1_pins[] = {
 		SUNXI_FUNCTION(0x5, "pwm0"),
 		SUNXI_FUNCTION(0x6, "lcd0"),		/* D21 */
 		SUNXI_FUNCTION(0x7, "uart5"),		/* RX */
-		SUNXI_FUNCTION(0x8, "can1"),		/* RX */
 		SUNXI_FUNCTION_IRQ_BANK(0xe, 0, 5)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 6),
 		SUNXI_FUNCTION(0x0, "gpio_in"),
@@ -820,13 +817,15 @@ static const struct sunxi_pinctrl_desc d1_pinctrl_data = {
 
 static int d1_pinctrl_probe(struct platform_device *pdev)
 {
-	return sunxi_pinctrl_init_with_flags(pdev, &d1_pinctrl_data,
-					     SUNXI_PINCTRL_NEW_REG_LAYOUT);
+	unsigned long variant = (unsigned long)of_device_get_match_data(&pdev->dev);
+
+	return sunxi_pinctrl_init_with_variant(pdev, &d1_pinctrl_data, variant);
 }
 
 static const struct of_device_id d1_pinctrl_match[] = {
 	{
 		.compatible = "allwinner,sun20i-d1-pinctrl",
+		.data = (void *)PINCTRL_SUN20I_D1
 	},
 	{}
 };

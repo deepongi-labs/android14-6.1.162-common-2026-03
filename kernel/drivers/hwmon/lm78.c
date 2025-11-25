@@ -627,6 +627,8 @@ static int lm78_i2c_detect(struct i2c_client *client,
 	return -ENODEV;
 }
 
+static const struct i2c_device_id lm78_i2c_id[];
+
 static int lm78_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -638,7 +640,7 @@ static int lm78_i2c_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	data->client = client;
-	data->type = (uintptr_t)i2c_get_match_data(client);
+	data->type = i2c_match_id(lm78_i2c_id, client)->driver_data;
 
 	/* Initialize the LM78 chip */
 	lm78_init_device(data);
@@ -660,7 +662,7 @@ static struct i2c_driver lm78_driver = {
 	.driver = {
 		.name	= "lm78",
 	},
-	.probe		= lm78_i2c_probe,
+	.probe_new	= lm78_i2c_probe,
 	.id_table	= lm78_i2c_id,
 	.detect		= lm78_i2c_detect,
 	.address_list	= normal_i2c,

@@ -10,7 +10,6 @@
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/string_choices.h>
 #include <linux/types.h>
 
 /* include interfaces to usb layer */
@@ -55,6 +54,8 @@ static int usb_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int num)
 	struct i2c_msg *pmsg;
 	int i, ret;
 
+	dev_dbg(&adapter->dev, "master xfer %d messages:\n", num);
+
 	pstatus = kmalloc(sizeof(*pstatus), GFP_KERNEL);
 	if (!pstatus)
 		return -ENOMEM;
@@ -72,7 +73,7 @@ static int usb_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int num)
 
 		dev_dbg(&adapter->dev,
 			"  %d: %s (flags %d) %d bytes to 0x%02x\n",
-			i, str_read_write(pmsg->flags & I2C_M_RD),
+			i, pmsg->flags & I2C_M_RD ? "read" : "write",
 			pmsg->flags, pmsg->len, pmsg->addr);
 
 		/* and directly send the message */
@@ -146,8 +147,8 @@ static const struct i2c_adapter_quirks usb_quirks = {
 
 /* This is the actual algorithm we define */
 static const struct i2c_algorithm usb_algorithm = {
-	.xfer = usb_xfer,
-	.functionality = usb_func,
+	.master_xfer	= usb_xfer,
+	.functionality	= usb_func,
 };
 
 /* ----- end of i2c layer ------------------------------------------------ */
@@ -225,10 +226,6 @@ static int i2c_tiny_usb_probe(struct usb_interface *interface,
 	struct i2c_tiny_usb *dev;
 	int retval = -ENOMEM;
 	u16 version;
-
-	if (interface->intf_assoc &&
-	    interface->intf_assoc->bFunctionClass != USB_CLASS_VENDOR_SPEC)
-		return -ENODEV;
 
 	dev_dbg(&interface->dev, "probing usb device\n");
 

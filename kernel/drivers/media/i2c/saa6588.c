@@ -448,7 +448,8 @@ static const struct v4l2_subdev_ops saa6588_ops = {
 
 /* ---------------------------------------------------------------------- */
 
-static int saa6588_probe(struct i2c_client *client)
+static int saa6588_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct saa6588 *s;
 	struct v4l2_subdev *sd;
@@ -496,7 +497,7 @@ static void saa6588_remove(struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static const struct i2c_device_id saa6588_id[] = {
-	{ "saa6588" },
+	{ "saa6588", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, saa6588_id);

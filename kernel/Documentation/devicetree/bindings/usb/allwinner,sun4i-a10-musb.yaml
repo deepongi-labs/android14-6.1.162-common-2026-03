@@ -13,19 +13,15 @@ maintainers:
 properties:
   compatible:
     oneOf:
-      - enum:
-          - allwinner,sun4i-a10-musb
-          - allwinner,sun6i-a31-musb
-          - allwinner,sun8i-a33-musb
-          - allwinner,sun8i-h3-musb
-          - allwinner,suniv-f1c100s-musb
+      - const: allwinner,sun4i-a10-musb
+      - const: allwinner,sun6i-a31-musb
+      - const: allwinner,sun8i-a33-musb
+      - const: allwinner,sun8i-h3-musb
       - items:
           - enum:
               - allwinner,sun8i-a83t-musb
               - allwinner,sun20i-d1-musb
-              - allwinner,sun50i-a100-musb
               - allwinner,sun50i-h6-musb
-              - allwinner,sun55i-a523-musb
           - const: allwinner,sun8i-a33-musb
       - items:
           - const: allwinner,sun50i-h616-musb

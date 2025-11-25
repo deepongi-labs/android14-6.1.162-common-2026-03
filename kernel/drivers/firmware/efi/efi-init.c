@@ -12,7 +12,6 @@
 #include <linux/efi.h>
 #include <linux/fwnode.h>
 #include <linux/init.h>
-#include <linux/kexec_handover.h>
 #include <linux/memblock.h>
 #include <linux/mm_types.h>
 #include <linux/of.h>
@@ -22,8 +21,6 @@
 #include <linux/screen_info.h>
 
 #include <asm/efi.h>
-
-unsigned long __initdata screen_info_table = EFI_INVALID_TABLE_ADDR;
 
 static int __init is_memory(efi_memory_desc_t *md)
 {
@@ -56,36 +53,11 @@ static phys_addr_t __init efi_to_phys(unsigned long addr)
 
 extern __weak const efi_config_table_type_t efi_arch_tables[];
 
-/*
- * x86 defines its own screen_info and uses it even without EFI,
- * everything else can get it from here.
- */
-#if !defined(CONFIG_X86) && (defined(CONFIG_SYSFB) || defined(CONFIG_EFI_EARLYCON))
-struct screen_info screen_info __section(".data");
-EXPORT_SYMBOL_GPL(screen_info);
-#endif
-
 static void __init init_screen_info(void)
 {
-	struct screen_info *si;
-
-	if (screen_info_table != EFI_INVALID_TABLE_ADDR) {
-		si = early_memremap(screen_info_table, sizeof(*si));
-		if (!si) {
-			pr_err("Could not map screen_info config table\n");
-			return;
-		}
-		screen_info = *si;
-		memset(si, 0, sizeof(*si));
-		early_memunmap(si, sizeof(*si));
-
-		if (memblock_is_map_memory(screen_info.lfb_base))
-			memblock_mark_nomap(screen_info.lfb_base,
-					    screen_info.lfb_size);
-
-		if (IS_ENABLED(CONFIG_EFI_EARLYCON))
-			efi_earlycon_reprobe();
-	}
+	if (screen_info.orig_video_isVGA == VIDEO_TYPE_EFI &&
+	    memblock_is_map_memory(screen_info.lfb_base))
+		memblock_mark_nomap(screen_info.lfb_base, screen_info.lfb_size);
 }
 
 static int __init uefi_init(u64 efi_system_table)
@@ -105,7 +77,7 @@ static int __init uefi_init(u64 efi_system_table)
 	if (IS_ENABLED(CONFIG_64BIT))
 		set_bit(EFI_64BIT, &efi.flags);
 
-	retval = efi_systab_check_header(&systab->hdr);
+	retval = efi_systab_check_header(&systab->hdr, 2);
 	if (retval)
 		goto out;
 
@@ -165,32 +137,12 @@ static __init void reserve_regions(void)
 		pr_info("Processing EFI memory map:\n");
 
 	/*
-	 * Discard memblocks discovered so far except for KHO scratch
-	 * regions. Most memblocks at this point originate from memory nodes
-	 * in the DT and UEFI uses its own memory map instead. However, if
-	 * KHO is enabled, scratch regions, which are good known memory
-	 * must be preserved.
+	 * Discard memblocks discovered so far: if there are any at this
+	 * point, they originate from memory nodes in the DT, and UEFI
+	 * uses its own memory map instead.
 	 */
 	memblock_dump_all();
-
-	if (is_kho_boot()) {
-		struct memblock_region *r;
-
-		/* Remove all non-KHO regions */
-		for_each_mem_region(r) {
-			if (!memblock_is_kho_scratch(r)) {
-				memblock_remove(r->base, r->size);
-				r--;
-			}
-		}
-	} else {
-		/*
-		 * KHO is disabled. Discard memblocks discovered so far:
-		 * if there are any at this point, they originate from memory
-		 * nodes in the DT, and UEFI uses its own memory map instead.
-		 */
-		memblock_remove(0, PHYS_ADDR_MAX);
-	}
+	memblock_remove(0, PHYS_ADDR_MAX);
 
 	for_each_efi_memory_desc(md) {
 		paddr = md->phys_addr;
@@ -271,8 +223,5 @@ void __init efi_init(void)
 	memblock_reserve(data.phys_map & PAGE_MASK,
 			 PAGE_ALIGN(data.size + (data.phys_map & ~PAGE_MASK)));
 
-	if (IS_ENABLED(CONFIG_X86) ||
-	    IS_ENABLED(CONFIG_SYSFB) ||
-	    IS_ENABLED(CONFIG_EFI_EARLYCON))
-		init_screen_info();
+	init_screen_info();
 }

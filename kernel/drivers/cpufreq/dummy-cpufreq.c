@@ -39,6 +39,7 @@ static struct cpufreq_driver dummy_cpufreq_driver = {
 	.init = dummy_cpufreq_driver_init,
 	.get = dummy_cpufreq_get,
 	.verify = dummy_cpufreq_verify,
+	.attr = cpufreq_generic_attr,
 };
 
 static int __init dummy_cpufreq_init(void)

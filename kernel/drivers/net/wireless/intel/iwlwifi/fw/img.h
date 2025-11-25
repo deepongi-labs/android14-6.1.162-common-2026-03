@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2005-2014, 2018-2024 Intel Corporation
+ * Copyright (C) 2005-2014, 2018-2021 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016 Intel Deutschland GmbH
  */
@@ -51,10 +51,8 @@ struct iwl_ucode_capabilities {
 	u32 error_log_addr;
 	u32 error_log_size;
 	u32 num_stations;
-	u32 num_links;
-	u32 num_beacons;
-	DECLARE_BITMAP(_api, NUM_IWL_UCODE_TLV_API);
-	DECLARE_BITMAP(_capa, NUM_IWL_UCODE_TLV_CAPA);
+	unsigned long _api[BITS_TO_LONGS(NUM_IWL_UCODE_TLV_API)];
+	unsigned long _capa[BITS_TO_LONGS(NUM_IWL_UCODE_TLV_CAPA)];
 
 	const struct iwl_fw_cmd_version *cmd_versions;
 	u32 n_cmd_versions;
@@ -184,10 +182,10 @@ struct iwl_dump_exclude {
  * @enhance_sensitivity_table: device can do enhanced sensitivity.
  * @init_evtlog_ptr: event log offset for init ucode.
  * @init_evtlog_size: event log size for init ucode.
- * @init_errlog_ptr: error log offset for init ucode.
+ * @init_errlog_ptr: error log offfset for init ucode.
  * @inst_evtlog_ptr: event log offset for runtime ucode.
  * @inst_evtlog_size: event log size for runtime ucode.
- * @inst_errlog_ptr: error log offset for runtime ucode.
+ * @inst_errlog_ptr: error log offfset for runtime ucode.
  * @type: firmware type (&enum iwl_fw_type)
  * @human_readable: human readable version
  *	we get the ALIVE from the uCode
@@ -195,13 +193,11 @@ struct iwl_dump_exclude {
  * @phy_integration_ver_len: length of @phy_integration_ver
  * @dump_excl: image dump exclusion areas for RT image
  * @dump_excl_wowlan: image dump exclusion areas for WoWLAN image
- * @pnvm_data: PNVM data embedded in the .ucode file, if any
- * @pnvm_size: size of the embedded PNVM data
  */
 struct iwl_fw {
 	u32 ucode_ver;
 
-	char fw_version[128];
+	char fw_version[64];
 
 	/* ucode images */
 	struct fw_img img[IWL_UCODE_TYPE_MAX];
@@ -229,9 +225,6 @@ struct iwl_fw {
 	u32 phy_integration_ver_len;
 
 	struct iwl_dump_exclude dump_excl[2], dump_excl_wowlan[2];
-
-	const void *pnvm_data;
-	u32 pnvm_size;
 };
 
 static inline const char *get_fw_dbg_mode_string(int mode)

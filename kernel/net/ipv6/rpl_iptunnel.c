@@ -13,7 +13,7 @@
 #include <net/rpl.h>
 
 struct rpl_iptunnel_encap {
-	DECLARE_FLEX_ARRAY(struct ipv6_rpl_sr_hdr, srh);
+	struct ipv6_rpl_sr_hdr srh[0];
 };
 
 struct rpl_lwt {
@@ -129,13 +129,13 @@ static int rpl_do_srh_inline(struct sk_buff *skb, const struct rpl_lwt *rlwt,
 			     struct dst_entry *cache_dst)
 {
 	struct ipv6_rpl_sr_hdr *isrh, *csrh;
-	struct ipv6hdr oldhdr;
+	const struct ipv6hdr *oldhdr;
 	struct ipv6hdr *hdr;
 	unsigned char *buf;
 	size_t hdrlen;
 	int err;
 
-	memcpy(&oldhdr, ipv6_hdr(skb), sizeof(oldhdr));
+	oldhdr = ipv6_hdr(skb);
 
 	buf = kcalloc(struct_size(srh, segments.addr, srh->segments_left), 2, GFP_ATOMIC);
 	if (!buf)
@@ -147,7 +147,7 @@ static int rpl_do_srh_inline(struct sk_buff *skb, const struct rpl_lwt *rlwt,
 	memcpy(isrh, srh, sizeof(*isrh));
 	memcpy(isrh->rpl_segaddr, &srh->rpl_segaddr[1],
 	       (srh->segments_left - 1) * 16);
-	isrh->rpl_segaddr[srh->segments_left - 1] = oldhdr.daddr;
+	isrh->rpl_segaddr[srh->segments_left - 1] = oldhdr->daddr;
 
 	ipv6_rpl_srh_compress(csrh, isrh, &srh->rpl_segaddr[0],
 			      isrh->segments_left - 1);
@@ -169,7 +169,7 @@ static int rpl_do_srh_inline(struct sk_buff *skb, const struct rpl_lwt *rlwt,
 	skb_mac_header_rebuild(skb);
 
 	hdr = ipv6_hdr(skb);
-	memmove(hdr, &oldhdr, sizeof(*hdr));
+	memmove(hdr, oldhdr, sizeof(*hdr));
 	isrh = (void *)hdr + sizeof(*hdr);
 	memcpy(isrh, csrh, hdrlen);
 
@@ -232,17 +232,15 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 		dst = ip6_route_output(net, NULL, &fl6);
 		if (dst->error) {
 			err = dst->error;
+			dst_release(dst);
 			goto drop;
 		}
 
-		/* cache only if we don't create a dst reference loop */
-		if (orig_dst->lwtstate != dst->lwtstate) {
-			local_bh_disable();
-			dst_cache_set_ip6(&rlwt->cache, dst, &fl6.saddr);
-			local_bh_enable();
-		}
+		local_bh_disable();
+		dst_cache_set_ip6(&rlwt->cache, dst, &fl6.saddr);
+		local_bh_enable();
 
-		err = skb_cow_head(skb, LL_RESERVED_SPACE(dst_dev(dst)));
+		err = skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev));
 		if (unlikely(err))
 			goto drop;
 	}
@@ -253,7 +251,6 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	return dst_output(net, sk, skb);
 
 drop:
-	dst_release(dst);
 	kfree_skb(skb);
 	return err;
 }
@@ -280,10 +277,10 @@ static int rpl_input(struct sk_buff *skb)
 	local_bh_enable();
 
 	err = rpl_do_srh(skb, rlwt, dst);
-	if (unlikely(err)) {
-		dst_release(dst);
+	if (unlikely(err))
 		goto drop;
-	}
+
+	skb_dst_drop(skb);
 
 	if (!dst) {
 		ip6_route_input(skb);
@@ -297,11 +294,10 @@ static int rpl_input(struct sk_buff *skb)
 			local_bh_enable();
 		}
 
-		err = skb_cow_head(skb, LL_RESERVED_SPACE(dst_dev(dst)));
+		err = skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev));
 		if (unlikely(err))
 			goto drop;
 	} else {
-		skb_dst_drop(skb);
 		skb_dst_set(skb, dst);
 	}
 

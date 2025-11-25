@@ -427,24 +427,33 @@ void snd_dg00x_stream_lock_changed(struct snd_dg00x *dg00x)
 
 int snd_dg00x_stream_lock_try(struct snd_dg00x *dg00x)
 {
-	guard(spinlock_irq)(&dg00x->lock);
+	int err;
+
+	spin_lock_irq(&dg00x->lock);
 
 	/* user land lock this */
-	if (dg00x->dev_lock_count < 0)
-		return -EBUSY;
+	if (dg00x->dev_lock_count < 0) {
+		err = -EBUSY;
+		goto end;
+	}
 
 	/* this is the first time */
 	if (dg00x->dev_lock_count++ == 0)
 		snd_dg00x_stream_lock_changed(dg00x);
-	return 0;
+	err = 0;
+end:
+	spin_unlock_irq(&dg00x->lock);
+	return err;
 }
 
 void snd_dg00x_stream_lock_release(struct snd_dg00x *dg00x)
 {
-	guard(spinlock_irq)(&dg00x->lock);
+	spin_lock_irq(&dg00x->lock);
 
 	if (WARN_ON(dg00x->dev_lock_count <= 0))
-		return;
+		goto end;
 	if (--dg00x->dev_lock_count == 0)
 		snd_dg00x_stream_lock_changed(dg00x);
+end:
+	spin_unlock_irq(&dg00x->lock);
 }

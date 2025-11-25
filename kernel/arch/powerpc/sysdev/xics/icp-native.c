@@ -145,6 +145,27 @@ static void icp_native_cause_ipi(int cpu)
 	icp_native_set_qirr(cpu, IPI_PRIORITY);
 }
 
+#ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
+void icp_native_cause_ipi_rm(int cpu)
+{
+	/*
+	 * Currently not used to send IPIs to another CPU
+	 * on the same core. Only caller is KVM real mode.
+	 * Need the physical address of the XICS to be
+	 * previously saved in kvm_hstate in the paca.
+	 */
+	void __iomem *xics_phys;
+
+	/*
+	 * Just like the cause_ipi functions, it is required to
+	 * include a full barrier before causing the IPI.
+	 */
+	xics_phys = paca_ptrs[cpu]->kvm_hstate.xics_phys;
+	mb();
+	__raw_rm_writeb(IPI_PRIORITY, xics_phys + XICS_MFRR);
+}
+#endif
+
 /*
  * Called when an interrupt is received on an off-line CPU to
  * clear the interrupt, so that the CPU can go back to nap mode.
@@ -240,7 +261,7 @@ static int __init icp_native_init_one_node(struct device_node *np,
 	unsigned int ilen;
 	const __be32 *ireg;
 	int i;
-	int num_reg;
+	int reg_tuple_size;
 	int num_servers = 0;
 
 	/* This code does the theorically broken assumption that the interrupt
@@ -261,14 +282,21 @@ static int __init icp_native_init_one_node(struct device_node *np,
 			num_servers = of_read_number(ireg + 1, 1);
 	}
 
-	num_reg = of_address_count(np);
-	if (num_servers && (num_servers != num_reg)) {
-		pr_err("icp_native: ICP reg len (%d) != num servers (%d)",
-		       num_reg, num_servers);
+	ireg = of_get_property(np, "reg", &ilen);
+	if (!ireg) {
+		pr_err("icp_native: Can't find interrupt reg property");
 		return -1;
 	}
 
-	for (i = 0; i < num_reg; i++) {
+	reg_tuple_size = (of_n_addr_cells(np) + of_n_size_cells(np)) * 4;
+	if (((ilen % reg_tuple_size) != 0)
+	    || (num_servers && (num_servers != (ilen / reg_tuple_size)))) {
+		pr_err("icp_native: ICP reg len (%d) != num servers (%d)",
+		       ilen / reg_tuple_size, num_servers);
+		return -1;
+	}
+
+	for (i = 0; i < (ilen / reg_tuple_size); i++) {
 		struct resource r;
 		int err;
 

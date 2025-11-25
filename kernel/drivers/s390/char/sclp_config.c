@@ -60,7 +60,7 @@ static void sclp_cpu_capability_notify(struct work_struct *work)
 static void __ref sclp_cpu_change_notify(struct work_struct *work)
 {
 	lock_device_hotplug();
-	smp_rescan_cpus(false);
+	smp_rescan_cpus();
 	unlock_device_hotplug();
 }
 
@@ -128,7 +128,7 @@ out:
 }
 
 static ssize_t sysfs_ofb_data_write(struct file *filp, struct kobject *kobj,
-				    const struct bin_attribute *bin_attr,
+				    struct bin_attribute *bin_attr,
 				    char *buf, loff_t off, size_t count)
 {
 	int rc;

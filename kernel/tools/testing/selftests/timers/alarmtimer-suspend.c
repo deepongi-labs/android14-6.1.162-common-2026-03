@@ -28,12 +28,25 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <include/vdso/time64.h>
-#include <errno.h>
 #include "../kselftest.h"
-#include "helpers.h"
 
-#define UNREASONABLE_LAT (NSEC_PER_SEC * 5LL) /* hopefully we resume in 5 secs */
+#define CLOCK_REALTIME			0
+#define CLOCK_MONOTONIC			1
+#define CLOCK_PROCESS_CPUTIME_ID	2
+#define CLOCK_THREAD_CPUTIME_ID		3
+#define CLOCK_MONOTONIC_RAW		4
+#define CLOCK_REALTIME_COARSE		5
+#define CLOCK_MONOTONIC_COARSE		6
+#define CLOCK_BOOTTIME			7
+#define CLOCK_REALTIME_ALARM		8
+#define CLOCK_BOOTTIME_ALARM		9
+#define CLOCK_HWSPECIFIC		10
+#define CLOCK_TAI			11
+#define NR_CLOCKIDS			12
+
+
+#define NSEC_PER_SEC 1000000000ULL
+#define UNREASONABLE_LAT (NSEC_PER_SEC * 5) /* hopefully we resume in 5 secs */
 
 #define SUSPEND_SECS 15
 int alarmcount;
@@ -71,6 +84,14 @@ char *clockstring(int clockid)
 }
 
 
+long long timespec_sub(struct timespec a, struct timespec b)
+{
+	long long ret = NSEC_PER_SEC * b.tv_sec + b.tv_nsec;
+
+	ret -= NSEC_PER_SEC * a.tv_sec + a.tv_nsec;
+	return ret;
+}
+
 int final_ret;
 
 void sigalarm(int signo)
@@ -81,8 +102,8 @@ void sigalarm(int signo)
 	clock_gettime(alarm_clock_id, &ts);
 	alarmcount++;
 
-	delta_ns = timespec_sub(ts, start_time);
-	delta_ns -= (long long)NSEC_PER_SEC * SUSPEND_SECS * alarmcount;
+	delta_ns = timespec_sub(start_time, ts);
+	delta_ns -= NSEC_PER_SEC * SUSPEND_SECS * alarmcount;
 
 	printf("ALARM(%i): %ld:%ld latency: %lld ns ", alarmcount, ts.tv_sec,
 							ts.tv_nsec, delta_ns);
@@ -121,8 +142,8 @@ int main(void)
 
 		alarmcount = 0;
 		if (timer_create(alarm_clock_id, &se, &tm1) == -1) {
-			printf("timer_create failed, %s unsupported?: %s\n",
-					clockstring(alarm_clock_id), strerror(errno));
+			printf("timer_create failed, %s unsupported?\n",
+					clockstring(alarm_clock_id));
 			break;
 		}
 
@@ -152,6 +173,6 @@ int main(void)
 		timer_delete(tm1);
 	}
 	if (final_ret)
-		ksft_exit_fail();
-	ksft_exit_pass();
+		return ksft_exit_fail();
+	return ksft_exit_pass();
 }

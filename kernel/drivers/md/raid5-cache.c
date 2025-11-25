@@ -120,7 +120,7 @@ struct r5l_log {
 	struct bio_set bs;
 	mempool_t meta_pool;
 
-	struct md_thread __rcu *reclaim_thread;
+	struct md_thread *reclaim_thread;
 	unsigned long reclaim_target;	/* number of space that need to be
 					 * reclaimed.  if it's 0, reclaim spaces
 					 * used by io_units which are in
@@ -313,6 +313,10 @@ void r5c_handle_cached_data_endio(struct r5conf *conf,
 		if (sh->dev[i].written) {
 			set_bit(R5_UPTODATE, &sh->dev[i].flags);
 			r5c_return_dev_pending_writes(conf, &sh->dev[i]);
+			md_bitmap_endwrite(conf->mddev->bitmap, sh->sector,
+					   RAID5_STRIPE_SECTORS(conf),
+					   !test_bit(STRIPE_DEGRADED, &sh->state),
+					   0);
 		}
 	}
 }
@@ -682,6 +686,7 @@ static void r5c_disable_writeback_async(struct work_struct *work)
 					   disable_writeback_work);
 	struct mddev *mddev = log->rdev->mddev;
 	struct r5conf *conf = mddev->private;
+	int locked = 0;
 
 	if (log->r5c_journal_mode == R5C_JOURNAL_MODE_WRITE_THROUGH)
 		return;
@@ -691,13 +696,13 @@ static void r5c_disable_writeback_async(struct work_struct *work)
 	/* wait superblock change before suspend */
 	wait_event(mddev->sb_wait,
 		   !READ_ONCE(conf->log) ||
-		   !test_bit(MD_SB_CHANGE_PENDING, &mddev->sb_flags));
-
-	log = READ_ONCE(conf->log);
-	if (log) {
-		mddev_suspend(mddev, false);
+		   (!test_bit(MD_SB_CHANGE_PENDING, &mddev->sb_flags) &&
+		    (locked = mddev_trylock(mddev))));
+	if (locked) {
+		mddev_suspend(mddev);
 		log->r5c_journal_mode = R5C_JOURNAL_MODE_WRITE_THROUGH;
 		mddev_resume(mddev);
+		mddev_unlock(mddev);
 	}
 }
 
@@ -714,7 +719,7 @@ static void r5l_submit_current_io(struct r5l_log *log)
 
 	block = page_address(io->meta_page);
 	block->meta_size = cpu_to_le32(io->meta_offset);
-	crc = crc32c(log->uuid_checksum, block, PAGE_SIZE);
+	crc = crc32c_le(log->uuid_checksum, block, PAGE_SIZE);
 	block->checksum = cpu_to_le32(crc);
 
 	log->current_io = NULL;
@@ -790,7 +795,7 @@ static struct r5l_io_unit *r5l_new_meta(struct r5l_log *log)
 	io->current_bio = r5l_bio_alloc(log);
 	io->current_bio->bi_end_io = r5l_log_endio;
 	io->current_bio->bi_private = io;
-	__bio_add_page(io->current_bio, io->meta_page, PAGE_SIZE, 0);
+	bio_add_page(io->current_bio, io->meta_page, PAGE_SIZE, 0);
 
 	r5_reserve_log_entry(log, io);
 
@@ -1019,10 +1024,10 @@ int r5l_write_stripe(struct r5l_log *log, struct stripe_head *sh)
 		/* checksum is already calculated in last run */
 		if (test_bit(STRIPE_LOG_TRAPPED, &sh->state))
 			continue;
-		addr = kmap_local_page(sh->dev[i].page);
-		sh->dev[i].log_checksum = crc32c(log->uuid_checksum,
-						 addr, PAGE_SIZE);
-		kunmap_local(addr);
+		addr = kmap_atomic(sh->dev[i].page);
+		sh->dev[i].log_checksum = crc32c_le(log->uuid_checksum,
+						    addr, PAGE_SIZE);
+		kunmap_atomic(addr);
 	}
 	parity_pages = 1 + !!(sh->qd_idx >= 0);
 	data_pages = write_disks - parity_pages;
@@ -1562,29 +1567,27 @@ void r5l_wake_reclaim(struct r5l_log *log, sector_t space)
 
 	if (!log)
 		return;
-
-	target = READ_ONCE(log->reclaim_target);
 	do {
+		target = log->reclaim_target;
 		if (new < target)
 			return;
-	} while (!try_cmpxchg(&log->reclaim_target, &target, new));
+	} while (cmpxchg(&log->reclaim_target, target, new) != target);
 	md_wakeup_thread(log->reclaim_thread);
 }
 
 void r5l_quiesce(struct r5l_log *log, int quiesce)
 {
-	struct mddev *mddev = log->rdev->mddev;
-	struct md_thread *thread = rcu_dereference_protected(
-		log->reclaim_thread, lockdep_is_held(&mddev->reconfig_mutex));
+	struct mddev *mddev;
 
 	if (quiesce) {
 		/* make sure r5l_write_super_and_discard_space exits */
+		mddev = log->rdev->mddev;
 		wake_up(&mddev->sb_wait);
-		kthread_park(thread->tsk);
+		kthread_park(log->reclaim_thread->tsk);
 		r5l_wake_reclaim(log, MaxSector);
 		r5l_do_reclaim(log);
 	} else
-		kthread_unpark(thread->tsk);
+		kthread_unpark(log->reclaim_thread->tsk);
 }
 
 bool r5l_log_disk_error(struct r5conf *conf)
@@ -1741,7 +1744,7 @@ static int r5l_recovery_read_meta_block(struct r5l_log *log,
 	    le64_to_cpu(mb->position) != ctx->pos)
 		return -EINVAL;
 
-	crc = crc32c(log->uuid_checksum, mb, PAGE_SIZE);
+	crc = crc32c_le(log->uuid_checksum, mb, PAGE_SIZE);
 	if (stored_crc != crc)
 		return -EINVAL;
 
@@ -1780,7 +1783,8 @@ static int r5l_log_write_empty_meta_block(struct r5l_log *log, sector_t pos,
 		return -ENOMEM;
 	r5l_recovery_create_empty_meta_block(log, page, pos, seq);
 	mb = page_address(page);
-	mb->checksum = cpu_to_le32(crc32c(log->uuid_checksum, mb, PAGE_SIZE));
+	mb->checksum = cpu_to_le32(crc32c_le(log->uuid_checksum,
+					     mb, PAGE_SIZE));
 	if (!sync_page_io(log->rdev, pos, PAGE_SIZE, page, REQ_OP_WRITE |
 			  REQ_SYNC | REQ_FUA, false)) {
 		__free_page(page);
@@ -1885,22 +1889,28 @@ r5l_recovery_replay_one_stripe(struct r5conf *conf,
 			continue;
 
 		/* in case device is broken */
-		rdev = conf->disks[disk_index].rdev;
+		rcu_read_lock();
+		rdev = rcu_dereference(conf->disks[disk_index].rdev);
 		if (rdev) {
 			atomic_inc(&rdev->nr_pending);
+			rcu_read_unlock();
 			sync_page_io(rdev, sh->sector, PAGE_SIZE,
 				     sh->dev[disk_index].page, REQ_OP_WRITE,
 				     false);
 			rdev_dec_pending(rdev, rdev->mddev);
+			rcu_read_lock();
 		}
-		rrdev = conf->disks[disk_index].replacement;
+		rrdev = rcu_dereference(conf->disks[disk_index].replacement);
 		if (rrdev) {
 			atomic_inc(&rrdev->nr_pending);
+			rcu_read_unlock();
 			sync_page_io(rrdev, sh->sector, PAGE_SIZE,
 				     sh->dev[disk_index].page, REQ_OP_WRITE,
 				     false);
 			rdev_dec_pending(rrdev, rrdev->mddev);
+			rcu_read_lock();
 		}
+		rcu_read_unlock();
 	}
 	ctx->data_parity_stripes++;
 out:
@@ -1974,9 +1984,9 @@ r5l_recovery_verify_data_checksum(struct r5l_log *log,
 	u32 checksum;
 
 	r5l_recovery_read_page(log, ctx, page, log_offset);
-	addr = kmap_local_page(page);
-	checksum = crc32c(log->uuid_checksum, addr, PAGE_SIZE);
-	kunmap_local(addr);
+	addr = kmap_atomic(page);
+	checksum = crc32c_le(log->uuid_checksum, addr, PAGE_SIZE);
+	kunmap_atomic(addr);
 	return (le32_to_cpu(log_checksum) == checksum) ? 0 : -EINVAL;
 }
 
@@ -2376,11 +2386,11 @@ r5c_recovery_rewrite_data_only_stripes(struct r5l_log *log,
 				payload->size = cpu_to_le32(BLOCK_SECTORS);
 				payload->location = cpu_to_le64(
 					raid5_compute_blocknr(sh, i, 0));
-				addr = kmap_local_page(dev->page);
+				addr = kmap_atomic(dev->page);
 				payload->checksum[0] = cpu_to_le32(
-					crc32c(log->uuid_checksum, addr,
-					       PAGE_SIZE));
-				kunmap_local(addr);
+					crc32c_le(log->uuid_checksum, addr,
+						  PAGE_SIZE));
+				kunmap_atomic(addr);
 				sync_page_io(log->rdev, write_pos, PAGE_SIZE,
 					     dev->page, REQ_OP_WRITE, false);
 				write_pos = r5l_ring_add(log, write_pos,
@@ -2391,8 +2401,8 @@ r5c_recovery_rewrite_data_only_stripes(struct r5l_log *log,
 			}
 		}
 		mb->meta_size = cpu_to_le32(offset);
-		mb->checksum = cpu_to_le32(crc32c(log->uuid_checksum,
-						  mb, PAGE_SIZE));
+		mb->checksum = cpu_to_le32(crc32c_le(log->uuid_checksum,
+						     mb, PAGE_SIZE));
 		sync_page_io(log->rdev, ctx->pos, PAGE_SIZE, page,
 			     REQ_OP_WRITE | REQ_SYNC | REQ_FUA, false);
 		sh->log_start = ctx->pos;
@@ -2574,7 +2584,9 @@ int r5c_journal_mode_set(struct mddev *mddev, int mode)
 	    mode == R5C_JOURNAL_MODE_WRITE_BACK)
 		return -EINVAL;
 
+	mddev_suspend(mddev);
 	conf->log->r5c_journal_mode = mode;
+	mddev_resume(mddev);
 
 	pr_debug("md/raid:%s: setting r5c cache mode to %d: %s\n",
 		 mdname(mddev), mode, r5c_journal_mode_str[mode]);
@@ -2599,11 +2611,11 @@ static ssize_t r5c_journal_mode_store(struct mddev *mddev,
 		if (strlen(r5c_journal_mode_str[mode]) == len &&
 		    !strncmp(page, r5c_journal_mode_str[mode], len))
 			break;
-	ret = mddev_suspend_and_lock(mddev);
+	ret = mddev_lock(mddev);
 	if (ret)
 		return ret;
 	ret = r5c_journal_mode_set(mddev, mode);
-	mddev_unlock_and_resume(mddev);
+	mddev_unlock(mddev);
 	return ret ?: length;
 }
 
@@ -2793,6 +2805,7 @@ void r5c_finish_stripe_write_out(struct r5conf *conf,
 {
 	struct r5l_log *log = READ_ONCE(conf->log);
 	int i;
+	int do_wakeup = 0;
 	sector_t tree_index;
 	void __rcu **pslot;
 	uintptr_t refcount;
@@ -2809,7 +2822,7 @@ void r5c_finish_stripe_write_out(struct r5conf *conf,
 	for (i = sh->disks; i--; ) {
 		clear_bit(R5_InJournal, &sh->dev[i].flags);
 		if (test_and_clear_bit(R5_Overlap, &sh->dev[i].flags))
-			wake_up_bit(&sh->dev[i].flags, R5_Overlap);
+			do_wakeup = 1;
 	}
 
 	/*
@@ -2821,6 +2834,9 @@ void r5c_finish_stripe_write_out(struct r5conf *conf,
 	if (test_and_clear_bit(STRIPE_FULL_WRITE, &sh->state))
 		if (atomic_dec_and_test(&conf->pending_full_writes))
 			md_wakeup_thread(conf->mddev->thread);
+
+	if (do_wakeup)
+		wake_up(&conf->wait_for_overlap);
 
 	spin_lock_irq(&log->stripe_in_journal_lock);
 	list_del_init(&sh->r5c);
@@ -2883,10 +2899,10 @@ int r5c_cache_data(struct r5l_log *log, struct stripe_head *sh)
 
 		if (!test_bit(R5_Wantwrite, &sh->dev[i].flags))
 			continue;
-		addr = kmap_local_page(sh->dev[i].page);
-		sh->dev[i].log_checksum = crc32c(log->uuid_checksum,
-						 addr, PAGE_SIZE);
-		kunmap_local(addr);
+		addr = kmap_atomic(sh->dev[i].page);
+		sh->dev[i].log_checksum = crc32c_le(log->uuid_checksum,
+						    addr, PAGE_SIZE);
+		kunmap_atomic(addr);
 		pages++;
 	}
 	WARN_ON(pages == 0);
@@ -2933,6 +2949,7 @@ bool r5c_big_stripe_cached(struct r5conf *conf, sector_t sect)
 	if (!log)
 		return false;
 
+	WARN_ON_ONCE(!rcu_read_lock_held());
 	tree_index = r5c_tree_index(conf, sect);
 	slot = radix_tree_lookup(&log->big_stripe_tree, tree_index);
 	return slot != NULL;
@@ -2968,7 +2985,7 @@ static int r5l_load_log(struct r5l_log *log)
 	}
 	stored_crc = le32_to_cpu(mb->checksum);
 	mb->checksum = 0;
-	expected_crc = crc32c(log->uuid_checksum, mb, PAGE_SIZE);
+	expected_crc = crc32c_le(log->uuid_checksum, mb, PAGE_SIZE);
 	if (stored_crc != expected_crc) {
 		create_super = true;
 		goto create;
@@ -3046,8 +3063,8 @@ void r5c_update_on_rdev_error(struct mddev *mddev, struct md_rdev *rdev)
 
 int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 {
+	struct request_queue *q = bdev_get_queue(rdev->bdev);
 	struct r5l_log *log;
-	struct md_thread *thread;
 	int ret;
 
 	pr_debug("md/raid:%s: using device %pg as journal\n",
@@ -3075,9 +3092,11 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 	if (!log)
 		return -ENOMEM;
 	log->rdev = rdev;
-	log->need_cache_flush = bdev_write_cache(rdev->bdev);
-	log->uuid_checksum = crc32c(~0, rdev->mddev->uuid,
-				    sizeof(rdev->mddev->uuid));
+
+	log->need_cache_flush = test_bit(QUEUE_FLAG_WC, &q->queue_flags) != 0;
+
+	log->uuid_checksum = crc32c_le(~0, rdev->mddev->uuid,
+				       sizeof(rdev->mddev->uuid));
 
 	mutex_init(&log->io_mutex);
 
@@ -3106,13 +3125,11 @@ int r5l_init_log(struct r5conf *conf, struct md_rdev *rdev)
 	spin_lock_init(&log->tree_lock);
 	INIT_RADIX_TREE(&log->big_stripe_tree, GFP_NOWAIT | __GFP_NOWARN);
 
-	thread = md_register_thread(r5l_reclaim_thread, log->rdev->mddev,
-				    "reclaim");
-	if (!thread)
+	log->reclaim_thread = md_register_thread(r5l_reclaim_thread,
+						 log->rdev->mddev, "reclaim");
+	if (!log->reclaim_thread)
 		goto reclaim_thread;
-
-	thread->timeout = R5C_RECLAIM_WAKEUP_INTERVAL;
-	rcu_assign_pointer(log->reclaim_thread, thread);
+	log->reclaim_thread->timeout = R5C_RECLAIM_WAKEUP_INTERVAL;
 
 	init_waitqueue_head(&log->iounit_wait);
 
@@ -3151,7 +3168,7 @@ void r5l_exit_log(struct r5conf *conf)
 {
 	struct r5l_log *log = conf->log;
 
-	md_unregister_thread(conf->mddev, &log->reclaim_thread);
+	md_unregister_thread(&log->reclaim_thread);
 
 	/*
 	 * 'reconfig_mutex' is held by caller, set 'confg->log' to NULL to

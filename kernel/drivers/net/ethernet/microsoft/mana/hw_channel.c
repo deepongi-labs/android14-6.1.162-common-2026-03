@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /* Copyright (c) 2021, Microsoft Corporation. */
 
-#include <net/mana/gdma.h>
-#include <net/mana/mana.h>
-#include <net/mana/hw_channel.h>
-#include <linux/vmalloc.h>
+#include "gdma.h"
+#include "hw_channel.h"
 
 static int mana_hwc_get_msg_index(struct hw_channel_context *hwc, u16 *msg_id)
 {
@@ -113,13 +111,11 @@ out:
 static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 					struct gdma_event *event)
 {
-	union hwc_init_soc_service_type service_data;
 	struct hw_channel_context *hwc = ctx;
 	struct gdma_dev *gd = hwc->gdma_dev;
 	union hwc_init_type_data type_data;
 	union hwc_init_eq_id_db eq_db;
 	u32 type, val;
-	int ret;
 
 	switch (event->type) {
 	case GDMA_EQE_HWC_INIT_EQ_ID_DB:
@@ -186,42 +182,7 @@ static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 		complete(&hwc->hwc_init_eqe_comp);
 		break;
 
-	case GDMA_EQE_HWC_SOC_RECONFIG_DATA:
-		type_data.as_uint32 = event->details[0];
-		type = type_data.type;
-		val = type_data.value;
-
-		switch (type) {
-		case HWC_DATA_CFG_HWC_TIMEOUT:
-			hwc->hwc_timeout = val;
-			break;
-
-		default:
-			dev_warn(hwc->dev, "Received unknown reconfig type %u\n", type);
-			break;
-		}
-
-		break;
-	case GDMA_EQE_HWC_SOC_SERVICE:
-		service_data.as_uint32 = event->details[0];
-		type = service_data.type;
-
-		switch (type) {
-		case GDMA_SERVICE_TYPE_RDMA_SUSPEND:
-		case GDMA_SERVICE_TYPE_RDMA_RESUME:
-			ret = mana_rdma_service_event(gd->gdma_context, type);
-			if (ret)
-				dev_err(hwc->dev, "Failed to schedule adev service event: %d\n",
-					ret);
-			break;
-		default:
-			dev_warn(hwc->dev, "Received unknown SOC service type %u\n", type);
-			break;
-		}
-
-		break;
 	default:
-		dev_warn(hwc->dev, "Received unknown gdma event %u\n", event->type);
 		/* Ignore unknown events, which should never happen. */
 		break;
 	}
@@ -327,7 +288,6 @@ static int mana_hwc_create_gdma_eq(struct hw_channel_context *hwc,
 	spec.eq.context = ctx;
 	spec.eq.callback = cb;
 	spec.eq.log2_throttle_limit = DEFAULT_LOG2_THROTTLING_FOR_ERROR_EQ;
-	spec.eq.msix_index = 0;
 
 	return mana_gd_create_hwc_queue(hwc->gdma_dev, &spec, queue);
 }
@@ -388,12 +348,12 @@ static int mana_hwc_create_cq(struct hw_channel_context *hwc, u16 q_depth,
 	int err;
 
 	eq_size = roundup_pow_of_two(GDMA_EQE_SIZE * q_depth);
-	if (eq_size < MANA_MIN_QSIZE)
-		eq_size = MANA_MIN_QSIZE;
+	if (eq_size < MINIMUM_SUPPORTED_PAGE_SIZE)
+		eq_size = MINIMUM_SUPPORTED_PAGE_SIZE;
 
 	cq_size = roundup_pow_of_two(GDMA_CQE_SIZE * q_depth);
-	if (cq_size < MANA_MIN_QSIZE)
-		cq_size = MANA_MIN_QSIZE;
+	if (cq_size < MINIMUM_SUPPORTED_PAGE_SIZE)
+		cq_size = MINIMUM_SUPPORTED_PAGE_SIZE;
 
 	hwc_cq = kzalloc(sizeof(*hwc_cq), GFP_KERNEL);
 	if (!hwc_cq)
@@ -455,13 +415,12 @@ static int mana_hwc_alloc_dma_buf(struct hw_channel_context *hwc, u16 q_depth,
 
 	dma_buf->num_reqs = q_depth;
 
-	buf_size = MANA_PAGE_ALIGN(q_depth * max_msg_size);
+	buf_size = PAGE_ALIGN(q_depth * max_msg_size);
 
 	gmi = &dma_buf->mem_info;
 	err = mana_gd_alloc_memory(gc, buf_size, gmi);
 	if (err) {
-		dev_err(hwc->dev, "Failed to allocate DMA buffer size: %u, err %d\n",
-			buf_size, err);
+		dev_err(hwc->dev, "Failed to allocate DMA buffer: %d\n", err);
 		goto out;
 	}
 
@@ -524,8 +483,8 @@ static int mana_hwc_create_wq(struct hw_channel_context *hwc,
 	else
 		queue_size = roundup_pow_of_two(GDMA_MAX_SQE_SIZE * q_depth);
 
-	if (queue_size < MANA_MIN_QSIZE)
-		queue_size = MANA_MIN_QSIZE;
+	if (queue_size < MINIMUM_SUPPORTED_PAGE_SIZE)
+		queue_size = MINIMUM_SUPPORTED_PAGE_SIZE;
 
 	hwc_wq = kzalloc(sizeof(*hwc_wq), GFP_KERNEL);
 	if (!hwc_wq)
@@ -550,9 +509,6 @@ static int mana_hwc_create_wq(struct hw_channel_context *hwc,
 out:
 	if (err)
 		mana_hwc_destroy_wq(hwc, hwc_wq);
-
-	dev_err(hwc->dev, "Failed to create HWC queue size= %u type= %d err= %d\n",
-		queue_size, q_type, err);
 	return err;
 }
 
@@ -677,7 +633,7 @@ static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
 	if (WARN_ON(cq->id >= gc->max_num_cqs))
 		return -EPROTO;
 
-	gc->cq_table = vcalloc(gc->max_num_cqs, sizeof(struct gdma_queue *));
+	gc->cq_table = vzalloc(gc->max_num_cqs * sizeof(struct gdma_queue *));
 	if (!gc->cq_table)
 		return -ENOMEM;
 
@@ -746,7 +702,6 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 	gd->driver_data = hwc;
 	hwc->gdma_dev = gd;
 	hwc->dev = gc->dev;
-	hwc->hwc_timeout = HW_CHANNEL_WAIT_RESOURCE_TIMEOUT_MS;
 
 	/* HWC's instance number is always 0. */
 	gd->dev_id.as_uint32 = 0;
@@ -821,8 +776,6 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	hwc->gdma_dev->doorbell = INVALID_DOORBELL;
 	hwc->gdma_dev->pdid = INVALID_PDID;
 
-	hwc->hwc_timeout = 0;
-
 	kfree(hwc);
 	gc->hwc.driver_data = NULL;
 	gc->hwc.gdma_context = NULL;
@@ -878,16 +831,8 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 		goto out;
 	}
 
-	if (!wait_for_completion_timeout(&ctx->comp_event,
-					 (msecs_to_jiffies(hwc->hwc_timeout)))) {
-		if (hwc->hwc_timeout != 0)
-			dev_err(hwc->dev, "HWC: Request timed out: %u ms\n",
-				hwc->hwc_timeout);
-
-		/* Reduce further waiting if HWC no response */
-		if (hwc->hwc_timeout > 1)
-			hwc->hwc_timeout = 1;
-
+	if (!wait_for_completion_timeout(&ctx->comp_event, 30 * HZ)) {
+		dev_err(hwc->dev, "HWC: Request timed out!\n");
 		err = -ETIMEDOUT;
 		goto out;
 	}
@@ -897,14 +842,9 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 		goto out;
 	}
 
-	if (ctx->status_code && ctx->status_code != GDMA_STATUS_MORE_ENTRIES) {
-		if (ctx->status_code == GDMA_STATUS_CMD_UNSUPPORTED) {
-			err = -EOPNOTSUPP;
-			goto out;
-		}
-		if (req_msg->req.msg_type != MANA_QUERY_PHY_STAT)
-			dev_err(hwc->dev, "HWC: Failed hw_channel req: 0x%x\n",
-				ctx->status_code);
+	if (ctx->status_code) {
+		dev_err(hwc->dev, "HWC: Failed hw_channel req: 0x%x\n",
+			ctx->status_code);
 		err = -EPROTO;
 		goto out;
 	}

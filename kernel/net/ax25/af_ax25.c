@@ -287,7 +287,7 @@ void ax25_destroy_socket(ax25_cb *);
  */
 static void ax25_destroy_timer(struct timer_list *t)
 {
-	ax25_cb *ax25 = timer_container_of(ax25, t, dtimer);
+	ax25_cb *ax25 = from_timer(ax25, t, dtimer);
 	struct sock *sk;
 
 	sk=ax25->sk;
@@ -734,7 +734,7 @@ static int ax25_getsockopt(struct socket *sock, int level, int optname,
 	if (maxlen < 1)
 		return -EFAULT;
 
-	valptr = &val;
+	valptr = (void *) &val;
 	length = min_t(unsigned int, maxlen, sizeof(int));
 
 	lock_sock(sk);
@@ -796,7 +796,7 @@ static int ax25_getsockopt(struct socket *sock, int level, int optname,
 			length = 1;
 		}
 
-		valptr = devname;
+		valptr = (void *) devname;
 		break;
 
 	default:
@@ -950,7 +950,7 @@ struct sock *ax25_make_new(struct sock *osk, struct ax25_dev *ax25_dev)
 	sock_init_data(NULL, sk);
 
 	sk->sk_type     = osk->sk_type;
-	sk->sk_priority = READ_ONCE(osk->sk_priority);
+	sk->sk_priority = osk->sk_priority;
 	sk->sk_protocol = osk->sk_protocol;
 	sk->sk_rcvbuf   = osk->sk_rcvbuf;
 	sk->sk_sndbuf   = osk->sk_sndbuf;
@@ -1071,11 +1071,11 @@ static int ax25_release(struct socket *sock)
 	}
 	if (ax25_dev) {
 		if (!ax25_dev->device_up) {
-			timer_delete_sync(&ax25->timer);
-			timer_delete_sync(&ax25->t1timer);
-			timer_delete_sync(&ax25->t2timer);
-			timer_delete_sync(&ax25->t3timer);
-			timer_delete_sync(&ax25->idletimer);
+			del_timer_sync(&ax25->timer);
+			del_timer_sync(&ax25->t1timer);
+			del_timer_sync(&ax25->t2timer);
+			del_timer_sync(&ax25->t3timer);
+			del_timer_sync(&ax25->idletimer);
 		}
 		netdev_put(ax25_dev->dev, &ax25->dev_tracker);
 		ax25_dev_put(ax25_dev);
@@ -1270,18 +1270,28 @@ static int __must_check ax25_connect(struct socket *sock,
 		}
 	}
 
-	/* Must bind first - autobinding does not work. */
+	/*
+	 *	Must bind first - autobinding in this may or may not work. If
+	 *	the socket is already bound, check to see if the device has
+	 *	been filled in, error if it hasn't.
+	 */
 	if (sock_flag(sk, SOCK_ZAPPED)) {
-		kfree(digi);
-		err = -EINVAL;
-		goto out_release;
-	}
+		/* check if we can remove this feature. It is broken. */
+		printk(KERN_WARNING "ax25_connect(): %s uses autobind, please contact jreuter@yaina.de\n",
+			current->comm);
+		if ((err = ax25_rt_autobind(ax25, &fsa->fsa_ax25.sax25_call)) < 0) {
+			kfree(digi);
+			goto out_release;
+		}
 
-	/* Check to see if the device has been filled in, error if it hasn't. */
-	if (ax25->ax25_dev == NULL) {
-		kfree(digi);
-		err = -EHOSTUNREACH;
-		goto out_release;
+		ax25_fillin_cb(ax25, ax25->ax25_dev);
+		ax25_cb_add(ax25);
+	} else {
+		if (ax25->ax25_dev == NULL) {
+			kfree(digi);
+			err = -EHOSTUNREACH;
+			goto out_release;
+		}
 	}
 
 	if (sk->sk_type == SOCK_SEQPACKET &&
@@ -1374,8 +1384,8 @@ out_release:
 	return err;
 }
 
-static int ax25_accept(struct socket *sock, struct socket *newsock,
-		       struct proto_accept_arg *arg)
+static int ax25_accept(struct socket *sock, struct socket *newsock, int flags,
+		       bool kern)
 {
 	struct sk_buff *skb;
 	struct sock *newsk;
@@ -1412,7 +1422,7 @@ static int ax25_accept(struct socket *sock, struct socket *newsock,
 		if (skb)
 			break;
 
-		if (arg->flags & O_NONBLOCK) {
+		if (flags & O_NONBLOCK) {
 			err = -EWOULDBLOCK;
 			break;
 		}
@@ -2029,6 +2039,7 @@ static const struct proto_ops ax25_proto_ops = {
 	.sendmsg	= ax25_sendmsg,
 	.recvmsg	= ax25_recvmsg,
 	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage,
 };
 
 /*

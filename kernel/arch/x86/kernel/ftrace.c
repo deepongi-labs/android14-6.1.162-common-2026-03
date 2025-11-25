@@ -24,11 +24,10 @@
 #include <linux/module.h>
 #include <linux/memory.h>
 #include <linux/vmalloc.h>
-#include <linux/set_memory.h>
-#include <linux/execmem.h>
 
 #include <trace/syscall.h>
 
+#include <asm/set_memory.h>
 #include <asm/kprobes.h>
 #include <asm/ftrace.h>
 #include <asm/nops.h>
@@ -55,10 +54,10 @@ void ftrace_arch_code_modify_post_process(void)
 {
 	/*
 	 * ftrace_make_{call,nop}() may be called during
-	 * module load, and we need to finish the smp_text_poke_batch_add()
+	 * module load, and we need to finish the text_poke_queue()
 	 * that they do, here.
 	 */
-	smp_text_poke_batch_finish();
+	text_poke_finish();
 	ftrace_poke_late = 0;
 	mutex_unlock(&text_mutex);
 }
@@ -70,10 +69,6 @@ static const char *ftrace_nop_replace(void)
 
 static const char *ftrace_call_replace(unsigned long ip, unsigned long addr)
 {
-	/*
-	 * No need to translate into a callthunk. The trampoline does
-	 * the depth accounting itself.
-	 */
 	return text_gen_insn(CALL_INSN_OPCODE, (void *)ip, (void *)addr);
 }
 
@@ -119,7 +114,7 @@ ftrace_modify_code_direct(unsigned long ip, const char *old_code,
 
 	/* replace the text with the new text */
 	if (ftrace_poke_late)
-		smp_text_poke_batch_add((void *)ip, new_code, MCOUNT_INSN_SIZE, NULL);
+		text_poke_queue((void *)ip, new_code, MCOUNT_INSN_SIZE, NULL);
 	else
 		text_poke_early((void *)ip, new_code, MCOUNT_INSN_SIZE);
 	return 0;
@@ -186,11 +181,11 @@ int ftrace_update_ftrace_func(ftrace_func_t func)
 
 	ip = (unsigned long)(&ftrace_call);
 	new = ftrace_call_replace(ip, (unsigned long)func);
-	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
+	text_poke_bp((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 
 	ip = (unsigned long)(&ftrace_regs_call);
 	new = ftrace_call_replace(ip, (unsigned long)func);
-	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
+	text_poke_bp((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 
 	return 0;
 }
@@ -247,10 +242,10 @@ void ftrace_replace_code(int enable)
 			break;
 		}
 
-		smp_text_poke_batch_add((void *)rec->ip, new, MCOUNT_INSN_SIZE, NULL);
+		text_poke_queue((void *)rec->ip, new, MCOUNT_INSN_SIZE, NULL);
 		ftrace_update_record(rec, enable);
 	}
-	smp_text_poke_batch_finish();
+	text_poke_finish();
 }
 
 void arch_ftrace_update_code(int command)
@@ -261,17 +256,29 @@ void arch_ftrace_update_code(int command)
 /* Currently only x86_64 supports dynamic trampolines */
 #ifdef CONFIG_X86_64
 
+#ifdef CONFIG_MODULES
+#include <linux/moduleloader.h>
+/* Module allocation simplifies allocating memory for code */
 static inline void *alloc_tramp(unsigned long size)
 {
-	return execmem_alloc_rw(EXECMEM_FTRACE, size);
+	return module_alloc(size);
 }
 static inline void tramp_free(void *tramp)
 {
-	execmem_free(tramp);
+	module_memfree(tramp);
 }
+#else
+/* Trampolines can only be created if modules are supported */
+static inline void *alloc_tramp(unsigned long size)
+{
+	return NULL;
+}
+static inline void tramp_free(void *tramp) { }
+#endif
 
 /* Defined as markers to the end of the ftrace default trampolines */
 extern void ftrace_regs_caller_end(void);
+extern void ftrace_regs_caller_ret(void);
 extern void ftrace_caller_end(void);
 extern void ftrace_caller_op_ptr(void);
 extern void ftrace_regs_caller_op_ptr(void);
@@ -297,8 +304,7 @@ union ftrace_op_code_union {
 	} __attribute__((packed));
 };
 
-#define RET_SIZE \
-	(IS_ENABLED(CONFIG_MITIGATION_RETPOLINE) ? 5 : 1 + IS_ENABLED(CONFIG_MITIGATION_SLS))
+#define RET_SIZE		(IS_ENABLED(CONFIG_RETPOLINE) ? 5 : 1 + IS_ENABLED(CONFIG_SLS))
 
 static unsigned long
 create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
@@ -313,7 +319,7 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	unsigned long size;
 	unsigned long *ptr;
 	void *trampoline;
-	void *ip, *dest;
+	void *ip;
 	/* 48 8b 15 <offset> is movq <offset>(%rip), %rdx */
 	unsigned const char op_ref[] = { 0x48, 0x8b, 0x15 };
 	unsigned const char retq[] = { RET_INSN_OPCODE, INT3_INSN_OPCODE };
@@ -400,20 +406,18 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	/* put in the call to the function */
 	mutex_lock(&text_mutex);
 	call_offset -= start_offset;
-	/*
-	 * No need to translate into a callthunk. The trampoline does
-	 * the depth accounting before the call already.
-	 */
-	dest = ftrace_ops_get_func(ops);
 	memcpy(trampoline + call_offset,
-	       text_gen_insn(CALL_INSN_OPCODE, trampoline + call_offset, dest),
-	       CALL_INSN_SIZE);
+	       text_gen_insn(CALL_INSN_OPCODE,
+			     trampoline + call_offset,
+			     ftrace_ops_get_func(ops)), CALL_INSN_SIZE);
 	mutex_unlock(&text_mutex);
 
 	/* ALLOC_TRAMP flags lets us know we created it */
 	ops->flags |= FTRACE_OPS_FL_ALLOC_TRAMP;
 
-	set_memory_rox((unsigned long)trampoline, npages);
+	if (likely(system_state != SYSTEM_BOOTING))
+		set_memory_ro((unsigned long)trampoline, npages);
+	set_memory_x((unsigned long)trampoline, npages);
 	return (unsigned long)trampoline;
 fail:
 	tramp_free(trampoline);
@@ -492,7 +496,7 @@ void arch_ftrace_update_trampoline(struct ftrace_ops *ops)
 	mutex_lock(&text_mutex);
 	/* Do a safe modify in case the trampoline is executing */
 	new = ftrace_call_replace(ip, (unsigned long)func);
-	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
+	text_poke_bp((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 	mutex_unlock(&text_mutex);
 }
 
@@ -514,6 +518,9 @@ static void *addr_from_call(void *ptr)
 
 	return ptr + CALL_INSN_SIZE + call.disp;
 }
+
+void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
+			   unsigned long frame_pointer);
 
 /*
  * If the ops->trampoline was not allocated, then it probably
@@ -586,7 +593,7 @@ static int ftrace_mod_jmp(unsigned long ip, void *func)
 	const char *new;
 
 	new = ftrace_jmp_replace(ip, (unsigned long)func);
-	smp_text_poke_single((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
+	text_poke_bp((void *)ip, new, MCOUNT_INSN_SIZE, NULL);
 	return 0;
 }
 
@@ -605,8 +612,16 @@ int ftrace_disable_ftrace_graph_caller(void)
 }
 #endif /* CONFIG_DYNAMIC_FTRACE && !CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS */
 
-static inline bool skip_ftrace_return(void)
+/*
+ * Hook the return address and push it in the stack of return addrs
+ * in current thread info.
+ */
+void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
+			   unsigned long frame_pointer)
 {
+	unsigned long return_hooker = (unsigned long)&return_to_handler;
+	int bit;
+
 	/*
 	 * When resuming from suspend-to-ram, this function can be indirectly
 	 * called from early CPU startup code while the CPU is in real mode,
@@ -616,48 +631,33 @@ static inline bool skip_ftrace_return(void)
 	 * This check isn't as accurate as virt_addr_valid(), but it should be
 	 * good enough for this purpose, and it's fast.
 	 */
-	if ((long)__builtin_frame_address(0) >= 0)
-		return true;
+	if (unlikely((long)__builtin_frame_address(0) >= 0))
+		return;
 
-	if (ftrace_graph_is_dead())
-		return true;
+	if (unlikely(ftrace_graph_is_dead()))
+		return;
 
-	if (atomic_read(&current->tracing_graph_pause))
-		return true;
-	return false;
-}
+	if (unlikely(atomic_read(&current->tracing_graph_pause)))
+		return;
 
-/*
- * Hook the return address and push it in the stack of return addrs
- * in current thread info.
- */
-void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
-			   unsigned long frame_pointer)
-{
-	unsigned long return_hooker = (unsigned long)&return_to_handler;
-
-	if (unlikely(skip_ftrace_return()))
+	bit = ftrace_test_recursion_trylock(ip, *parent);
+	if (bit < 0)
 		return;
 
 	if (!function_graph_enter(*parent, ip, frame_pointer, parent))
 		*parent = return_hooker;
+
+	ftrace_test_recursion_unlock(bit);
 }
 
 #ifdef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
-	struct pt_regs *regs = &arch_ftrace_regs(fregs)->regs;
+	struct pt_regs *regs = &fregs->regs;
 	unsigned long *stack = (unsigned long *)kernel_stack_pointer(regs);
-	unsigned long return_hooker = (unsigned long)&return_to_handler;
-	unsigned long *parent = (unsigned long *)stack;
 
-	if (unlikely(skip_ftrace_return()))
-		return;
-
-
-	if (!function_graph_enter_regs(*parent, ip, 0, parent, fregs))
-		*parent = return_hooker;
+	prepare_ftrace_return(ip, (unsigned long *)stack, 0);
 }
 #endif
 

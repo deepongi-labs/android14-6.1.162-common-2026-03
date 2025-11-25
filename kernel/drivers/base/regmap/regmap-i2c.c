@@ -397,5 +397,4 @@ struct regmap *__devm_regmap_init_i2c(struct i2c_client *i2c,
 }
 EXPORT_SYMBOL_GPL(__devm_regmap_init_i2c);
 
-MODULE_DESCRIPTION("Register map access API - I2C support");
 MODULE_LICENSE("GPL");

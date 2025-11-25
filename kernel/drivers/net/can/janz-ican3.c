@@ -1867,7 +1867,7 @@ static ssize_t fwinfo_show(struct device *dev,
 {
 	struct ican3_dev *mod = netdev_priv(to_net_dev(dev));
 
-	return sysfs_emit(buf, "%s\n", mod->fwinfo);
+	return scnprintf(buf, PAGE_SIZE, "%s\n", mod->fwinfo);
 }
 
 static DEVICE_ATTR_RW(termination);
@@ -2023,7 +2023,7 @@ out_return:
 	return ret;
 }
 
-static void ican3_remove(struct platform_device *pdev)
+static int ican3_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct ican3_dev *mod = netdev_priv(ndev);
@@ -2042,6 +2042,8 @@ static void ican3_remove(struct platform_device *pdev)
 	iounmap(mod->dpm);
 
 	free_candev(ndev);
+
+	return 0;
 }
 
 static struct platform_driver ican3_driver = {

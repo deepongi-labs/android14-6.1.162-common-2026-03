@@ -22,12 +22,12 @@
 */
 
 #include <linux/debugfs.h>
-#include <linux/kstrtox.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
 #include "smp.h"
+#include "hci_request.h"
 #include "hci_debugfs.h"
 
 #define DEFINE_QUIRK_ATTRIBUTE(__name, __quirk)				      \
@@ -38,7 +38,7 @@ static ssize_t __name ## _read(struct file *file,			      \
 	struct hci_dev *hdev = file->private_data;			      \
 	char buf[3];							      \
 									      \
-	buf[0] = test_bit(__quirk, hdev->quirk_flags) ? 'Y' : 'N';	      \
+	buf[0] = test_bit(__quirk, &hdev->quirks) ? 'Y' : 'N';		      \
 	buf[1] = '\n';							      \
 	buf[2] = '\0';							      \
 	return simple_read_from_buffer(user_buf, count, ppos, buf, 2);	      \
@@ -59,10 +59,10 @@ static ssize_t __name ## _write(struct file *file,			      \
 	if (err)							      \
 		return err;						      \
 									      \
-	if (enable == test_bit(__quirk, hdev->quirk_flags))		      \
+	if (enable == test_bit(__quirk, &hdev->quirks))			      \
 		return -EALREADY;					      \
 									      \
-	change_bit(__quirk, hdev->quirk_flags);				      \
+	change_bit(__quirk, &hdev->quirks);				      \
 									      \
 	return count;							      \
 }									      \
@@ -189,7 +189,7 @@ static int uuids_show(struct seq_file *f, void *p)
 	}
 	hci_dev_unlock(hdev);
 
-	return 0;
+       return 0;
 }
 
 DEFINE_SHOW_ATTRIBUTE(uuids);
@@ -765,7 +765,7 @@ static ssize_t force_static_address_write(struct file *file,
 	bool enable;
 	int err;
 
-	if (hdev_is_powered(hdev))
+	if (test_bit(HCI_UP, &hdev->flags))
 		return -EBUSY;
 
 	err = kstrtobool_from_user(user_buf, count, &enable);
@@ -1172,7 +1172,7 @@ static ssize_t force_no_mitm_write(struct file *file,
 		return -EFAULT;
 
 	buf[buf_size] = '\0';
-	if (kstrtobool(buf, &enable))
+	if (strtobool(buf, &enable))
 		return -EINVAL;
 
 	if (enable == hci_dev_test_flag(hdev, HCI_FORCE_NO_MITM))
@@ -1356,7 +1356,7 @@ static ssize_t vendor_diag_write(struct file *file, const char __user *user_buf,
 	 * for the vendor callback. Instead just store the desired value and
 	 * the setting will be programmed when the controller gets powered on.
 	 */
-	if (hci_test_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_DIAG) &&
+	if (test_bit(HCI_QUIRK_NON_PERSISTENT_DIAG, &hdev->quirks) &&
 	    (!test_bit(HCI_RUNNING, &hdev->flags) ||
 	     hci_dev_test_flag(hdev, HCI_USER_CHANNEL)))
 		goto done;

@@ -7,40 +7,60 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/device.h>
-#include <linux/intel_tcc.h>
 #include <linux/module.h>
 #include <linux/thermal.h>
 #include <asm/cpu_device_id.h>
-#include <asm/msr.h>
 
+#define TCC_SHIFT 24
+#define TCC_MASK	(0x3fULL<<24)
 #define TCC_PROGRAMMABLE	BIT(30)
-#define TCC_LOCKED		BIT(31)
 
 static struct thermal_cooling_device *tcc_cdev;
 
 static int tcc_get_max_state(struct thermal_cooling_device *cdev, unsigned long
 			     *state)
 {
-	*state = intel_tcc_get_offset_mask();
+	*state = TCC_MASK >> TCC_SHIFT;
+	return 0;
+}
+
+static int tcc_offset_update(int tcc)
+{
+	u64 val;
+	int err;
+
+	err = rdmsrl_safe(MSR_IA32_TEMPERATURE_TARGET, &val);
+	if (err)
+		return err;
+
+	val &= ~TCC_MASK;
+	val |= tcc << TCC_SHIFT;
+
+	err = wrmsrl_safe(MSR_IA32_TEMPERATURE_TARGET, val);
+	if (err)
+		return err;
+
 	return 0;
 }
 
 static int tcc_get_cur_state(struct thermal_cooling_device *cdev, unsigned long
 			     *state)
 {
-	int offset = intel_tcc_get_offset(-1);
+	u64 val;
+	int err;
 
-	if (offset < 0)
-		return offset;
+	err = rdmsrl_safe(MSR_IA32_TEMPERATURE_TARGET, &val);
+	if (err)
+		return err;
 
-	*state = offset;
+	*state = (val & TCC_MASK) >> TCC_SHIFT;
 	return 0;
 }
 
 static int tcc_set_cur_state(struct thermal_cooling_device *cdev, unsigned long
 			     state)
 {
-	return intel_tcc_set_offset(-1, (int)state);
+	return tcc_offset_update(state);
 }
 
 static const struct thermal_cooling_device_ops tcc_cooling_ops = {
@@ -50,21 +70,20 @@ static const struct thermal_cooling_device_ops tcc_cooling_ops = {
 };
 
 static const struct x86_cpu_id tcc_ids[] __initconst = {
-	X86_MATCH_VFM(INTEL_SKYLAKE, NULL),
-	X86_MATCH_VFM(INTEL_SKYLAKE_L, NULL),
-	X86_MATCH_VFM(INTEL_KABYLAKE, NULL),
-	X86_MATCH_VFM(INTEL_KABYLAKE_L, NULL),
-	X86_MATCH_VFM(INTEL_ICELAKE, NULL),
-	X86_MATCH_VFM(INTEL_ICELAKE_L, NULL),
-	X86_MATCH_VFM(INTEL_TIGERLAKE, NULL),
-	X86_MATCH_VFM(INTEL_TIGERLAKE_L, NULL),
-	X86_MATCH_VFM(INTEL_COMETLAKE, NULL),
-	X86_MATCH_VFM(INTEL_ALDERLAKE, NULL),
-	X86_MATCH_VFM(INTEL_ALDERLAKE_L, NULL),
-	X86_MATCH_VFM(INTEL_ATOM_GRACEMONT, NULL),
-	X86_MATCH_VFM(INTEL_RAPTORLAKE, NULL),
-	X86_MATCH_VFM(INTEL_RAPTORLAKE_P, NULL),
-	X86_MATCH_VFM(INTEL_RAPTORLAKE_S, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(SKYLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(SKYLAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(KABYLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(KABYLAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ICELAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ICELAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(TIGERLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(TIGERLAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(COMETLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE_N, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(RAPTORLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(RAPTORLAKE_P, NULL),
 	{}
 };
 
@@ -82,21 +101,12 @@ static int __init tcc_cooling_init(void)
 	if (!id)
 		return -ENODEV;
 
-	err = rdmsrq_safe(MSR_PLATFORM_INFO, &val);
+	err = rdmsrl_safe(MSR_PLATFORM_INFO, &val);
 	if (err)
 		return err;
 
 	if (!(val & TCC_PROGRAMMABLE))
 		return -ENODEV;
-
-	err = rdmsrq_safe(MSR_IA32_TEMPERATURE_TARGET, &val);
-	if (err)
-		return err;
-
-	if (val & TCC_LOCKED) {
-		pr_info("TCC Offset locked\n");
-		return -ENODEV;
-	}
 
 	pr_info("Programmable TCC Offset detected\n");
 
@@ -119,7 +129,6 @@ static void __exit tcc_cooling_exit(void)
 
 module_exit(tcc_cooling_exit)
 
-MODULE_IMPORT_NS("INTEL_TCC");
 MODULE_DESCRIPTION("TCC offset cooling device Driver");
 MODULE_AUTHOR("Zhang Rui <rui.zhang@intel.com>");
 MODULE_LICENSE("GPL v2");

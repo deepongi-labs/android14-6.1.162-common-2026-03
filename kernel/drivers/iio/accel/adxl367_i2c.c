@@ -41,7 +41,8 @@ static const struct adxl367_ops adxl367_i2c_ops = {
 	.read_fifo = adxl367_i2c_read_fifo,
 };
 
-static int adxl367_i2c_probe(struct i2c_client *client)
+static int adxl367_i2c_probe(struct i2c_client *client,
+			     const struct i2c_device_id *id)
 {
 	struct adxl367_i2c_state *st;
 	struct regmap *regmap;
@@ -61,14 +62,14 @@ static int adxl367_i2c_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id adxl367_i2c_id[] = {
-	{ "adxl367" },
-	{ }
+	{ "adxl367", 0 },
+	{ },
 };
 MODULE_DEVICE_TABLE(i2c, adxl367_i2c_id);
 
 static const struct of_device_id adxl367_of_match[] = {
 	{ .compatible = "adi,adxl367" },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, adxl367_of_match);
 
@@ -83,7 +84,7 @@ static struct i2c_driver adxl367_i2c_driver = {
 
 module_i2c_driver(adxl367_i2c_driver);
 
-MODULE_IMPORT_NS("IIO_ADXL367");
+MODULE_IMPORT_NS(IIO_ADXL367);
 MODULE_AUTHOR("Cosmin Tanislav <cosmin.tanislav@analog.com>");
 MODULE_DESCRIPTION("Analog Devices ADXL367 3-axis accelerometer I2C driver");
 MODULE_LICENSE("GPL");

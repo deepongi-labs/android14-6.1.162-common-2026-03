@@ -6,27 +6,17 @@
  */
 
 #include <linux/acpi.h>
-#include <linux/array_size.h>
 #include <linux/bits.h>
 #include <linux/delay.h>
-#include <linux/device.h>
 #include <linux/err.h>
-#include <linux/errno.h>
-#include <linux/gfp_types.h>
 #include <linux/interrupt.h>
-#include <linux/ioport.h>
-#include <linux/kstrtox.h>
+#include <linux/kernel.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/intel_soc_pmic.h>
 #include <linux/mfd/intel_soc_pmic_bxtwc.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/platform_data/x86/intel_scu_ipc.h>
-#include <linux/platform_device.h>
-#include <linux/pm.h>
-#include <linux/regmap.h>
-#include <linux/sysfs.h>
-#include <linux/types.h>
+
+#include <asm/intel_scu_ipc.h>
 
 /* PMIC device registers */
 #define REG_ADDR_MASK		GENMASK(15, 8)
@@ -148,7 +138,7 @@ static const struct regmap_irq bxtwc_regmap_irqs_crit[] = {
 	REGMAP_IRQ_REG(BXTWC_CRIT_IRQ, 0, GENMASK(1, 0)),
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip = {
 	.name = "bxtwc_irq_chip",
 	.status_base = BXTWC_IRQLVL1,
 	.mask_base = BXTWC_MIRQLVL1,
@@ -157,9 +147,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip = {
 	.num_regs = 1,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_pwrbtn = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_pwrbtn = {
 	.name = "bxtwc_irq_chip_pwrbtn",
-	.domain_suffix = "PWRBTN",
 	.status_base = BXTWC_PWRBTNIRQ,
 	.mask_base = BXTWC_MPWRBTNIRQ,
 	.irqs = bxtwc_regmap_irqs_pwrbtn,
@@ -167,9 +156,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip_pwrbtn = {
 	.num_regs = 1,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_tmu = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_tmu = {
 	.name = "bxtwc_irq_chip_tmu",
-	.domain_suffix = "TMU",
 	.status_base = BXTWC_TMUIRQ,
 	.mask_base = BXTWC_MTMUIRQ,
 	.irqs = bxtwc_regmap_irqs_tmu,
@@ -177,9 +165,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip_tmu = {
 	.num_regs = 1,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_bcu = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_bcu = {
 	.name = "bxtwc_irq_chip_bcu",
-	.domain_suffix = "BCU",
 	.status_base = BXTWC_BCUIRQ,
 	.mask_base = BXTWC_MBCUIRQ,
 	.irqs = bxtwc_regmap_irqs_bcu,
@@ -187,9 +174,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip_bcu = {
 	.num_regs = 1,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_adc = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_adc = {
 	.name = "bxtwc_irq_chip_adc",
-	.domain_suffix = "ADC",
 	.status_base = BXTWC_ADCIRQ,
 	.mask_base = BXTWC_MADCIRQ,
 	.irqs = bxtwc_regmap_irqs_adc,
@@ -197,9 +183,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip_adc = {
 	.num_regs = 1,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_chgr = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_chgr = {
 	.name = "bxtwc_irq_chip_chgr",
-	.domain_suffix = "CHGR",
 	.status_base = BXTWC_CHGR0IRQ,
 	.mask_base = BXTWC_MCHGR0IRQ,
 	.irqs = bxtwc_regmap_irqs_chgr,
@@ -207,9 +192,8 @@ static const struct regmap_irq_chip bxtwc_regmap_irq_chip_chgr = {
 	.num_regs = 2,
 };
 
-static const struct regmap_irq_chip bxtwc_regmap_irq_chip_crit = {
+static struct regmap_irq_chip bxtwc_regmap_irq_chip_crit = {
 	.name = "bxtwc_irq_chip_crit",
-	.domain_suffix = "CRIT",
 	.status_base = BXTWC_CRITIRQ,
 	.mask_base = BXTWC_MCRITIRQ,
 	.irqs = bxtwc_regmap_irqs_crit,
@@ -375,7 +359,6 @@ static ssize_t addr_store(struct device *dev,
 
 	return count;
 }
-static DEVICE_ATTR_ADMIN_RW(addr);
 
 static ssize_t val_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
@@ -412,14 +395,23 @@ static ssize_t val_store(struct device *dev,
 	}
 	return count;
 }
-static DEVICE_ATTR_ADMIN_RW(val);
 
+static DEVICE_ATTR_ADMIN_RW(addr);
+static DEVICE_ATTR_ADMIN_RW(val);
 static struct attribute *bxtwc_attrs[] = {
 	&dev_attr_addr.attr,
 	&dev_attr_val.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(bxtwc);
+
+static const struct attribute_group bxtwc_group = {
+	.attrs = bxtwc_attrs,
+};
+
+static const struct attribute_group *bxtwc_groups[] = {
+	&bxtwc_group,
+	NULL
+};
 
 static const struct regmap_config bxtwc_regmap_config = {
 	.reg_bits = 16,
@@ -434,19 +426,15 @@ static int bxtwc_add_chained_irq_chip(struct intel_soc_pmic *pmic,
 				const struct regmap_irq_chip *chip,
 				struct regmap_irq_chip_data **data)
 {
-	struct device *dev = pmic->dev;
-	int irq, ret;
+	int irq;
 
 	irq = regmap_irq_get_virq(pdata, pirq);
 	if (irq < 0)
-		return dev_err_probe(dev, irq, "Failed to get parent vIRQ(%d) for chip %s\n",
+		return dev_err_probe(pmic->dev, irq, "Failed to get parent vIRQ(%d) for chip %s\n",
 				     pirq, chip->name);
 
-	ret = devm_regmap_add_irq_chip(dev, pmic->regmap, irq, irq_flags, 0, chip, data);
-	if (ret)
-		return dev_err_probe(dev, ret, "Failed to add %s IRQ chip\n", chip->name);
-
-	return 0;
+	return devm_regmap_add_irq_chip(pmic->dev, pmic->regmap, irq, irq_flags,
+					0, chip, data);
 }
 
 static int bxtwc_add_chained_devices(struct intel_soc_pmic *pmic,
@@ -462,7 +450,7 @@ static int bxtwc_add_chained_devices(struct intel_soc_pmic *pmic,
 
 	ret = bxtwc_add_chained_irq_chip(pmic, pdata, pirq, irq_flags, chip, data);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "Failed to add %s IRQ chip\n", chip->name);
 
 	domain = regmap_irq_get_domain(*data);
 
@@ -525,7 +513,7 @@ static int bxtwc_probe(struct platform_device *pdev)
 					 &bxtwc_regmap_irq_chip_pwrbtn,
 					 &pmic->irq_chip_data_pwrbtn);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "Failed to add PWRBTN IRQ chip\n");
 
 	ret = bxtwc_add_chained_devices(pmic, bxt_wc_bcu_dev, ARRAY_SIZE(bxt_wc_bcu_dev),
 					pmic->irq_chip_data,
@@ -561,7 +549,7 @@ static int bxtwc_probe(struct platform_device *pdev)
 					 &bxtwc_regmap_irq_chip_crit,
 					 &pmic->irq_chip_data_crit);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "Failed to add CRIT IRQ chip\n");
 
 	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE, bxt_wc_dev, ARRAY_SIZE(bxt_wc_dev),
 				   NULL, 0, NULL);
@@ -616,7 +604,7 @@ static struct platform_driver bxtwc_driver = {
 	.probe = bxtwc_probe,
 	.shutdown = bxtwc_shutdown,
 	.driver	= {
-		.name	= "intel_soc_pmic_bxtwc",
+		.name	= "BXTWC PMIC",
 		.pm     = pm_sleep_ptr(&bxtwc_pm_ops),
 		.acpi_match_table = bxtwc_acpi_ids,
 		.dev_groups = bxtwc_groups,
@@ -625,6 +613,5 @@ static struct platform_driver bxtwc_driver = {
 
 module_platform_driver(bxtwc_driver);
 
-MODULE_DESCRIPTION("Intel Broxton Whiskey Cove PMIC MFD core driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Qipeng Zha <qipeng.zha@intel.com>");

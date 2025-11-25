@@ -14,6 +14,7 @@
 
 #include "misc.h"
 #include "error.h"
+#include "pgtable.h"
 #include "../string.h"
 #include "../voffset.h"
 #include <asm/bootparam_utils.h>
@@ -51,7 +52,6 @@ struct port_io_ops pio_ops;
 
 memptr free_mem_ptr;
 memptr free_mem_end_ptr;
-int spurious_nmi_count;
 
 static char *vidmem;
 static int vidport;
@@ -164,34 +164,21 @@ void __putstr(const char *s)
 	outb(0xff & (pos >> 1), vidport+1);
 }
 
-static noinline void __putnum(unsigned long value, unsigned int base,
-			      int mindig)
-{
-	char buf[8*sizeof(value)+1];
-	char *p;
-
-	p = buf + sizeof(buf);
-	*--p = '\0';
-
-	while (mindig-- > 0 || value) {
-		unsigned char digit = value % base;
-		digit += (digit >= 10) ? ('a'-10) : '0';
-		*--p = digit;
-
-		value /= base;
-	}
-
-	__putstr(p);
-}
-
 void __puthex(unsigned long value)
 {
-	__putnum(value, 16, sizeof(value)*2);
-}
+	char alpha[2] = "0";
+	int bits;
 
-void __putdec(unsigned long value)
-{
-	__putnum(value, 10, 1);
+	for (bits = sizeof(value) * 8 - 4; bits >= 0; bits -= 4) {
+		unsigned long digit = (value >> bits) & 0xf;
+
+		if (digit < 0xA)
+			alpha[0] = '0' + digit;
+		else
+			alpha[0] = 'a' + (digit - 0xA);
+
+		__putstr(alpha);
+	}
 }
 
 #ifdef CONFIG_X86_NEED_RELOCS
@@ -234,7 +221,7 @@ static void handle_relocations(void *output, unsigned long output_len,
 
 	/*
 	 * Process relocations: 32 bit relocations first then 64 bit after.
-	 * Two sets of binary relocations are added to the end of the kernel
+	 * Three sets of binary relocations are added to the end of the kernel
 	 * before compression. Each relocation table entry is the kernel
 	 * address of the location which needs to be updated stored as a
 	 * 32-bit value which is sign extended to 64 bits.
@@ -244,6 +231,8 @@ static void handle_relocations(void *output, unsigned long output_len,
 	 * kernel bits...
 	 * 0 - zero terminator for 64 bit relocations
 	 * 64 bit relocation repeated
+	 * 0 - zero terminator for inverse 32 bit relocations
+	 * 32 bit inverse relocation repeated
 	 * 0 - zero terminator for 32 bit relocations
 	 * 32 bit relocation repeated
 	 *
@@ -260,6 +249,16 @@ static void handle_relocations(void *output, unsigned long output_len,
 		*(uint32_t *)ptr += delta;
 	}
 #ifdef CONFIG_X86_64
+	while (*--reloc) {
+		long extended = *reloc;
+		extended += map;
+
+		ptr = (unsigned long)extended;
+		if (ptr < min_addr || ptr > max_addr)
+			error("inverse 32-bit relocation outside of kernel!\n");
+
+		*(int32_t *)ptr -= delta;
+	}
 	for (reloc--; *reloc; reloc--) {
 		long extended = *reloc;
 		extended += map;
@@ -332,8 +331,6 @@ static size_t parse_elf(void *output)
 }
 
 const unsigned long kernel_text_size = VO___start_rodata - VO__text;
-const unsigned long kernel_inittext_offset = VO__sinittext - VO__text;
-const unsigned long kernel_inittext_size = VO___inittext_end - VO__sinittext;
 const unsigned long kernel_total_size = VO__end - VO__text;
 
 static u8 boot_heap[BOOT_HEAP_SIZE] __aligned(4);
@@ -359,32 +356,6 @@ unsigned long decompress_kernel(unsigned char *outbuf, unsigned long virt_addr,
 	handle_relocations(outbuf, output_len, virt_addr);
 
 	return entry;
-}
-
-/*
- * Set the memory encryption xloadflag based on the mem_encrypt= command line
- * parameter, if provided.
- */
-static void parse_mem_encrypt(struct setup_header *hdr)
-{
-	int on = cmdline_find_option_bool("mem_encrypt=on");
-	int off = cmdline_find_option_bool("mem_encrypt=off");
-
-	if (on > off)
-		hdr->xloadflags |= XLF_MEM_ENCRYPTION;
-}
-
-static void early_sev_detect(void)
-{
-	/*
-	 * Accessing video memory causes guest termination because
-	 * the boot stage2 #VC handler of SEV-ES/SNP guests does not
-	 * support MMIO handling and kexec -c adds screen_info to the
-	 * boot parameters passed to the kexec kernel, which causes
-	 * console output to be dumped to both video and serial.
-	 */
-	if (sev_status & MSR_AMD64_SEV_ES_ENABLED)
-		lines = cols = 0;
 }
 
 /*
@@ -417,8 +388,6 @@ asmlinkage __visible void *extract_kernel(void *rmode, unsigned char *output)
 	/* Clear flags intended for solely in-kernel use. */
 	boot_params_ptr->hdr.loadflags &= ~KASLR_FLAG;
 
-	parse_mem_encrypt(&boot_params_ptr->hdr);
-
 	sanitize_boot_params(boot_params_ptr);
 
 	if (boot_params_ptr->screen_info.orig_video_mode == 7) {
@@ -441,8 +410,6 @@ asmlinkage __visible void *extract_kernel(void *rmode, unsigned char *output)
 	 * paravirtualized port I/O operations if needed.
 	 */
 	early_tdx_detect();
-
-	early_sev_detect();
 
 	console_init();
 
@@ -513,11 +480,6 @@ asmlinkage __visible void *extract_kernel(void *rmode, unsigned char *output)
 
 	debug_putstr("\nDecompressing Linux... ");
 
-	if (init_unaccepted_memory()) {
-		debug_putstr("Accepting memory... ");
-		accept_memory(__pa(output), needed_size);
-	}
-
 	entry_offset = decompress_kernel(output, virt_addr, error);
 
 	debug_putstr("done.\nBooting the kernel (entry_offset: 0x");
@@ -527,11 +489,10 @@ asmlinkage __visible void *extract_kernel(void *rmode, unsigned char *output)
 	/* Disable exception handling before booting the kernel */
 	cleanup_exception_handling();
 
-	if (spurious_nmi_count) {
-		error_putstr("Spurious early NMIs ignored: ");
-		error_putdec(spurious_nmi_count);
-		error_putstr("\n");
-	}
-
 	return output + entry_offset;
+}
+
+void fortify_panic(const char *name)
+{
+	error("detected buffer overflow");
 }

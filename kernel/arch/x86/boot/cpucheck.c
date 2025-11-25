@@ -22,11 +22,10 @@
 # include "boot.h"
 #endif
 #include <linux/types.h>
-#include <asm/cpufeaturemasks.h>
 #include <asm/intel-family.h>
 #include <asm/processor-flags.h>
+#include <asm/required-features.h>
 #include <asm/msr-index.h>
-
 #include "string.h"
 #include "msr.h"
 
@@ -204,7 +203,7 @@ int check_knl_erratum(void)
 	 */
 	if (!is_intel() ||
 	    cpu.family != 6 ||
-	    cpu.model != 0x57 /*INTEL_XEON_PHI_KNL*/)
+	    cpu.model != INTEL_FAM6_XEON_PHI_KNL)
 		return 0;
 
 	/*

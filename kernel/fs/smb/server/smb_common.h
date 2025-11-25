@@ -10,7 +10,6 @@
 
 #include "glob.h"
 #include "nterr.h"
-#include "../common/cifsglob.h"
 #include "../common/smb2pdu.h"
 #include "smb2pdu.h"
 
@@ -27,8 +26,16 @@
 #define SMB311_PROT		6
 #define BAD_PROT		0xFFFF
 
+#define SMB1_VERSION_STRING	"1.0"
+#define SMB20_VERSION_STRING	"2.0"
+#define SMB21_VERSION_STRING	"2.1"
+#define SMB30_VERSION_STRING	"3.0"
+#define SMB302_VERSION_STRING	"3.02"
+#define SMB311_VERSION_STRING	"3.1.1"
+
 #define SMB_ECHO_INTERVAL	(60 * HZ)
 
+#define CIFS_DEFAULT_IOSIZE	(64 * 1024)
 #define MAX_CIFS_SMALL_BUFFER_SIZE 448 /* big enough for most */
 
 #define MAX_STREAM_PROT_LEN	0x00FFFFFF
@@ -65,8 +72,6 @@
 #define FILE_SUPPORTS_ENCRYPTION	0x00020000
 #define FILE_SUPPORTS_OBJECT_IDS	0x00010000
 #define FILE_VOLUME_IS_COMPRESSED	0x00008000
-#define FILE_SUPPORTS_POSIX_UNLINK_RENAME 0x00000400
-#define FILE_RETURNS_CLEANUP_RESULT_INFO  0x00000200
 #define FILE_SUPPORTS_REMOTE_STORAGE	0x00000100
 #define FILE_SUPPORTS_REPARSE_POINTS	0x00000080
 #define FILE_SUPPORTS_SPARSE_FILES	0x00000040
@@ -208,7 +213,7 @@ struct filesystem_attribute_info {
 	__le32 Attributes;
 	__le32 MaxPathNameComponentLength;
 	__le32 FileSystemNameLen;
-	__le16 FileSystemName[]; /* do not have to save this - get subset? */
+	__le16 FileSystemName[1]; /* do not have to save this - get subset? */
 } __packed;
 
 struct filesystem_device_info {
@@ -221,7 +226,7 @@ struct filesystem_vol_info {
 	__le32 SerialNumber;
 	__le32 VolumeLabelSize;
 	__le16 Reserved;
-	__le16 VolumeLabel[];
+	__le16 VolumeLabel[1];
 } __packed;
 
 struct filesystem_info {
@@ -422,7 +427,7 @@ bool ksmbd_smb_request(struct ksmbd_conn *conn);
 
 int ksmbd_lookup_dialect_by_id(__le16 *cli_dialects, __le16 dialects_count);
 
-int ksmbd_init_smb_server(struct ksmbd_conn *conn);
+int ksmbd_init_smb_server(struct ksmbd_work *work);
 
 struct ksmbd_kstat;
 int ksmbd_populate_dot_dotdot_entries(struct ksmbd_work *work,
@@ -456,5 +461,10 @@ __le32 smb_map_generic_desired_access(__le32 daccess);
 static inline unsigned int get_rfc1002_len(void *buf)
 {
 	return be32_to_cpu(*((__be32 *)buf)) & 0xffffff;
+}
+
+static inline void inc_rfc1001_len(void *buf, int count)
+{
+	be32_add_cpu((__be32 *)buf, count);
 }
 #endif /* __SMB_COMMON_H__ */

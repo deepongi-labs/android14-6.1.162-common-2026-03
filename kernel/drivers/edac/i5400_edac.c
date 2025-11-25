@@ -31,7 +31,6 @@
 #include <linux/slab.h>
 #include <linux/edac.h>
 #include <linux/mmzone.h>
-#include <linux/string_choices.h>
 
 #include "edac_module.h"
 
@@ -280,8 +279,7 @@ static inline int from_nf_ferr(unsigned int mask)
 #define FERR_NF_RECOVERABLE	to_nf_mask(ERROR_NF_RECOVERABLE)
 #define FERR_NF_UNCORRECTABLE	to_nf_mask(ERROR_NF_UNCORRECTABLE)
 
-/*
- * Defines to extract the various fields from the
+/* Defines to extract the vaious fields from the
  *	MTRx - Memory Technology Registers
  */
 #define MTR_DIMMS_PRESENT(mtr)		((mtr) & (1 << 10))
@@ -900,7 +898,7 @@ static void decode_mtr(int slot_row, u16 mtr)
 	edac_dbg(2, "\t\tWIDTH: x%d\n", MTR_DRAM_WIDTH(mtr));
 
 	edac_dbg(2, "\t\tELECTRICAL THROTTLING is %s\n",
-		 str_enabled_disabled(MTR_DIMMS_ETHROTTLE(mtr)));
+		 MTR_DIMMS_ETHROTTLE(mtr) ? "enabled" : "disabled");
 
 	edac_dbg(2, "\t\tNUMBANK: %d bank(s)\n", MTR_DRAM_BANKS(mtr));
 	edac_dbg(2, "\t\tNUMRANK: %s\n",

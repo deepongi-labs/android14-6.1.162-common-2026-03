@@ -62,36 +62,6 @@ static struct damos_quota damon_reclaim_quota = {
 };
 DEFINE_DAMON_MODULES_DAMOS_QUOTAS(damon_reclaim_quota);
 
-/*
- * Desired level of memory pressure-stall time in microseconds.
- *
- * While keeping the caps that set by other quotas, DAMON_RECLAIM automatically
- * increases and decreases the effective level of the quota aiming this level of
- * memory pressure is incurred.  System-wide ``some`` memory PSI in microseconds
- * per quota reset interval (``quota_reset_interval_ms``) is collected and
- * compared to this value to see if the aim is satisfied.  Value zero means
- * disabling this auto-tuning feature.
- *
- * Disabled by default.
- */
-static unsigned long quota_mem_pressure_us __read_mostly;
-module_param(quota_mem_pressure_us, ulong, 0600);
-
-/*
- * User-specifiable feedback for auto-tuning of the effective quota.
- *
- * While keeping the caps that set by other quotas, DAMON_RECLAIM automatically
- * increases and decreases the effective level of the quota aiming receiving this
- * feedback of value ``10,000`` from the user.  DAMON_RECLAIM assumes the feedback
- * value and the quota are positively proportional.  Value zero means disabling
- * this auto-tuning feature.
- *
- * Disabled by default.
- *
- */
-static unsigned long quota_autotune_feedback __read_mostly;
-module_param(quota_autotune_feedback, ulong, 0600);
-
 static struct damos_watermarks damon_reclaim_wmarks = {
 	.metric = DAMOS_WMARK_FREE_MEM_RATE,
 	.interval = 5000000,	/* 5 seconds */
@@ -129,22 +99,6 @@ static unsigned long monitor_region_end __read_mostly;
 module_param(monitor_region_end, ulong, 0600);
 
 /*
- * Scale factor for DAMON_RECLAIM to ops address conversion.
- *
- * This parameter must not be set to 0.
- */
-static unsigned long addr_unit __read_mostly = 1;
-
-/*
- * Skip anonymous pages reclamation.
- *
- * If this parameter is set as ``Y``, DAMON_RECLAIM does not reclaim anonymous
- * pages.  By default, ``N``.
- */
-static bool skip_anon __read_mostly;
-module_param(skip_anon, bool, 0600);
-
-/*
  * PID of the DAMON thread
  *
  * If DAMON_RECLAIM is enabled, this becomes the PID of the worker thread.
@@ -179,114 +133,47 @@ static struct damos *damon_reclaim_new_scheme(void)
 			&pattern,
 			/* page out those, as soon as found */
 			DAMOS_PAGEOUT,
-			/* for each aggregation interval */
-			0,
 			/* under the quota. */
 			&damon_reclaim_quota,
 			/* (De)activate this according to the watermarks. */
-			&damon_reclaim_wmarks,
-			NUMA_NO_NODE);
+			&damon_reclaim_wmarks);
+}
+
+static void damon_reclaim_copy_quota_status(struct damos_quota *dst,
+		struct damos_quota *src)
+{
+	dst->total_charged_sz = src->total_charged_sz;
+	dst->total_charged_ns = src->total_charged_ns;
+	dst->charged_sz = src->charged_sz;
+	dst->charged_from = src->charged_from;
+	dst->charge_target_from = src->charge_target_from;
+	dst->charge_addr_from = src->charge_addr_from;
 }
 
 static int damon_reclaim_apply_parameters(void)
 {
-	struct damon_ctx *param_ctx;
-	struct damon_target *param_target;
-	struct damos *scheme;
-	struct damos_quota_goal *goal;
-	struct damos_filter *filter;
-	int err;
+	struct damos *scheme, *old_scheme;
+	int err = 0;
 
-	err = damon_modules_new_paddr_ctx_target(&param_ctx, &param_target);
+	err = damon_set_attrs(ctx, &damon_reclaim_mon_attrs);
 	if (err)
 		return err;
 
-	/*
-	 * If monitor_region_start/end are unset, always silently
-	 * reset addr_unit to 1.
-	 */
-	if (!monitor_region_start && !monitor_region_end)
-		addr_unit = 1;
-	param_ctx->addr_unit = addr_unit;
-	param_ctx->min_sz_region = max(DAMON_MIN_REGION / addr_unit, 1);
-
-	if (!damon_reclaim_mon_attrs.aggr_interval) {
-		err = -EINVAL;
-		goto out;
-	}
-
-	err = damon_set_attrs(param_ctx, &damon_reclaim_mon_attrs);
-	if (err)
-		goto out;
-
-	err = -ENOMEM;
+	/* Will be freed by next 'damon_set_schemes()' below */
 	scheme = damon_reclaim_new_scheme();
 	if (!scheme)
-		goto out;
-	damon_set_schemes(param_ctx, &scheme, 1);
-
-	if (quota_mem_pressure_us) {
-		goal = damos_new_quota_goal(DAMOS_QUOTA_SOME_MEM_PSI_US,
-				quota_mem_pressure_us);
-		if (!goal)
-			goto out;
-		damos_add_quota_goal(&scheme->quota, goal);
+		return -ENOMEM;
+	if (!list_empty(&ctx->schemes)) {
+		damon_for_each_scheme(old_scheme, ctx)
+			damon_reclaim_copy_quota_status(&scheme->quota,
+					&old_scheme->quota);
 	}
+	damon_set_schemes(ctx, &scheme, 1);
 
-	if (quota_autotune_feedback) {
-		goal = damos_new_quota_goal(DAMOS_QUOTA_USER_INPUT, 10000);
-		if (!goal)
-			goto out;
-		goal->current_value = quota_autotune_feedback;
-		damos_add_quota_goal(&scheme->quota, goal);
-	}
-
-	if (skip_anon) {
-		filter = damos_new_filter(DAMOS_FILTER_TYPE_ANON, true, false);
-		if (!filter)
-			goto out;
-		damos_add_filter(scheme, filter);
-	}
-
-	err = damon_set_region_biggest_system_ram_default(param_target,
+	return damon_set_region_biggest_system_ram_default(target,
 					&monitor_region_start,
 					&monitor_region_end);
-	if (err)
-		goto out;
-	err = damon_commit_ctx(ctx, param_ctx);
-out:
-	damon_destroy_ctx(param_ctx);
-	return err;
 }
-
-static int damon_reclaim_handle_commit_inputs(void)
-{
-	int err;
-
-	if (!commit_inputs)
-		return 0;
-
-	err = damon_reclaim_apply_parameters();
-	commit_inputs = false;
-	return err;
-}
-
-static int damon_reclaim_damon_call_fn(void *arg)
-{
-	struct damon_ctx *c = arg;
-	struct damos *s;
-
-	/* update the stats parameter */
-	damon_for_each_scheme(s, c)
-		damon_reclaim_stat = s->stat;
-
-	return damon_reclaim_handle_commit_inputs();
-}
-
-static struct damon_call_control call_control = {
-	.fn = damon_reclaim_damon_call_fn,
-	.repeat = true,
-};
 
 static int damon_reclaim_turn(bool on)
 {
@@ -307,32 +194,8 @@ static int damon_reclaim_turn(bool on)
 	if (err)
 		return err;
 	kdamond_pid = ctx->kdamond->pid;
-	return damon_call(ctx, &call_control);
-}
-
-static int damon_reclaim_addr_unit_store(const char *val,
-		const struct kernel_param *kp)
-{
-	unsigned long input_addr_unit;
-	int err = kstrtoul(val, 0, &input_addr_unit);
-
-	if (err)
-		return err;
-	if (!input_addr_unit)
-		return -EINVAL;
-
-	addr_unit = input_addr_unit;
 	return 0;
 }
-
-static const struct kernel_param_ops addr_unit_param_ops = {
-	.set = damon_reclaim_addr_unit_store,
-	.get = param_get_ulong,
-};
-
-module_param_cb(addr_unit, &addr_unit_param_ops, &addr_unit, 0600);
-MODULE_PARM_DESC(addr_unit,
-	"Scale factor for DAMON_RECLAIM to ops address conversion (default: 1)");
 
 static int damon_reclaim_enabled_store(const char *val,
 		const struct kernel_param *kp)
@@ -349,7 +212,7 @@ static int damon_reclaim_enabled_store(const char *val,
 		return 0;
 
 	/* Called before init function.  The function will handle this. */
-	if (!damon_initialized())
+	if (!ctx)
 		goto set_param_out;
 
 	err = damon_reclaim_turn(enable);
@@ -370,27 +233,48 @@ module_param_cb(enabled, &enabled_param_ops, &enabled, 0600);
 MODULE_PARM_DESC(enabled,
 	"Enable or disable DAMON_RECLAIM (default: disabled)");
 
-static int __init damon_reclaim_init(void)
+static int damon_reclaim_handle_commit_inputs(void)
 {
 	int err;
 
-	if (!damon_initialized()) {
-		err = -ENOMEM;
-		goto out;
-	}
-	err = damon_modules_new_paddr_ctx_target(&ctx, &target);
-	if (err)
-		goto out;
+	if (!commit_inputs)
+		return 0;
 
-	call_control.data = ctx;
+	err = damon_reclaim_apply_parameters();
+	commit_inputs = false;
+	return err;
+}
+
+static int damon_reclaim_after_aggregation(struct damon_ctx *c)
+{
+	struct damos *s;
+
+	/* update the stats parameter */
+	damon_for_each_scheme(s, c)
+		damon_reclaim_stat = s->stat;
+
+	return damon_reclaim_handle_commit_inputs();
+}
+
+static int damon_reclaim_after_wmarks_check(struct damon_ctx *c)
+{
+	return damon_reclaim_handle_commit_inputs();
+}
+
+static int __init damon_reclaim_init(void)
+{
+	int err = damon_modules_new_paddr_ctx_target(&ctx, &target);
+
+	if (err)
+		return err;
+
+	ctx->callback.after_wmarks_check = damon_reclaim_after_wmarks_check;
+	ctx->callback.after_aggregation = damon_reclaim_after_aggregation;
 
 	/* 'enabled' has set before this function, probably via command line */
 	if (enabled)
 		err = damon_reclaim_turn(true);
 
-out:
-	if (err && enabled)
-		enabled = false;
 	return err;
 }
 

@@ -8,7 +8,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/platform_device.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/of_address.h>
@@ -1095,7 +1094,7 @@ err:
 	return ret;
 }
 
-static void fsl_ifc_nand_remove(struct platform_device *dev)
+static int fsl_ifc_nand_remove(struct platform_device *dev)
 {
 	struct fsl_ifc_mtd *priv = dev_get_drvdata(&dev->dev);
 	struct nand_chip *chip = &priv->chip;
@@ -1114,6 +1113,8 @@ static void fsl_ifc_nand_remove(struct platform_device *dev)
 		kfree(ifc_nand_ctrl);
 	}
 	mutex_unlock(&fsl_ifc_nand_mutex);
+
+	return 0;
 }
 
 static const struct of_device_id fsl_ifc_nand_match[] = {

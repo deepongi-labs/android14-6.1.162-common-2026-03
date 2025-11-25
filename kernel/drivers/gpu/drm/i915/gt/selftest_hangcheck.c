@@ -73,7 +73,7 @@ static int hang_init(struct hang *h, struct intel_gt *gt)
 	h->seqno = memset(vaddr, 0xff, PAGE_SIZE);
 
 	vaddr = i915_gem_object_pin_map_unlocked(h->obj,
-						 intel_gt_coherent_map_type(gt, h->obj, false));
+						 i915_coherent_map_type(gt->i915, h->obj, false));
 	if (IS_ERR(vaddr)) {
 		err = PTR_ERR(vaddr);
 		goto err_unpin_hws;
@@ -96,8 +96,23 @@ err_ctx:
 static u64 hws_address(const struct i915_vma *hws,
 		       const struct i915_request *rq)
 {
-	return i915_vma_offset(hws) +
-	       offset_in_page(sizeof(u32) * rq->fence.context);
+	return hws->node.start + offset_in_page(sizeof(u32)*rq->fence.context);
+}
+
+static int move_to_active(struct i915_vma *vma,
+			  struct i915_request *rq,
+			  unsigned int flags)
+{
+	int err;
+
+	i915_vma_lock(vma);
+	err = i915_request_await_object(rq, vma->obj,
+					flags & EXEC_OBJECT_WRITE);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, flags);
+	i915_vma_unlock(vma);
+
+	return err;
 }
 
 static struct i915_request *
@@ -119,7 +134,7 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 		return ERR_CAST(obj);
 	}
 
-	vaddr = i915_gem_object_pin_map_unlocked(obj, intel_gt_coherent_map_type(gt, obj, false));
+	vaddr = i915_gem_object_pin_map_unlocked(obj, i915_coherent_map_type(gt->i915, obj, false));
 	if (IS_ERR(vaddr)) {
 		i915_gem_object_put(obj);
 		i915_vm_put(vm);
@@ -160,11 +175,11 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 		goto unpin_hws;
 	}
 
-	err = igt_vma_move_to_active_unlocked(vma, rq, 0);
+	err = move_to_active(vma, rq, 0);
 	if (err)
 		goto cancel_rq;
 
-	err = igt_vma_move_to_active_unlocked(hws, rq, 0);
+	err = move_to_active(hws, rq, 0);
 	if (err)
 		goto cancel_rq;
 
@@ -181,8 +196,8 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 
 		*batch++ = MI_NOOP;
 		*batch++ = MI_BATCH_BUFFER_START | 1 << 8 | 1;
-		*batch++ = lower_32_bits(i915_vma_offset(vma));
-		*batch++ = upper_32_bits(i915_vma_offset(vma));
+		*batch++ = lower_32_bits(vma->node.start);
+		*batch++ = upper_32_bits(vma->node.start);
 	} else if (GRAPHICS_VER(gt->i915) >= 6) {
 		*batch++ = MI_STORE_DWORD_IMM_GEN4;
 		*batch++ = 0;
@@ -195,7 +210,7 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 
 		*batch++ = MI_NOOP;
 		*batch++ = MI_BATCH_BUFFER_START | 1 << 8;
-		*batch++ = lower_32_bits(i915_vma_offset(vma));
+		*batch++ = lower_32_bits(vma->node.start);
 	} else if (GRAPHICS_VER(gt->i915) >= 4) {
 		*batch++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
 		*batch++ = 0;
@@ -208,7 +223,7 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 
 		*batch++ = MI_NOOP;
 		*batch++ = MI_BATCH_BUFFER_START | 2 << 6;
-		*batch++ = lower_32_bits(i915_vma_offset(vma));
+		*batch++ = lower_32_bits(vma->node.start);
 	} else {
 		*batch++ = MI_STORE_DWORD_IMM | MI_MEM_VIRTUAL;
 		*batch++ = lower_32_bits(hws_address(hws, rq));
@@ -220,7 +235,7 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 
 		*batch++ = MI_NOOP;
 		*batch++ = MI_BATCH_BUFFER_START | 2 << 6;
-		*batch++ = lower_32_bits(i915_vma_offset(vma));
+		*batch++ = lower_32_bits(vma->node.start);
 	}
 	*batch++ = MI_BATCH_BUFFER_END; /* not reached */
 	intel_gt_chipset_flush(engine->gt);
@@ -235,7 +250,7 @@ hang_create_request(struct hang *h, struct intel_engine_cs *engine)
 	if (GRAPHICS_VER(gt->i915) <= 5)
 		flags |= I915_DISPATCH_SECURE;
 
-	err = rq->engine->emit_bb_start(rq, i915_vma_offset(vma), PAGE_SIZE, flags);
+	err = rq->engine->emit_bb_start(rq, vma->node.start, PAGE_SIZE, flags);
 
 cancel_rq:
 	if (err) {
@@ -319,7 +334,7 @@ static int igt_hang_sanitycheck(void *arg)
 		i915_request_add(rq);
 
 		timeout = 0;
-		intel_wedge_on_timeout(&w, gt, HZ / 5 /* 200ms */)
+		intel_wedge_on_timeout(&w, gt, HZ / 10 /* 100ms */)
 			timeout = i915_request_wait(rq, 0,
 						    MAX_SCHEDULE_TIMEOUT);
 		if (intel_gt_is_wedged(gt))
@@ -548,7 +563,7 @@ static int igt_reset_fail_engine(void *arg)
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
 
-	/* Check that we can recover from engine-reset failures */
+	/* Check that we can recover from engine-reset failues */
 
 	if (!intel_has_reset_engine(gt))
 		return 0;
@@ -904,7 +919,7 @@ static void active_engine(struct kthread_work *work)
 			arg->result = PTR_ERR(ce[count]);
 			pr_err("[%s] Create context #%ld failed: %d!\n",
 			       engine->name, count, arg->result);
-			while (count--)
+			while (--count)
 				intel_context_put(ce[count]);
 			return;
 		}
@@ -1025,7 +1040,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 			threads[tmp].engine = other;
 			threads[tmp].flags = flags;
 
-			worker = kthread_run_worker(0, "igt/%s",
+			worker = kthread_create_worker(0, "igt/%s",
 						       other->name);
 			if (IS_ERR(worker)) {
 				err = PTR_ERR(worker);
@@ -1504,9 +1519,18 @@ static int __igt_reset_evict_vma(struct intel_gt *gt,
 		}
 	}
 
-	err = igt_vma_move_to_active_unlocked(arg.vma, rq, flags);
-	if (err)
-		pr_err("[%s] Move to active failed: %d!\n", engine->name, err);
+	i915_vma_lock(arg.vma);
+	err = i915_request_await_object(rq, arg.vma->obj,
+					flags & EXEC_OBJECT_WRITE);
+	if (err == 0) {
+		err = i915_vma_move_to_active(arg.vma, rq, flags);
+		if (err)
+			pr_err("[%s] Move to active failed: %d!\n", engine->name, err);
+	} else {
+		pr_err("[%s] Request await failed: %d!\n", engine->name, err);
+	}
+
+	i915_vma_unlock(arg.vma);
 
 	if (flags & EXEC_OBJECT_NEEDS_FENCE)
 		i915_vma_unpin_fence(arg.vma);

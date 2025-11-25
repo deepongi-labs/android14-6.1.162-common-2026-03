@@ -105,7 +105,7 @@
 			mux {
 				groups = "uart_tx_ao_a", "uart_rx_ao_a";
 				function = "uart_ao";
-				bias-pull-up;
+				bias-disable;
 			};
 		};
 
@@ -122,7 +122,7 @@
 			mux {
 				groups = "uart_tx_ao_b", "uart_rx_ao_b";
 				function = "uart_ao_b";
-				bias-pull-up;
+				bias-disable;
 			};
 		};
 
@@ -300,8 +300,8 @@
 };
 
 &gpio_intc {
-	compatible = "amlogic,meson-gxbb-gpio-intc",
-		     "amlogic,meson-gpio-intc";
+	compatible = "amlogic,meson-gpio-intc",
+		     "amlogic,meson-gxbb-gpio-intc";
 	status = "okay";
 };
 
@@ -315,12 +315,6 @@
 		 <&clkc CLKID_HDMI_PCLK>,
 		 <&clkc CLKID_GCLK_VENCI_INT0>;
 	clock-names = "isfr", "iahb", "venci";
-	power-domains = <&pwrc PWRC_GXBB_VPU_ID>;
-
-	assigned-clocks = <&clkc CLKID_HDMI_SEL>,
-			  <&clkc CLKID_HDMI>;
-	assigned-clock-parents = <&xtal>, <0>;
-	assigned-clock-rates = <0>, <24000000>;
 };
 
 &sysctrl {
@@ -433,20 +427,6 @@
 			};
 		};
 
-		spi_idle_high_pins: spi-idle-high-pins {
-			mux {
-				groups = "spi_sclk";
-				bias-pull-up;
-			};
-		};
-
-		spi_idle_low_pins: spi-idle-low-pins {
-			mux {
-				groups = "spi_sclk";
-				bias-pull-down;
-			};
-		};
-
 		spi_ss0_pins: spi-ss0 {
 			mux {
 				groups = "spi_ss0";
@@ -520,7 +500,7 @@
 				groups = "uart_tx_a",
 				       "uart_rx_a";
 				function = "uart_a";
-				bias-pull-up;
+				bias-disable;
 			};
 		};
 
@@ -538,7 +518,7 @@
 				groups = "uart_tx_b",
 				       "uart_rx_b";
 				function = "uart_b";
-				bias-pull-up;
+				bias-disable;
 			};
 		};
 
@@ -556,7 +536,7 @@
 				groups = "uart_tx_c",
 				       "uart_rx_c";
 				function = "uart_c";
-				bias-pull-up;
+				bias-disable;
 			};
 		};
 
@@ -737,31 +717,6 @@
 			};
 		};
 	};
-};
-
-&pwm_ab {
-	clocks = <&xtal>,
-		 <0>, /* unknown/untested, the datasheet calls it "vid_pll" */
-		 <&clkc CLKID_FCLK_DIV4>,
-		 <&clkc CLKID_FCLK_DIV3>;
-};
-
-&pwm_AO_ab {
-	clocks = <&xtal>, <&clkc CLKID_CLK81>;
-};
-
-&pwm_cd {
-	clocks = <&xtal>,
-		 <0>, /* unknown/untested, the datasheet calls it "vid_pll" */
-		 <&clkc CLKID_FCLK_DIV4>,
-		 <&clkc CLKID_FCLK_DIV3>;
-};
-
-&pwm_ef {
-	clocks = <&xtal>,
-		 <0>, /* unknown/untested, the datasheet calls it "vid_pll" */
-		 <&clkc CLKID_FCLK_DIV4>,
-		 <&clkc CLKID_FCLK_DIV3>;
 };
 
 &pwrc {

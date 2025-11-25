@@ -21,7 +21,6 @@
 #include <net/ip_tunnels.h>
 #include <net/ip6_tunnel.h>
 #include <net/dst_metadata.h>
-#include <net/hotdata.h>
 
 #include "xfrm_inout.h"
 
@@ -48,7 +47,7 @@ static DEFINE_SPINLOCK(xfrm_input_afinfo_lock);
 static struct xfrm_input_afinfo const __rcu *xfrm_input_afinfo[2][AF_INET6 + 1];
 
 static struct gro_cells gro_cells;
-static struct net_device *xfrm_napi_dev;
+static struct net_device xfrm_napi_dev;
 
 static DEFINE_PER_CPU(struct xfrm_trans_tasklet, xfrm_trans_tasklet);
 
@@ -446,9 +445,6 @@ static int xfrm_inner_mode_input(struct xfrm_state *x,
 		WARN_ON_ONCE(1);
 		break;
 	default:
-		if (x->mode_cbs && x->mode_cbs->input)
-			return x->mode_cbs->input(x, skb);
-
 		WARN_ON_ONCE(1);
 		break;
 	}
@@ -456,10 +452,6 @@ static int xfrm_inner_mode_input(struct xfrm_state *x,
 	return -EOPNOTSUPP;
 }
 
-/* NOTE: encap_type - In addition to the normal (non-negative) values for
- * encap_type, a negative value of -1 or -2 can be used to resume/restart this
- * function after a previous invocation early terminated for async operation.
- */
 int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 {
 	const struct xfrm_state_afinfo *afinfo;
@@ -478,8 +470,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 	struct xfrm_offload *xo = xfrm_offload(skb);
 	struct sec_path *sp;
 
-	if (encap_type < 0 || (xo && (xo->flags & XFRM_GRO || encap_type == 0 ||
-				      encap_type == UDP_ENCAP_ESPINUDP))) {
+	if (encap_type < 0) {
 		x = xfrm_input_state(skb);
 
 		if (unlikely(x->km.state != XFRM_STATE_VALID)) {
@@ -496,18 +487,15 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 
 		family = x->props.family;
 
-		/* An encap_type of -2 indicates reconstructed inner packet */
-		if (encap_type == -2)
-			goto resume_decapped;
-
 		/* An encap_type of -1 indicates async resumption. */
 		if (encap_type == -1) {
 			async = 1;
-			dev_put(skb->dev);
 			seq = XFRM_SKB_CB(skb)->seq.input.low;
 			goto resume;
 		}
-		/* GRO call */
+
+		/* encap_type < -1 indicates a GRO call. */
+		encap_type = 0;
 		seq = XFRM_SPI_SKB_CB(skb)->seq;
 
 		if (xo && (xo->flags & CRYPTO_DONE)) {
@@ -584,7 +572,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 			goto drop;
 		}
 
-		x = xfrm_input_state_lookup(net, mark, daddr, spi, nexthdr, family);
+		x = xfrm_state_lookup(net, mark, daddr, spi, nexthdr, family);
 		if (x == NULL) {
 			secpath_reset(skb);
 			XFRM_INC_STATS(net, LINUX_MIB_XFRMINNOSTATES);
@@ -592,12 +580,17 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 			goto drop;
 		}
 
-		if (unlikely(x->dir && x->dir != XFRM_SA_DIR_IN)) {
-			secpath_reset(skb);
-			XFRM_INC_STATS(net, LINUX_MIB_XFRMINSTATEDIRERROR);
-			xfrm_audit_state_notfound(skb, family, spi, seq);
-			xfrm_state_put(x);
-			x = NULL;
+		/* If nested tunnel, check outer states before context is lost.
+		 * Only nested tunnels need to be checked, since IP addresses change
+		 * as a result of the tunnel mode decapsulation. Similarly, this check
+		 * is limited to nested tunnels to avoid performing another policy
+		 * check on non-nested tunnels. On success, this check also updates the
+		 * secpath's verified_cnt variable, skipping future verifications of
+		 * previously-verified secpath entries.
+		 */
+		if ((x->outer_mode.flags & XFRM_MODE_FLAG_TUNNEL) &&
+		    sp->verified_cnt < sp->len &&
+		    !xfrm_policy_check(NULL, XFRM_POLICY_IN, skb, family)) {
 			goto drop;
 		}
 
@@ -650,18 +643,18 @@ lock:
 		XFRM_SKB_CB(skb)->seq.input.low = seq;
 		XFRM_SKB_CB(skb)->seq.input.hi = seq_hi;
 
-		if (crypto_done) {
+		dev_hold(skb->dev);
+
+		if (crypto_done)
 			nexthdr = x->type_offload->input_tail(x, skb);
-		} else {
-			dev_hold(skb->dev);
-
+		else
 			nexthdr = x->type->input(x, skb);
-			if (nexthdr == -EINPROGRESS)
-				return 0;
 
-			dev_put(skb->dev);
-		}
+		if (nexthdr == -EINPROGRESS)
+			return 0;
 resume:
+		dev_put(skb->dev);
+
 		spin_lock(&x->lock);
 		if (nexthdr < 0) {
 			if (nexthdr == -EBADMSG) {
@@ -685,20 +678,16 @@ resume:
 
 		x->curlft.bytes += skb->len;
 		x->curlft.packets++;
-		x->lastused = ktime_get_real_seconds();
 
 		spin_unlock(&x->lock);
 
 		XFRM_MODE_SKB_CB(skb)->protocol = nexthdr;
 
-		err = xfrm_inner_mode_input(x, skb);
-		if (err == -EINPROGRESS)
-			return 0;
-		else if (err) {
+		if (xfrm_inner_mode_input(x, skb)) {
 			XFRM_INC_STATS(net, LINUX_MIB_XFRMINSTATEMODEERROR);
 			goto drop;
 		}
-resume_decapped:
+
 		if (x->outer_mode.flags & XFRM_MODE_FLAG_TUNNEL) {
 			decaps = 1;
 			break;
@@ -798,7 +787,7 @@ int xfrm_trans_queue_net(struct net *net, struct sk_buff *skb,
 
 	trans = this_cpu_ptr(&xfrm_trans_tasklet);
 
-	if (skb_queue_len(&trans->queue) >= READ_ONCE(net_hotdata.max_backlog))
+	if (skb_queue_len(&trans->queue) >= READ_ONCE(netdev_max_backlog))
 		return -ENOBUFS;
 
 	BUILD_BUG_ON(sizeof(struct xfrm_trans_cb) > sizeof(skb->cb));
@@ -826,11 +815,8 @@ void __init xfrm_input_init(void)
 	int err;
 	int i;
 
-	xfrm_napi_dev = alloc_netdev_dummy(0);
-	if (!xfrm_napi_dev)
-		panic("Failed to allocate XFRM dummy netdev\n");
-
-	err = gro_cells_init(&gro_cells, xfrm_napi_dev);
+	init_dummy_netdev(&xfrm_napi_dev);
+	err = gro_cells_init(&gro_cells, &xfrm_napi_dev);
 	if (err)
 		gro_cells.cells = NULL;
 

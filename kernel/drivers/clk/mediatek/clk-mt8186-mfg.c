@@ -16,9 +16,8 @@ static const struct mtk_gate_regs mfg_cg_regs = {
 	.sta_ofs = 0x0,
 };
 
-#define GATE_MFG(_id, _name, _parent, _shift)				\
-	GATE_MTK_FLAGS(_id, _name, _parent, &mfg_cg_regs, _shift,	\
-		       &mtk_clk_gate_ops_setclr, CLK_SET_RATE_PARENT)
+#define GATE_MFG(_id, _name, _parent, _shift)			\
+	GATE_MTK(_id, _name, _parent, &mfg_cg_regs, _shift, &mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate mfg_clks[] = {
 	GATE_MFG(CLK_MFG_BG3D, "mfg_bg3d", "top_mfg", 0),
@@ -37,7 +36,6 @@ static const struct of_device_id of_match_clk_mt8186_mfg[] = {
 		/* sentinel */
 	}
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt8186_mfg);
 
 static struct platform_driver clk_mt8186_mfg_drv = {
 	.probe = mtk_clk_simple_probe,
@@ -48,6 +46,4 @@ static struct platform_driver clk_mt8186_mfg_drv = {
 	},
 };
 module_platform_driver(clk_mt8186_mfg_drv);
-
-MODULE_DESCRIPTION("MediaTek MT8186 GPU mfg clocks driver");
 MODULE_LICENSE("GPL");

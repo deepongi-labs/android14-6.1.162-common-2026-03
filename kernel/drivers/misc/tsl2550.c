@@ -185,10 +185,10 @@ static ssize_t tsl2550_store_power_state(struct device *dev,
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct tsl2550_data *data = i2c_get_clientdata(client);
-	unsigned long val;
+	unsigned long val = simple_strtoul(buf, NULL, 10);
 	int ret;
 
-	if (kstrtoul(buf, 10, &val) || val > 1)
+	if (val > 1)
 		return -EINVAL;
 
 	mutex_lock(&data->update_lock);
@@ -217,10 +217,10 @@ static ssize_t tsl2550_store_operating_mode(struct device *dev,
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct tsl2550_data *data = i2c_get_clientdata(client);
-	unsigned long val;
+	unsigned long val = simple_strtoul(buf, NULL, 10);
 	int ret;
 
-	if (kstrtoul(buf, 10, &val) || val > 1)
+	if (val > 1)
 		return -EINVAL;
 
 	if (data->power_state == 0)
@@ -331,7 +331,8 @@ static int tsl2550_init_client(struct i2c_client *client)
  */
 
 static struct i2c_driver tsl2550_driver;
-static int tsl2550_probe(struct i2c_client *client)
+static int tsl2550_probe(struct i2c_client *client,
+				   const struct i2c_device_id *id)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct tsl2550_data *data;
@@ -420,7 +421,7 @@ static SIMPLE_DEV_PM_OPS(tsl2550_pm_ops, tsl2550_suspend, tsl2550_resume);
 #endif /* CONFIG_PM_SLEEP */
 
 static const struct i2c_device_id tsl2550_id[] = {
-	{ "tsl2550" },
+	{ "tsl2550", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tsl2550_id);
@@ -437,7 +438,7 @@ static struct i2c_driver tsl2550_driver = {
 		.of_match_table = tsl2550_of_match,
 		.pm	= TSL2550_PM_OPS,
 	},
-	.probe = tsl2550_probe,
+	.probe	= tsl2550_probe,
 	.remove	= tsl2550_remove,
 	.id_table = tsl2550_id,
 };

@@ -16,7 +16,26 @@
 #include <unistd.h>
 #include "ptrace.h"
 #include "child.h"
-#include "pkeys.h"
+
+#ifndef __NR_pkey_alloc
+#define __NR_pkey_alloc		384
+#endif
+
+#ifndef __NR_pkey_free
+#define __NR_pkey_free		385
+#endif
+
+#ifndef NT_PPC_PKEY
+#define NT_PPC_PKEY		0x110
+#endif
+
+#ifndef PKEY_DISABLE_EXECUTE
+#define PKEY_DISABLE_EXECUTE	0x4
+#endif
+
+#define AMR_BITS_PER_PKEY 2
+#define PKEY_REG_BITS (sizeof(u64) * 8)
+#define pkeyshift(pkey) (PKEY_REG_BITS - ((pkey + 1) * AMR_BITS_PER_PKEY))
 
 #define CORE_FILE_LIMIT	(5 * 1024 * 1024)	/* 5 MB should be enough */
 
@@ -41,6 +60,16 @@ struct shared_info {
 	/* When the child crashed. */
 	time_t core_time;
 };
+
+static int sys_pkey_alloc(unsigned long flags, unsigned long init_access_rights)
+{
+	return syscall(__NR_pkey_alloc, flags, init_access_rights);
+}
+
+static int sys_pkey_free(int pkey)
+{
+	return syscall(__NR_pkey_free, pkey);
+}
 
 static int increase_core_file_limit(void)
 {
@@ -95,16 +124,16 @@ static int child(struct shared_info *info)
 	/* Get some pkeys so that we can change their bits in the AMR. */
 	pkey1 = sys_pkey_alloc(0, PKEY_DISABLE_EXECUTE);
 	if (pkey1 < 0) {
-		pkey1 = sys_pkey_alloc(0, PKEY_UNRESTRICTED);
+		pkey1 = sys_pkey_alloc(0, 0);
 		FAIL_IF(pkey1 < 0);
 
 		disable_execute = false;
 	}
 
-	pkey2 = sys_pkey_alloc(0, PKEY_UNRESTRICTED);
+	pkey2 = sys_pkey_alloc(0, 0);
 	FAIL_IF(pkey2 < 0);
 
-	pkey3 = sys_pkey_alloc(0, PKEY_UNRESTRICTED);
+	pkey3 = sys_pkey_alloc(0, 0);
 	FAIL_IF(pkey3 < 0);
 
 	info->amr |= 3ul << pkeyshift(pkey1) | 2ul << pkeyshift(pkey2);
@@ -237,7 +266,7 @@ static int parent(struct shared_info *info, pid_t pid)
 	 * to the child.
 	 */
 	ret = ptrace_read_regs(pid, NT_PPC_PKEY, regs, 3);
-	PARENT_SKIP_IF_UNSUPPORTED(ret, &info->child_sync, "PKEYs not supported");
+	PARENT_SKIP_IF_UNSUPPORTED(ret, &info->child_sync);
 	PARENT_FAIL_IF(ret, &info->child_sync);
 
 	info->amr = regs[0];
@@ -300,7 +329,7 @@ static int parent(struct shared_info *info, pid_t pid)
 
 	core = mmap(NULL, core_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (core == (void *) -1) {
-		perror("Error mmapping core file");
+		perror("Error mmaping core file");
 		ret = TEST_FAIL;
 		goto out;
 	}
@@ -319,11 +348,15 @@ static int parent(struct shared_info *info, pid_t pid)
 
 static int write_core_pattern(const char *core_pattern)
 {
-	int err;
+	size_t len = strlen(core_pattern), ret;
+	FILE *f;
 
-	err = write_file(core_pattern_file, core_pattern, strlen(core_pattern));
-	if (err) {
-		SKIP_IF_MSG(err == -EPERM, "Try with root privileges");
+	f = fopen(core_pattern_file, "w");
+	SKIP_IF_MSG(!f, "Try with root privileges");
+
+	ret = fwrite(core_pattern, 1, len, f);
+	fclose(f);
+	if (ret != len) {
 		perror("Error writing to core_pattern file");
 		return TEST_FAIL;
 	}
@@ -333,8 +366,8 @@ static int write_core_pattern(const char *core_pattern)
 
 static int setup_core_pattern(char **core_pattern_, bool *changed_)
 {
+	FILE *f;
 	char *core_pattern;
-	size_t len;
 	int ret;
 
 	core_pattern = malloc(PATH_MAX);
@@ -343,14 +376,20 @@ static int setup_core_pattern(char **core_pattern_, bool *changed_)
 		return TEST_FAIL;
 	}
 
-	ret = read_file(core_pattern_file, core_pattern, PATH_MAX - 1, &len);
-	if (ret) {
-		perror("Error reading core_pattern file");
+	f = fopen(core_pattern_file, "r");
+	if (!f) {
+		perror("Error opening core_pattern file");
 		ret = TEST_FAIL;
 		goto out;
 	}
 
-	core_pattern[len] = '\0';
+	ret = fread(core_pattern, 1, PATH_MAX, f);
+	fclose(f);
+	if (!ret) {
+		perror("Error reading core_pattern file");
+		ret = TEST_FAIL;
+		goto out;
+	}
 
 	/* Check whether we can predict the name of the core file. */
 	if (!strcmp(core_pattern, "core") || !strcmp(core_pattern, "core.%p"))

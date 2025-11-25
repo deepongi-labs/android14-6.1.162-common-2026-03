@@ -209,14 +209,13 @@ struct mlxreg_core_platform_data {
  * @items: same type components with the hotplug capability;
  * @irq: platform interrupt number;
  * @regmap: register map of parent device;
- * @count: number of the components with the hotplug capability;
+ * @counter: number of the components with the hotplug capability;
  * @cell: location of top aggregation interrupt register;
  * @mask: top aggregation interrupt common mask;
  * @cell_low: location of low aggregation interrupt register;
  * @mask_low: low aggregation interrupt common mask;
  * @deferred_nr: I2C adapter number must be exist prior probing execution;
  * @shift_nr: I2C adapter numbers must be incremented by this value;
- * @addr: mapped resource address;
  * @handle: handle to be passed by callback;
  * @completion_notify: callback to notify when platform driver probing is done;
  */
@@ -224,14 +223,13 @@ struct mlxreg_core_hotplug_platform_data {
 	struct mlxreg_core_item *items;
 	int irq;
 	void *regmap;
-	int count;
+	int counter;
 	u32 cell;
 	u32 mask;
 	u32 cell_low;
 	u32 mask_low;
 	int deferred_nr;
 	int shift_nr;
-	void __iomem *addr;
 	void *handle;
 	int (*completion_notify)(void *handle, int id);
 };

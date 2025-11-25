@@ -6,7 +6,8 @@ Ramfs, rootfs and initramfs
 
 October 17, 2005
 
-:Author: Rob Landley <rob@landley.net>
+Rob Landley <rob@landley.net>
+=============================
 
 What is ramfs?
 --------------
@@ -315,7 +316,7 @@ the above threads) is:
 2) The cpio archive format chosen by the kernel is simpler and cleaner (and
    thus easier to create and parse) than any of the (literally dozens of)
    various tar archive formats.  The complete initramfs archive format is
-   explained in buffer-format.rst, created in usr/gen_init_cpio.c, and
+   explained in buffer-format.txt, created in usr/gen_init_cpio.c, and
    extracted in init/initramfs.c.  All three together come to less than 26k
    total of human-readable text.
 

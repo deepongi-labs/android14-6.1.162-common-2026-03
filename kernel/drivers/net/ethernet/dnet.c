@@ -841,7 +841,7 @@ err_out_free_dev:
 	return err;
 }
 
-static void dnet_remove(struct platform_device *pdev)
+static int dnet_remove(struct platform_device *pdev)
 {
 
 	struct net_device *dev;
@@ -859,6 +859,8 @@ static void dnet_remove(struct platform_device *pdev)
 		free_irq(dev->irq, dev);
 		free_netdev(dev);
 	}
+
+	return 0;
 }
 
 static struct platform_driver dnet_driver = {

@@ -24,7 +24,7 @@
 /*
  * struct dasd_information2_t
  * represents any data about the device, which is visible to userspace.
- *  including format and featueres.
+ *  including foramt and featueres.
  */
 typedef struct dasd_information2_t {
 	unsigned int devno;	    /* S/390 devno */
@@ -294,7 +294,7 @@ struct dasd_snid_ioctl_data {
 /********************************************************************************
  * SECTION: Definition of IOCTLs
  *
- * Here is how the ioctl-nr should be used:
+ * Here ist how the ioctl-nr should be used:
  *    0 -   31   DASD driver itself
  *   32 -  239   still open
  *  240 -  255	 reserved for EMC

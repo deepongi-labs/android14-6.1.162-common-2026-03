@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/rbtree.h>
 #include <linux/dma-mapping.h>
+#include <linux/android_vendor.h>
 
 /* iova structure */
 struct iova {
@@ -38,6 +39,8 @@ struct iova_domain {
 
 	struct iova_rcache	*rcaches;
 	struct hlist_node	cpuhp_dead;
+
+	ANDROID_VENDOR_DATA(1);
 };
 
 static inline unsigned long iova_size(struct iova *iova)
@@ -63,11 +66,6 @@ static inline size_t iova_offset(struct iova_domain *iovad, dma_addr_t iova)
 static inline size_t iova_align(struct iova_domain *iovad, size_t size)
 {
 	return ALIGN(size, iovad->granule);
-}
-
-static inline size_t iova_align_down(struct iova_domain *iovad, size_t size)
-{
-	return ALIGN_DOWN(size, iovad->granule);
 }
 
 static inline dma_addr_t iova_dma_addr(struct iova_domain *iovad, struct iova *iova)

@@ -487,17 +487,14 @@ static int ab8500_charger_get_ac_voltage(struct ab8500_charger *di)
 
 	/* Only measure voltage if the charger is connected */
 	if (di->ac.charger_connected) {
-		/* Convert to microvolt, IIO returns millivolt */
-		ret = iio_read_channel_processed_scale(di->adc_main_charger_v,
-						       &vch, 1000);
-		if (ret < 0) {
-			dev_err(di->dev, "%s ADC conv failed\n", __func__);
-			return ret;
-		}
+		ret = iio_read_channel_processed(di->adc_main_charger_v, &vch);
+		if (ret < 0)
+			dev_err(di->dev, "%s ADC conv failed,\n", __func__);
 	} else {
 		vch = 0;
 	}
-	return vch;
+	/* Convert to microvolt, IIO returns millivolt */
+	return vch * 1000;
 }
 
 /**
@@ -542,17 +539,14 @@ static int ab8500_charger_get_vbus_voltage(struct ab8500_charger *di)
 
 	/* Only measure voltage if the charger is connected */
 	if (di->usb.charger_connected) {
-		/* Convert to microvolt, IIO returns millivolt */
-		ret = iio_read_channel_processed_scale(di->adc_vbus_v,
-						       &vch, 1000);
-		if (ret < 0) {
-			dev_err(di->dev, "%s ADC conv failed\n", __func__);
-			return ret;
-		}
+		ret = iio_read_channel_processed(di->adc_vbus_v, &vch);
+		if (ret < 0)
+			dev_err(di->dev, "%s ADC conv failed,\n", __func__);
 	} else {
 		vch = 0;
 	}
-	return vch;
+	/* Convert to microvolt, IIO returns millivolt */
+	return vch * 1000;
 }
 
 /**
@@ -568,17 +562,14 @@ static int ab8500_charger_get_usb_current(struct ab8500_charger *di)
 
 	/* Only measure current if the charger is online */
 	if (di->usb.charger_online) {
-		/* Return microamperes */
-		ret = iio_read_channel_processed_scale(di->adc_usb_charger_c,
-						       &ich, 1000);
-		if (ret < 0) {
-			dev_err(di->dev, "%s ADC conv failed\n", __func__);
-			return ret;
-		}
+		ret = iio_read_channel_processed(di->adc_usb_charger_c, &ich);
+		if (ret < 0)
+			dev_err(di->dev, "%s ADC conv failed,\n", __func__);
 	} else {
 		ich = 0;
 	}
-	return ich;
+	/* Return microamperes */
+	return ich * 1000;
 }
 
 /**
@@ -594,17 +585,14 @@ static int ab8500_charger_get_ac_current(struct ab8500_charger *di)
 
 	/* Only measure current if the charger is online */
 	if (di->ac.charger_online) {
-		/* Return microamperes */
-		ret = iio_read_channel_processed_scale(di->adc_main_charger_c,
-						       &ich, 1000);
-		if (ret < 0) {
-			dev_err(di->dev, "%s ADC conv failed\n", __func__);
-			return ret;
-		}
+		ret = iio_read_channel_processed(di->adc_main_charger_c, &ich);
+		if (ret < 0)
+			dev_err(di->dev, "%s ADC conv failed,\n", __func__);
 	} else {
 		ich = 0;
 	}
-	return ich;
+	/* Return microamperes */
+	return ich * 1000;
 }
 
 /**
@@ -1894,9 +1882,10 @@ static int ab8500_charger_update_charger_current(struct ux500_charger *charger,
 	return ret;
 }
 
-static int ab8500_charger_get_ext_psy_data(struct power_supply *ext, void *data)
+static int ab8500_charger_get_ext_psy_data(struct device *dev, void *data)
 {
 	struct power_supply *psy;
+	struct power_supply *ext = dev_get_drvdata(dev);
 	const char **supplicants = (const char **)ext->supplied_to;
 	struct ab8500_charger *di;
 	union power_supply_propval ret;
@@ -1951,7 +1940,7 @@ static int ab8500_charger_get_ext_psy_data(struct power_supply *ext, void *data)
  *
  * Due to a asic bug it is necessary to lower the input current to the vbus
  * charger when charging with at some specific levels. This issue is only valid
- * for below a certain battery voltage. This function makes sure that
+ * for below a certain battery voltage. This function makes sure that the
  * the allowed current limit isn't exceeded.
  */
 static void ab8500_charger_check_vbat_work(struct work_struct *work)
@@ -1960,7 +1949,8 @@ static void ab8500_charger_check_vbat_work(struct work_struct *work)
 	struct ab8500_charger *di = container_of(work,
 		struct ab8500_charger, check_vbat_work.work);
 
-	power_supply_for_each_psy(&di->usb_chg, ab8500_charger_get_ext_psy_data);
+	class_for_each_device(power_supply_class, NULL,
+			      &di->usb_chg, ab8500_charger_get_ext_psy_data);
 
 	/* First run old_vbat is 0. */
 	if (di->old_vbat == 0)
@@ -3494,11 +3484,11 @@ static int ab8500_charger_probe(struct platform_device *pdev)
 	di->invalid_charger_detect_state = 0;
 
 	/* AC and USB supply config */
-	ac_psy_cfg.fwnode = dev_fwnode(dev);
+	ac_psy_cfg.of_node = np;
 	ac_psy_cfg.supplied_to = supply_interface;
 	ac_psy_cfg.num_supplicants = ARRAY_SIZE(supply_interface);
 	ac_psy_cfg.drv_data = &di->ac_chg;
-	usb_psy_cfg.fwnode = dev_fwnode(dev);
+	usb_psy_cfg.of_node = np;
 	usb_psy_cfg.supplied_to = supply_interface;
 	usb_psy_cfg.num_supplicants = ARRAY_SIZE(supply_interface);
 	usb_psy_cfg.drv_data = &di->usb_chg;
@@ -3689,7 +3679,7 @@ remove_ab8500_bm:
 	return ret;
 }
 
-static void ab8500_charger_remove(struct platform_device *pdev)
+static int ab8500_charger_remove(struct platform_device *pdev)
 {
 	struct ab8500_charger *di = platform_get_drvdata(pdev);
 
@@ -3698,6 +3688,8 @@ static void ab8500_charger_remove(struct platform_device *pdev)
 	usb_unregister_notifier(di->usb_phy, &di->nb);
 	ab8500_bm_of_remove(di->usb_chg.psy, di->bm);
 	usb_put_phy(di->usb_phy);
+
+	return 0;
 }
 
 static SIMPLE_DEV_PM_OPS(ab8500_charger_pm_ops, ab8500_charger_suspend, ab8500_charger_resume);

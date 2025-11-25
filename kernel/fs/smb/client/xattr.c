@@ -31,8 +31,6 @@
  * secure, replaced by SMB2 (then even more highly secure SMB3) many years ago
  */
 #define SMB3_XATTR_CIFS_ACL "system.smb3_acl" /* DACL only */
-#define SMB3_XATTR_CIFS_NTSD_SACL "system.smb3_ntsd_sacl" /* SACL only */
-#define SMB3_XATTR_CIFS_NTSD_OWNER "system.smb3_ntsd_owner" /* owner only */
 #define SMB3_XATTR_CIFS_NTSD "system.smb3_ntsd" /* owner plus DACL */
 #define SMB3_XATTR_CIFS_NTSD_FULL "system.smb3_ntsd_full" /* owner/DACL/SACL */
 #define SMB3_XATTR_ATTRIB "smb3.dosattrib"  /* full name: user.smb3.dosattrib */
@@ -40,7 +38,6 @@
 /* BB need to add server (Samba e.g) support for security and trusted prefix */
 
 enum { XATTR_USER, XATTR_CIFS_ACL, XATTR_ACL_ACCESS, XATTR_ACL_DEFAULT,
-	XATTR_CIFS_NTSD_SACL, XATTR_CIFS_NTSD_OWNER,
 	XATTR_CIFS_NTSD, XATTR_CIFS_NTSD_FULL };
 
 static int cifs_attrib_set(unsigned int xid, struct cifs_tcon *pTcon,
@@ -92,7 +89,7 @@ static int cifs_creation_time_set(unsigned int xid, struct cifs_tcon *pTcon,
 }
 
 static int cifs_xattr_set(const struct xattr_handler *handler,
-			  struct mnt_idmap *idmap,
+			  struct user_namespace *mnt_userns,
 			  struct dentry *dentry, struct inode *inode,
 			  const char *name, const void *value,
 			  size_t size, int flags)
@@ -163,11 +160,9 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 		break;
 
 	case XATTR_CIFS_ACL:
-	case XATTR_CIFS_NTSD_SACL:
-	case XATTR_CIFS_NTSD_OWNER:
 	case XATTR_CIFS_NTSD:
 	case XATTR_CIFS_NTSD_FULL: {
-		struct smb_ntsd *pacl;
+		struct cifs_ntsd *pacl;
 
 		if (!value)
 			goto out;
@@ -178,6 +173,7 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 			memcpy(pacl, value, size);
 			if (pTcon->ses->server->ops->set_acl) {
 				int aclflags = 0;
+				rc = 0;
 
 				switch (handler->flags) {
 				case XATTR_CIFS_NTSD_FULL:
@@ -190,13 +186,6 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 					aclflags = (CIFS_ACL_OWNER |
 						    CIFS_ACL_GROUP |
 						    CIFS_ACL_DACL);
-					break;
-				case XATTR_CIFS_NTSD_OWNER:
-					aclflags = (CIFS_ACL_OWNER |
-						    CIFS_ACL_GROUP);
-					break;
-				case XATTR_CIFS_NTSD_SACL:
-					aclflags = CIFS_ACL_SACL;
 					break;
 				case XATTR_CIFS_ACL:
 				default:
@@ -214,6 +203,32 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 		}
 		break;
 	}
+
+#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
+	case XATTR_ACL_ACCESS:
+#ifdef CONFIG_CIFS_POSIX
+		if (!value)
+			goto out;
+		if (sb->s_flags & SB_POSIXACL)
+			rc = CIFSSMBSetPosixACL(xid, pTcon, full_path,
+				value, (const int)size,
+				ACL_TYPE_ACCESS, cifs_sb->local_nls,
+				cifs_remap(cifs_sb));
+#endif  /* CONFIG_CIFS_POSIX */
+		break;
+
+	case XATTR_ACL_DEFAULT:
+#ifdef CONFIG_CIFS_POSIX
+		if (!value)
+			goto out;
+		if (sb->s_flags & SB_POSIXACL)
+			rc = CIFSSMBSetPosixACL(xid, pTcon, full_path,
+				value, (const int)size,
+				ACL_TYPE_DEFAULT, cifs_sb->local_nls,
+				cifs_remap(cifs_sb));
+#endif  /* CONFIG_CIFS_POSIX */
+		break;
+#endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 	}
 
 out:
@@ -319,8 +334,6 @@ static int cifs_xattr_get(const struct xattr_handler *handler,
 		break;
 
 	case XATTR_CIFS_ACL:
-	case XATTR_CIFS_NTSD_SACL:
-	case XATTR_CIFS_NTSD_OWNER:
 	case XATTR_CIFS_NTSD:
 	case XATTR_CIFS_NTSD_FULL: {
 		/*
@@ -328,28 +341,15 @@ static int cifs_xattr_get(const struct xattr_handler *handler,
 		 * fetch owner and DACL otherwise
 		 */
 		u32 acllen, extra_info;
-		struct smb_ntsd *pacl;
+		struct cifs_ntsd *pacl;
 
 		if (pTcon->ses->server->ops->get_acl == NULL)
 			goto out; /* rc already EOPNOTSUPP */
 
-		switch (handler->flags) {
-		case XATTR_CIFS_NTSD_FULL:
-			extra_info = OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO | SACL_SECINFO;
-			break;
-		case XATTR_CIFS_NTSD:
-			extra_info = OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO;
-			break;
-		case XATTR_CIFS_NTSD_OWNER:
-			extra_info = OWNER_SECINFO | GROUP_SECINFO;
-			break;
-		case XATTR_CIFS_NTSD_SACL:
+		if (handler->flags == XATTR_CIFS_NTSD_FULL) {
 			extra_info = SACL_SECINFO;
-			break;
-		case XATTR_CIFS_ACL:
-		default:
-			extra_info = DACL_SECINFO;
-			break;
+		} else {
+			extra_info = 0;
 		}
 		pacl = pTcon->ses->server->ops->get_acl(cifs_sb,
 				inode, full_path, &acllen, extra_info);
@@ -369,6 +369,27 @@ static int cifs_xattr_get(const struct xattr_handler *handler,
 		}
 		break;
 	}
+#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
+	case XATTR_ACL_ACCESS:
+#ifdef CONFIG_CIFS_POSIX
+		if (sb->s_flags & SB_POSIXACL)
+			rc = CIFSSMBGetPosixACL(xid, pTcon, full_path,
+				value, size, ACL_TYPE_ACCESS,
+				cifs_sb->local_nls,
+				cifs_remap(cifs_sb));
+#endif  /* CONFIG_CIFS_POSIX */
+		break;
+
+	case XATTR_ACL_DEFAULT:
+#ifdef CONFIG_CIFS_POSIX
+		if (sb->s_flags & SB_POSIXACL)
+			rc = CIFSSMBGetPosixACL(xid, pTcon, full_path,
+				value, size, ACL_TYPE_DEFAULT,
+				cifs_sb->local_nls,
+				cifs_remap(cifs_sb));
+#endif  /* CONFIG_CIFS_POSIX */
+		break;
+#endif /* ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 	}
 
 	/* We could add an additional check for streams ie
@@ -467,20 +488,6 @@ static const struct xattr_handler smb3_acl_xattr_handler = {
 	.set = cifs_xattr_set,
 };
 
-static const struct xattr_handler smb3_ntsd_sacl_xattr_handler = {
-	.name = SMB3_XATTR_CIFS_NTSD_SACL,
-	.flags = XATTR_CIFS_NTSD_SACL,
-	.get = cifs_xattr_get,
-	.set = cifs_xattr_set,
-};
-
-static const struct xattr_handler smb3_ntsd_owner_xattr_handler = {
-	.name = SMB3_XATTR_CIFS_NTSD_OWNER,
-	.flags = XATTR_CIFS_NTSD_OWNER,
-	.get = cifs_xattr_get,
-	.set = cifs_xattr_set,
-};
-
 static const struct xattr_handler cifs_cifs_ntsd_xattr_handler = {
 	.name = CIFS_XATTR_CIFS_NTSD,
 	.flags = XATTR_CIFS_NTSD,
@@ -521,16 +528,31 @@ static const struct xattr_handler smb3_ntsd_full_xattr_handler = {
 	.set = cifs_xattr_set,
 };
 
-const struct xattr_handler * const cifs_xattr_handlers[] = {
+
+static const struct xattr_handler cifs_posix_acl_access_xattr_handler = {
+	.name = XATTR_NAME_POSIX_ACL_ACCESS,
+	.flags = XATTR_ACL_ACCESS,
+	.get = cifs_xattr_get,
+	.set = cifs_xattr_set,
+};
+
+static const struct xattr_handler cifs_posix_acl_default_xattr_handler = {
+	.name = XATTR_NAME_POSIX_ACL_DEFAULT,
+	.flags = XATTR_ACL_DEFAULT,
+	.get = cifs_xattr_get,
+	.set = cifs_xattr_set,
+};
+
+const struct xattr_handler *cifs_xattr_handlers[] = {
 	&cifs_user_xattr_handler,
 	&cifs_os2_xattr_handler,
 	&cifs_cifs_acl_xattr_handler,
 	&smb3_acl_xattr_handler, /* alias for above since avoiding "cifs" */
-	&smb3_ntsd_sacl_xattr_handler,
-	&smb3_ntsd_owner_xattr_handler,
 	&cifs_cifs_ntsd_xattr_handler,
 	&smb3_ntsd_xattr_handler, /* alias for above since avoiding "cifs" */
 	&cifs_cifs_ntsd_full_xattr_handler,
 	&smb3_ntsd_full_xattr_handler, /* alias for above since avoiding "cifs" */
+	&cifs_posix_acl_access_xattr_handler,
+	&cifs_posix_acl_default_xattr_handler,
 	NULL
 };

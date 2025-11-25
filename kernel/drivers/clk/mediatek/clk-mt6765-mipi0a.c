@@ -39,7 +39,6 @@ static const struct of_device_id of_match_clk_mt6765_mipi0a[] = {
 		/* sentinel */
 	}
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt6765_mipi0a);
 
 static struct platform_driver clk_mt6765_mipi0a_drv = {
 	.probe = mtk_clk_simple_probe,
@@ -50,6 +49,4 @@ static struct platform_driver clk_mt6765_mipi0a_drv = {
 	},
 };
 module_platform_driver(clk_mt6765_mipi0a_drv);
-
-MODULE_DESCRIPTION("MediaTek MT6765 Camera clocks driver");
 MODULE_LICENSE("GPL");

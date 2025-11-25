@@ -7,7 +7,7 @@
  * Based on wm8775 driver
  *
  * Copyright (C) 2004 Ulf Eklund <ivtv at eklund.to>
- * Copyright (C) 2005 Hans Verkuil <hverkuil@kernel.org>
+ * Copyright (C) 2005 Hans Verkuil <hverkuil@xs4all.nl>
  */
 
 #include <linux/module.h>
@@ -129,7 +129,8 @@ static const struct v4l2_subdev_ops tlv320aic23b_ops = {
  * concerning the addresses: i2c wants 7 bit (without the r/w bit), so '>>1'
  */
 
-static int tlv320aic23b_probe(struct i2c_client *client)
+static int tlv320aic23b_probe(struct i2c_client *client,
+			      const struct i2c_device_id *id)
 {
 	struct tlv320aic23b_state *state;
 	struct v4l2_subdev *sd;
@@ -188,7 +189,7 @@ static void tlv320aic23b_remove(struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static const struct i2c_device_id tlv320aic23b_id[] = {
-	{ "tlv320aic23b" },
+	{ "tlv320aic23b", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tlv320aic23b_id);

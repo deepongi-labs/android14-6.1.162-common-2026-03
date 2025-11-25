@@ -15,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
+#include <linux/of_platform.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/io.h>
@@ -61,6 +62,32 @@ struct brcmstb_l2_intc_data {
 	u32 saved_mask; /* for suspend/resume */
 };
 
+/**
+ * brcmstb_l2_mask_and_ack - Mask and ack pending interrupt
+ * @d: irq_data
+ *
+ * Chip has separate enable/disable registers instead of a single mask
+ * register and pending interrupt is acknowledged by setting a bit.
+ *
+ * Note: This function is generic and could easily be added to the
+ * generic irqchip implementation if there ever becomes a will to do so.
+ * Perhaps with a name like irq_gc_mask_disable_and_ack_set().
+ *
+ * e.g.: https://patchwork.kernel.org/patch/9831047/
+ */
+static void brcmstb_l2_mask_and_ack(struct irq_data *d)
+{
+	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
+	struct irq_chip_type *ct = irq_data_get_chip_type(d);
+	u32 mask = d->mask;
+
+	irq_gc_lock(gc);
+	irq_reg_writel(gc, mask, ct->regs.disable);
+	*ct->mask_cache &= ~mask;
+	irq_reg_writel(gc, mask, ct->regs.ack);
+	irq_gc_unlock(gc);
+}
+
 static void brcmstb_l2_intc_irq_handle(struct irq_desc *desc)
 {
 	struct brcmstb_l2_intc_data *b = irq_desc_get_handler_data(desc);
@@ -92,32 +119,23 @@ out:
 	chained_irq_exit(chip, desc);
 }
 
-static void __brcmstb_l2_intc_suspend(struct irq_data *d, bool save)
+static void brcmstb_l2_intc_suspend(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct irq_chip_type *ct = irq_data_get_chip_type(d);
 	struct brcmstb_l2_intc_data *b = gc->private;
+	unsigned long flags;
 
-	guard(raw_spinlock_irqsave)(&gc->lock);
+	irq_gc_lock_irqsave(gc, flags);
 	/* Save the current mask */
-	if (save)
-		b->saved_mask = irq_reg_readl(gc, ct->regs.mask);
+	b->saved_mask = irq_reg_readl(gc, ct->regs.mask);
 
 	if (b->can_wake) {
 		/* Program the wakeup mask */
 		irq_reg_writel(gc, ~gc->wake_active, ct->regs.disable);
 		irq_reg_writel(gc, gc->wake_active, ct->regs.enable);
 	}
-}
-
-static void brcmstb_l2_intc_shutdown(struct irq_data *d)
-{
-	__brcmstb_l2_intc_suspend(d, false);
-}
-
-static void brcmstb_l2_intc_suspend(struct irq_data *d)
-{
-	__brcmstb_l2_intc_suspend(d, true);
+	irq_gc_unlock_irqrestore(gc, flags);
 }
 
 static void brcmstb_l2_intc_resume(struct irq_data *d)
@@ -125,8 +143,9 @@ static void brcmstb_l2_intc_resume(struct irq_data *d)
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct irq_chip_type *ct = irq_data_get_chip_type(d);
 	struct brcmstb_l2_intc_data *b = gc->private;
+	unsigned long flags;
 
-	guard(raw_spinlock_irqsave)(&gc->lock);
+	irq_gc_lock_irqsave(gc, flags);
 	if (ct->chip.irq_ack) {
 		/* Clear unmasked non-wakeup interrupts */
 		irq_reg_writel(gc, ~b->saved_mask & ~gc->wake_active,
@@ -136,6 +155,7 @@ static void brcmstb_l2_intc_resume(struct irq_data *d)
 	/* Restore the saved mask */
 	irq_reg_writel(gc, b->saved_mask, ct->regs.disable);
 	irq_reg_writel(gc, ~b->saved_mask, ct->regs.enable);
+	irq_gc_unlock_irqrestore(gc, flags);
 }
 
 static int __init brcmstb_l2_intc_of_init(struct device_node *np,
@@ -178,7 +198,7 @@ static int __init brcmstb_l2_intc_of_init(struct device_node *np,
 		goto out_unmap;
 	}
 
-	data->domain = irq_domain_create_linear(of_fwnode_handle(np), 32,
+	data->domain = irq_domain_add_linear(np, 32,
 				&irq_generic_chip_ops, NULL);
 	if (!data->domain) {
 		ret = -ENOMEM;
@@ -218,7 +238,7 @@ static int __init brcmstb_l2_intc_of_init(struct device_node *np,
 	if (init_params->cpu_clear >= 0) {
 		ct->regs.ack = init_params->cpu_clear;
 		ct->chip.irq_ack = irq_gc_ack_set_bit;
-		ct->chip.irq_mask_ack = irq_gc_mask_disable_and_ack_set;
+		ct->chip.irq_mask_ack = brcmstb_l2_mask_and_ack;
 	} else {
 		/* No Ack - but still slightly more efficient to define this */
 		ct->chip.irq_mask_ack = irq_gc_mask_disable_reg;
@@ -233,7 +253,7 @@ static int __init brcmstb_l2_intc_of_init(struct device_node *np,
 
 	ct->chip.irq_suspend = brcmstb_l2_intc_suspend;
 	ct->chip.irq_resume = brcmstb_l2_intc_resume;
-	ct->chip.irq_pm_shutdown = brcmstb_l2_intc_shutdown;
+	ct->chip.irq_pm_shutdown = brcmstb_l2_intc_suspend;
 
 	if (data->can_wake) {
 		/* This IRQ chip can wake the system, set all child interrupts

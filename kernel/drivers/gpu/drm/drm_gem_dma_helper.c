@@ -228,9 +228,9 @@ void drm_gem_dma_free(struct drm_gem_dma_object *dma_obj)
 	struct drm_gem_object *gem_obj = &dma_obj->base;
 	struct iosys_map map = IOSYS_MAP_INIT_VADDR(dma_obj->vaddr);
 
-	if (drm_gem_is_imported(gem_obj)) {
+	if (gem_obj->import_attach) {
 		if (dma_obj->vaddr)
-			dma_buf_vunmap_unlocked(gem_obj->import_attach->dmabuf, &map);
+			dma_buf_vunmap(gem_obj->import_attach->dmabuf, &map);
 		drm_prime_gem_destroy(gem_obj, dma_obj->sgt);
 	} else if (dma_obj->vaddr) {
 		if (dma_obj->map_noncoherent)
@@ -477,8 +477,8 @@ drm_gem_dma_prime_import_sg_table(struct drm_device *dev,
 	dma_obj->dma_addr = sg_dma_address(sgt->sgl);
 	dma_obj->sgt = sgt;
 
-	drm_dbg_prime(dev, "dma_addr = %pad, size = %zu\n", &dma_obj->dma_addr,
-		      attach->dmabuf->size);
+	DRM_DEBUG_PRIME("dma_addr = %pad, size = %zu\n", &dma_obj->dma_addr,
+			attach->dmabuf->size);
 
 	return &dma_obj->base;
 }
@@ -580,7 +580,7 @@ drm_gem_dma_prime_import_sg_table_vmap(struct drm_device *dev,
 	struct iosys_map map;
 	int ret;
 
-	ret = dma_buf_vmap_unlocked(attach->dmabuf, &map);
+	ret = dma_buf_vmap(attach->dmabuf, &map);
 	if (ret) {
 		DRM_ERROR("Failed to vmap PRIME buffer\n");
 		return ERR_PTR(ret);
@@ -588,7 +588,7 @@ drm_gem_dma_prime_import_sg_table_vmap(struct drm_device *dev,
 
 	obj = drm_gem_dma_prime_import_sg_table(dev, attach, sgt);
 	if (IS_ERR(obj)) {
-		dma_buf_vunmap_unlocked(attach->dmabuf, &map);
+		dma_buf_vunmap(attach->dmabuf, &map);
 		return obj;
 	}
 
@@ -600,5 +600,5 @@ drm_gem_dma_prime_import_sg_table_vmap(struct drm_device *dev,
 EXPORT_SYMBOL(drm_gem_dma_prime_import_sg_table_vmap);
 
 MODULE_DESCRIPTION("DRM DMA memory-management helpers");
-MODULE_IMPORT_NS("DMA_BUF");
+MODULE_IMPORT_NS(DMA_BUF);
 MODULE_LICENSE("GPL");

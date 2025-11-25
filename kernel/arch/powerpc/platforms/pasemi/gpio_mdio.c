@@ -20,7 +20,7 @@
 #include <linux/phy.h>
 #include <linux/of_address.h>
 #include <linux/of_mdio.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 
 #define DELAY 1
 
@@ -260,7 +260,7 @@ out:
 }
 
 
-static void gpio_mdio_remove(struct platform_device *dev)
+static int gpio_mdio_remove(struct platform_device *dev)
 {
 	struct mii_bus *bus = dev_get_drvdata(&dev->dev);
 
@@ -271,6 +271,8 @@ static void gpio_mdio_remove(struct platform_device *dev)
 	kfree(bus->priv);
 	bus->priv = NULL;
 	mdiobus_free(bus);
+
+	return 0;
 }
 
 static const struct of_device_id gpio_mdio_match[] =
@@ -292,7 +294,7 @@ static struct platform_driver gpio_mdio_driver =
 	},
 };
 
-static int __init gpio_mdio_init(void)
+static int gpio_mdio_init(void)
 {
 	struct device_node *np;
 
@@ -312,7 +314,7 @@ static int __init gpio_mdio_init(void)
 }
 module_init(gpio_mdio_init);
 
-static void __exit gpio_mdio_exit(void)
+static void gpio_mdio_exit(void)
 {
 	platform_driver_unregister(&gpio_mdio_driver);
 	if (gpio_regs)

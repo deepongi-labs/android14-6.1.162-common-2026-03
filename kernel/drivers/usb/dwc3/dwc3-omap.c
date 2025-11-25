@@ -416,7 +416,7 @@ static int dwc3_omap_extcon_register(struct dwc3_omap *omap)
 	struct device_node	*node = omap->dev->of_node;
 	struct extcon_dev	*edev;
 
-	if (of_property_present(node, "extcon")) {
+	if (of_property_read_bool(node, "extcon")) {
 		edev = extcon_get_edev_by_phandle(omap->dev, 0);
 		if (IS_ERR(edev)) {
 			dev_vdbg(omap->dev, "couldn't get extcon device\n");
@@ -457,7 +457,7 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 
 	struct dwc3_omap	*omap;
 	struct device		*dev = &pdev->dev;
-	struct regulator	*vbus_reg;
+	struct regulator	*vbus_reg = NULL;
 
 	int			ret;
 	int			irq;
@@ -483,11 +483,12 @@ static int dwc3_omap_probe(struct platform_device *pdev)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	vbus_reg = devm_regulator_get_optional(dev, "vbus");
-	if (IS_ERR(vbus_reg)) {
-		if (PTR_ERR(vbus_reg) != -ENODEV)
-			return dev_err_probe(dev, PTR_ERR(vbus_reg), "vbus init failed\n");
-		vbus_reg = NULL;
+	if (of_property_read_bool(node, "vbus-supply")) {
+		vbus_reg = devm_regulator_get(dev, "vbus");
+		if (IS_ERR(vbus_reg)) {
+			dev_err(dev, "vbus init failed\n");
+			return PTR_ERR(vbus_reg);
+		}
 	}
 
 	omap->dev	= dev;
@@ -535,7 +536,7 @@ err1:
 	return ret;
 }
 
-static void dwc3_omap_remove(struct platform_device *pdev)
+static int dwc3_omap_remove(struct platform_device *pdev)
 {
 	struct dwc3_omap	*omap = platform_get_drvdata(pdev);
 
@@ -544,6 +545,8 @@ static void dwc3_omap_remove(struct platform_device *pdev)
 	of_platform_depopulate(omap->dev);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id of_dwc3_match[] = {

@@ -3,7 +3,7 @@
  * An rtc driver for the Dallas/Maxim DS1685/DS1687 and related real-time
  * chips.
  *
- * Copyright (C) 2011-2014 Joshua Kinard <linux@kumba.dev>.
+ * Copyright (C) 2011-2014 Joshua Kinard <kumba@gentoo.org>.
  * Copyright (C) 2009 Matthias Fuchs <matthias.fuchs@esd-electronics.com>.
  *
  * References:
@@ -1322,7 +1322,7 @@ ds1685_rtc_probe(struct platform_device *pdev)
  * ds1685_rtc_remove - removes rtc driver.
  * @pdev: pointer to platform_device structure.
  */
-static void
+static int
 ds1685_rtc_remove(struct platform_device *pdev)
 {
 	struct ds1685_priv *rtc = platform_get_drvdata(pdev);
@@ -1344,6 +1344,8 @@ ds1685_rtc_remove(struct platform_device *pdev)
 	rtc->write(rtc, RTC_EXT_CTRL_4A,
 		   (rtc->read(rtc, RTC_EXT_CTRL_4A) &
 		    ~(RTC_CTRL_4A_RWK_MASK)));
+
+	return 0;
 }
 
 /*
@@ -1436,7 +1438,7 @@ EXPORT_SYMBOL_GPL(ds1685_rtc_poweroff);
 /* ----------------------------------------------------------------------- */
 
 
-MODULE_AUTHOR("Joshua Kinard <linux@kumba.dev>");
+MODULE_AUTHOR("Joshua Kinard <kumba@gentoo.org>");
 MODULE_AUTHOR("Matthias Fuchs <matthias.fuchs@esd-electronics.com>");
 MODULE_DESCRIPTION("Dallas/Maxim DS1685/DS1687-series RTC driver");
 MODULE_LICENSE("GPL");

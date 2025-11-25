@@ -140,8 +140,11 @@ EXPORT_SYMBOL(wl12xx_is_dummy_packet);
 static u8 wl12xx_tx_get_hlid_ap(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 				struct sk_buff *skb, struct ieee80211_sta *sta)
 {
-	if (sta && wl1271_station(sta)->fw_added) {
-		return wl1271_station(sta)->hlid;
+	if (sta) {
+		struct wl1271_station *wl_sta;
+
+		wl_sta = (struct wl1271_station *)sta->drv_priv;
+		return wl_sta->hlid;
 	} else {
 		struct ieee80211_hdr *hdr;
 

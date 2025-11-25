@@ -43,7 +43,7 @@
 #include <linux/ioport.h>
 #include <linux/iopoll.h>
 #include <linux/in.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_net.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -900,8 +900,7 @@ static void korina_check_media(struct net_device *dev, unsigned int init_media)
 
 static void korina_poll_media(struct timer_list *t)
 {
-	struct korina_private *lp = timer_container_of(lp, t,
-						       media_check_timer);
+	struct korina_private *lp = from_timer(lp, t, media_check_timer);
 	struct net_device *dev = lp->dev;
 
 	korina_check_media(dev, 0);
@@ -1240,7 +1239,7 @@ static int korina_close(struct net_device *dev)
 	struct korina_private *lp = netdev_priv(dev);
 	u32 tmp;
 
-	timer_delete(&lp->media_check_timer);
+	del_timer(&lp->media_check_timer);
 
 	/* Disable interrupts */
 	disable_irq(lp->rx_irq);
@@ -1381,11 +1380,13 @@ static int korina_probe(struct platform_device *pdev)
 	return rc;
 }
 
-static void korina_remove(struct platform_device *pdev)
+static int korina_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 
 	unregister_netdev(dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_OF

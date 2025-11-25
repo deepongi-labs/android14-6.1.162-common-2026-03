@@ -11,17 +11,19 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/version.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/gpio.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/acpi.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 #include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of_device.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -291,7 +293,6 @@ bool cs42l42_readable_register(struct device *dev, unsigned int reg)
 	case CS42L42_SPDIF_SW_CTL1:
 	case CS42L42_SRC_SDIN_FS:
 	case CS42L42_SRC_SDOUT_FS:
-	case CS42L42_SOFT_RESET_REBOOT:
 	case CS42L42_SPDIF_CTL1:
 	case CS42L42_SPDIF_CTL2:
 	case CS42L42_SPDIF_CTL3:
@@ -329,7 +330,7 @@ bool cs42l42_readable_register(struct device *dev, unsigned int reg)
 		return false;
 	}
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_readable_register, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_readable_register, SND_SOC_CS42L42_CORE);
 
 bool cs42l42_volatile_register(struct device *dev, unsigned int reg)
 {
@@ -357,13 +358,12 @@ bool cs42l42_volatile_register(struct device *dev, unsigned int reg)
 	case CS42L42_LOAD_DET_DONE:
 	case CS42L42_DET_STATUS1:
 	case CS42L42_DET_STATUS2:
-	case CS42L42_SOFT_RESET_REBOOT:
 		return true;
 	default:
 		return false;
 	}
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_volatile_register, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_volatile_register, SND_SOC_CS42L42_CORE);
 
 const struct regmap_range_cfg cs42l42_page_range = {
 	.name = "Pages",
@@ -375,7 +375,7 @@ const struct regmap_range_cfg cs42l42_page_range = {
 	.window_start = 0,
 	.window_len = 256,
 };
-EXPORT_SYMBOL_NS_GPL(cs42l42_page_range, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_page_range, SND_SOC_CS42L42_CORE);
 
 const struct regmap_config cs42l42_regmap = {
 	.reg_bits = 8,
@@ -390,12 +390,12 @@ const struct regmap_config cs42l42_regmap = {
 	.max_register = CS42L42_MAX_REGISTER,
 	.reg_defaults = cs42l42_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(cs42l42_reg_defaults),
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 
 	.use_single_read = true,
 	.use_single_write = true,
 };
-EXPORT_SYMBOL_NS_GPL(cs42l42_regmap, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_regmap, SND_SOC_CS42L42_CORE);
 
 static DECLARE_TLV_DB_SCALE(adc_tlv, -9700, 100, true);
 static DECLARE_TLV_DB_SCALE(mixer_tlv, -6300, 100, true);
@@ -523,10 +523,6 @@ static const struct snd_soc_dapm_widget cs42l42_dapm_widgets[] = {
 
 	/* Playback/Capture Requirements */
 	SND_SOC_DAPM_SUPPLY("SCLK", CS42L42_ASP_CLK_CFG, CS42L42_ASP_SCLK_EN_SHIFT, 0, NULL, 0),
-
-	/* Soundwire SRC power control */
-	SND_SOC_DAPM_PGA("DACSRC", CS42L42_PWR_CTL2, CS42L42_DAC_SRC_PDNB_SHIFT, 0, NULL, 0),
-	SND_SOC_DAPM_PGA("ADCSRC", CS42L42_PWR_CTL2, CS42L42_ADC_SRC_PDNB_SHIFT, 0, NULL, 0),
 };
 
 static const struct snd_soc_dapm_route cs42l42_audio_map[] = {
@@ -594,9 +590,10 @@ const struct snd_soc_component_driver cs42l42_soc_component = {
 	.num_dapm_routes	= ARRAY_SIZE(cs42l42_audio_map),
 	.controls		= cs42l42_snd_controls,
 	.num_controls		= ARRAY_SIZE(cs42l42_snd_controls),
+	.idle_bias_on		= 1,
 	.endianness		= 1,
 };
-EXPORT_SYMBOL_NS_GPL(cs42l42_soc_component, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_soc_component, SND_SOC_CS42L42_CORE);
 
 /* Switch to SCLK. Atomic delay after the write to allow the switch to complete. */
 static const struct reg_sequence cs42l42_to_sclk_seq[] = {
@@ -643,29 +640,22 @@ static const struct cs42l42_pll_params pll_ratio_table[] = {
 	{ 3072000,  1, 0x00, 0x3E, 0x800000, 0x03, 0x10, 12000000, 125, 1},
 	{ 4000000,  1, 0x00, 0x30, 0x800000, 0x03, 0x10, 12000000,  96, 1},
 	{ 4096000,  1, 0x00, 0x2E, 0xE00000, 0x03, 0x10, 12000000,  94, 1},
-	{ 4800000,  1, 0x01, 0x50, 0x000000, 0x03, 0x10, 12000000,  80, 2},
-	{ 4800000,  1, 0x01, 0x50, 0x000000, 0x01, 0x10, 12288000,  82, 2},
 	{ 5644800,  1, 0x01, 0x40, 0x000000, 0x03, 0x10, 11289600, 128, 1},
 	{ 6000000,  1, 0x01, 0x40, 0x000000, 0x03, 0x10, 12000000, 128, 1},
 	{ 6144000,  1, 0x01, 0x3E, 0x800000, 0x03, 0x10, 12000000, 125, 1},
-	{ 6144000,  1, 0x01, 0x40, 0x000000, 0x03, 0x10, 12288000, 128, 1},
-	{ 9600000,  1, 0x02, 0x50, 0x000000, 0x03, 0x10, 12000000,  80, 2},
-	{ 9600000,  1, 0x02, 0x50, 0x000000, 0x01, 0x10, 12288000,  82, 2},
 	{ 11289600, 0, 0, 0, 0, 0, 0, 11289600, 0, 1},
 	{ 12000000, 0, 0, 0, 0, 0, 0, 12000000, 0, 1},
 	{ 12288000, 0, 0, 0, 0, 0, 0, 12288000, 0, 1},
-	{ 19200000, 1, 0x03, 0x50, 0x000000, 0x03, 0x10, 12000000,  80, 2},
-	{ 19200000, 1, 0x03, 0x50, 0x000000, 0x01, 0x10, 12288000,  82, 2},
 	{ 22579200, 1, 0x03, 0x40, 0x000000, 0x03, 0x10, 11289600, 128, 1},
 	{ 24000000, 1, 0x03, 0x40, 0x000000, 0x03, 0x10, 12000000, 128, 1},
 	{ 24576000, 1, 0x03, 0x40, 0x000000, 0x03, 0x10, 12288000, 128, 1}
 };
 
-int cs42l42_pll_config(struct snd_soc_component *component, unsigned int clk,
-		       unsigned int sample_rate)
+static int cs42l42_pll_config(struct snd_soc_component *component, unsigned int clk)
 {
 	struct cs42l42_private *cs42l42 = snd_soc_component_get_drvdata(component);
 	int i;
+	u32 fsync;
 
 	/* Don't reconfigure if there is an audio stream running */
 	if (cs42l42->stream_use) {
@@ -676,10 +666,6 @@ int cs42l42_pll_config(struct snd_soc_component *component, unsigned int clk,
 	}
 
 	for (i = 0; i < ARRAY_SIZE(pll_ratio_table); i++) {
-		/* MCLKint must be a multiple of the sample rate */
-		if (pll_ratio_table[i].mclk_int % sample_rate)
-			continue;
-
 		if (pll_ratio_table[i].sclk == clk) {
 			cs42l42->pll_config = i;
 
@@ -691,6 +677,40 @@ int cs42l42_pll_config(struct snd_soc_component *component, unsigned int clk,
 					(pll_ratio_table[i].mclk_int !=
 					24000000)) <<
 					CS42L42_INTERNAL_FS_SHIFT);
+
+			/* Set up the LRCLK */
+			fsync = clk / cs42l42->srate;
+			if (((fsync * cs42l42->srate) != clk)
+				|| ((fsync % 2) != 0)) {
+				dev_err(component->dev,
+					"Unsupported sclk %d/sample rate %d\n",
+					clk,
+					cs42l42->srate);
+				return -EINVAL;
+			}
+			/* Set the LRCLK period */
+			snd_soc_component_update_bits(component,
+					CS42L42_FSYNC_P_LOWER,
+					CS42L42_FSYNC_PERIOD_MASK,
+					CS42L42_FRAC0_VAL(fsync - 1) <<
+					CS42L42_FSYNC_PERIOD_SHIFT);
+			snd_soc_component_update_bits(component,
+					CS42L42_FSYNC_P_UPPER,
+					CS42L42_FSYNC_PERIOD_MASK,
+					CS42L42_FRAC1_VAL(fsync - 1) <<
+					CS42L42_FSYNC_PERIOD_SHIFT);
+			/* Set the LRCLK to 50% duty cycle */
+			fsync = fsync / 2;
+			snd_soc_component_update_bits(component,
+					CS42L42_FSYNC_PW_LOWER,
+					CS42L42_FSYNC_PULSE_WIDTH_MASK,
+					CS42L42_FRAC0_VAL(fsync - 1) <<
+					CS42L42_FSYNC_PULSE_WIDTH_SHIFT);
+			snd_soc_component_update_bits(component,
+					CS42L42_FSYNC_PW_UPPER,
+					CS42L42_FSYNC_PULSE_WIDTH_MASK,
+					CS42L42_FRAC1_VAL(fsync - 1) <<
+					CS42L42_FSYNC_PULSE_WIDTH_SHIFT);
 			if (pll_ratio_table[i].mclk_src_sel == 0) {
 				/* Pass the clock straight through */
 				snd_soc_component_update_bits(component,
@@ -748,9 +768,8 @@ int cs42l42_pll_config(struct snd_soc_component *component, unsigned int clk,
 
 	return -EINVAL;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_pll_config, "SND_SOC_CS42L42_CORE");
 
-void cs42l42_src_config(struct snd_soc_component *component, unsigned int sample_rate)
+static void cs42l42_src_config(struct snd_soc_component *component, unsigned int sample_rate)
 {
 	struct cs42l42_private *cs42l42 = snd_soc_component_get_drvdata(component);
 	unsigned int fs;
@@ -782,47 +801,6 @@ void cs42l42_src_config(struct snd_soc_component *component, unsigned int sample
 				      CS42L42_CLK_OASRC_SEL_MASK,
 				      fs << CS42L42_CLK_OASRC_SEL_SHIFT);
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_src_config, "SND_SOC_CS42L42_CORE");
-
-static int cs42l42_asp_config(struct snd_soc_component *component,
-			      unsigned int sclk, unsigned int sample_rate)
-{
-	u32 fsync = sclk / sample_rate;
-
-	/* Set up the LRCLK */
-	if (((fsync * sample_rate) != sclk) || ((fsync % 2) != 0)) {
-		dev_err(component->dev,
-			"Unsupported sclk %d/sample rate %d\n",
-			sclk,
-			sample_rate);
-		return -EINVAL;
-	}
-	/* Set the LRCLK period */
-	snd_soc_component_update_bits(component,
-				      CS42L42_FSYNC_P_LOWER,
-				      CS42L42_FSYNC_PERIOD_MASK,
-				      CS42L42_FRAC0_VAL(fsync - 1) <<
-				      CS42L42_FSYNC_PERIOD_SHIFT);
-	snd_soc_component_update_bits(component,
-				      CS42L42_FSYNC_P_UPPER,
-				      CS42L42_FSYNC_PERIOD_MASK,
-				      CS42L42_FRAC1_VAL(fsync - 1) <<
-				      CS42L42_FSYNC_PERIOD_SHIFT);
-	/* Set the LRCLK to 50% duty cycle */
-	fsync = fsync / 2;
-	snd_soc_component_update_bits(component,
-				      CS42L42_FSYNC_PW_LOWER,
-				      CS42L42_FSYNC_PULSE_WIDTH_MASK,
-				      CS42L42_FRAC0_VAL(fsync - 1) <<
-				      CS42L42_FSYNC_PULSE_WIDTH_SHIFT);
-	snd_soc_component_update_bits(component,
-				      CS42L42_FSYNC_PW_UPPER,
-				      CS42L42_FSYNC_PULSE_WIDTH_MASK,
-				      CS42L42_FRAC1_VAL(fsync - 1) <<
-				      CS42L42_FSYNC_PULSE_WIDTH_SHIFT);
-
-	return 0;
-}
 
 static int cs42l42_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 {
@@ -830,11 +808,11 @@ static int cs42l42_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 	u32 asp_cfg_val = 0;
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBC_CFP:
+	case SND_SOC_DAIFMT_CBS_CFM:
 		asp_cfg_val |= CS42L42_ASP_MASTER_MODE <<
 				CS42L42_ASP_MODE_SHIFT;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		asp_cfg_val |= CS42L42_ASP_SLAVE_MODE <<
 				CS42L42_ASP_MODE_SHIFT;
 		break;
@@ -913,11 +891,12 @@ static int cs42l42_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct cs42l42_private *cs42l42 = snd_soc_component_get_drvdata(component);
 	unsigned int channels = params_channels(params);
 	unsigned int width = (params_width(params) / 8) - 1;
-	unsigned int sample_rate = params_rate(params);
 	unsigned int slot_width = 0;
 	unsigned int val = 0;
 	unsigned int bclk;
 	int ret;
+
+	cs42l42->srate = params_rate(params);
 
 	if (cs42l42->bclk_ratio) {
 		/* machine driver has set the BCLK/samp-rate ratio */
@@ -975,15 +954,11 @@ static int cs42l42_pcm_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
-	ret = cs42l42_pll_config(component, bclk, sample_rate);
+	ret = cs42l42_pll_config(component, bclk);
 	if (ret)
 		return ret;
 
-	ret = cs42l42_asp_config(component, bclk, sample_rate);
-	if (ret)
-		return ret;
-
-	cs42l42_src_config(component, sample_rate);
+	cs42l42_src_config(component, params_rate(params));
 
 	return 0;
 }
@@ -1023,7 +998,7 @@ static int cs42l42_set_bclk_ratio(struct snd_soc_dai *dai,
 	return 0;
 }
 
-int cs42l42_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
+static int cs42l42_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 {
 	struct snd_soc_component *component = dai->component;
 	struct cs42l42_private *cs42l42 = snd_soc_component_get_drvdata(component);
@@ -1116,7 +1091,6 @@ int cs42l42_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_mute_stream, "SND_SOC_CS42L42_CORE");
 
 #define CS42L42_FORMATS (SNDRV_PCM_FMTBIT_S16_LE |\
 			 SNDRV_PCM_FMTBIT_S24_LE |\
@@ -1151,7 +1125,7 @@ struct snd_soc_dai_driver cs42l42_dai = {
 		.symmetric_sample_bits = 1,
 		.ops = &cs42l42_ops,
 };
-EXPORT_SYMBOL_NS_GPL(cs42l42_dai, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_dai, SND_SOC_CS42L42_CORE);
 
 static void cs42l42_manual_hs_type_detect(struct cs42l42_private *cs42l42)
 {
@@ -1659,7 +1633,7 @@ static const struct cs42l42_irq_params irq_params_table[] = {
 		CS42L42_TSRS_PLUG_VAL_MASK}
 };
 
-irqreturn_t cs42l42_irq_thread(int irq, void *data)
+static irqreturn_t cs42l42_irq_thread(int irq, void *data)
 {
 	struct cs42l42_private *cs42l42 = (struct cs42l42_private *)data;
 	unsigned int stickies[12];
@@ -1668,11 +1642,9 @@ irqreturn_t cs42l42_irq_thread(int irq, void *data)
 	unsigned int current_button_status;
 	unsigned int i;
 
-	pm_runtime_get_sync(cs42l42->dev);
 	mutex_lock(&cs42l42->irq_lock);
 	if (cs42l42->suspended || !cs42l42->init_done) {
 		mutex_unlock(&cs42l42->irq_lock);
-		pm_runtime_put_autosuspend(cs42l42->dev);
 		return IRQ_NONE;
 	}
 
@@ -1775,11 +1747,9 @@ irqreturn_t cs42l42_irq_thread(int irq, void *data)
 	}
 
 	mutex_unlock(&cs42l42->irq_lock);
-	pm_runtime_put_autosuspend(cs42l42->dev);
 
 	return IRQ_HANDLED;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_irq_thread, "SND_SOC_CS42L42_CORE");
 
 static void cs42l42_set_interrupt_masks(struct cs42l42_private *cs42l42)
 {
@@ -2155,9 +2125,6 @@ int cs42l42_suspend(struct device *dev)
 	u8 save_regs[ARRAY_SIZE(cs42l42_shutdown_seq)];
 	int i, ret;
 
-	if (!cs42l42->init_done)
-		return 0;
-
 	/*
 	 * Wait for threaded irq handler to be idle and stop it processing
 	 * future interrupts. This ensures a safe disable if the interrupt
@@ -2193,6 +2160,7 @@ int cs42l42_suspend(struct device *dev)
 	/* Discharge FILT+ */
 	regmap_update_bits(cs42l42->regmap, CS42L42_PWR_CTL2,
 			   CS42L42_DISCHARGE_FILT_MASK, CS42L42_DISCHARGE_FILT_MASK);
+	msleep(CS42L42_FILT_DISCHARGE_TIME_MS);
 
 	regcache_cache_only(cs42l42->regmap, true);
 	gpiod_set_value_cansleep(cs42l42->reset_gpio, 0);
@@ -2210,15 +2178,12 @@ int cs42l42_suspend(struct device *dev)
 	return 0;
 
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_suspend, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_suspend, SND_SOC_CS42L42_CORE);
 
 int cs42l42_resume(struct device *dev)
 {
 	struct cs42l42_private *cs42l42 = dev_get_drvdata(dev);
 	int ret;
-
-	if (!cs42l42->init_done)
-		return 0;
 
 	/*
 	 * If jack was unplugged and re-plugged during suspend it could
@@ -2241,7 +2206,7 @@ int cs42l42_resume(struct device *dev)
 
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_resume, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_resume, SND_SOC_CS42L42_CORE);
 
 void cs42l42_resume_restore(struct device *dev)
 {
@@ -2260,7 +2225,7 @@ void cs42l42_resume_restore(struct device *dev)
 
 	dev_dbg(dev, "System resumed\n");
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_resume_restore, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_resume_restore, SND_SOC_CS42L42_CORE);
 
 static int __maybe_unused cs42l42_i2c_resume(struct device *dev)
 {
@@ -2325,16 +2290,7 @@ int cs42l42_common_probe(struct cs42l42_private *cs42l42,
 		/* Ensure minimum reset pulse width */
 		usleep_range(10, 500);
 
-		/*
-		 * On SoundWire keep the chip in reset until we get an UNATTACH
-		 * notification from the SoundWire core. This acts as a
-		 * synchronization point to reject stale ATTACH notifications
-		 * if the chip was already enumerated before we reset it.
-		 */
-		if (cs42l42->sdw_peripheral)
-			cs42l42->sdw_waiting_first_unattach = true;
-		else
-			gpiod_set_value_cansleep(cs42l42->reset_gpio, 1);
+		gpiod_set_value_cansleep(cs42l42->reset_gpio, 1);
 	}
 	usleep_range(CS42L42_BOOT_TIME_US, CS42L42_BOOT_TIME_US * 2);
 
@@ -2369,7 +2325,7 @@ err_disable_noreset:
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_common_probe, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_common_probe, SND_SOC_CS42L42_CORE);
 
 int cs42l42_init(struct cs42l42_private *cs42l42)
 {
@@ -2423,18 +2379,6 @@ int cs42l42_init(struct cs42l42_private *cs42l42)
 	if (ret != 0)
 		goto err_shutdown;
 
-	/*
-	 * SRC power is linked to ASP power so doesn't work in Soundwire mode.
-	 * Override it and use DAPM to control SRC power for Soundwire.
-	 */
-	if (cs42l42->sdw_peripheral) {
-		regmap_update_bits(cs42l42->regmap, CS42L42_PWR_CTL2,
-				   CS42L42_SRC_PDN_OVERRIDE_MASK |
-				   CS42L42_DAC_SRC_PDNB_MASK |
-				   CS42L42_ADC_SRC_PDNB_MASK,
-				   CS42L42_SRC_PDN_OVERRIDE_MASK);
-	}
-
 	/* Setup headset detection */
 	cs42l42_setup_hs_type_detect(cs42l42);
 
@@ -2463,7 +2407,7 @@ err_disable:
 				cs42l42->supplies);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_init, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_init, SND_SOC_CS42L42_CORE);
 
 void cs42l42_common_remove(struct cs42l42_private *cs42l42)
 {
@@ -2483,7 +2427,7 @@ void cs42l42_common_remove(struct cs42l42_private *cs42l42)
 	gpiod_set_value_cansleep(cs42l42->reset_gpio, 0);
 	regulator_bulk_disable(ARRAY_SIZE(cs42l42->supplies), cs42l42->supplies);
 }
-EXPORT_SYMBOL_NS_GPL(cs42l42_common_remove, "SND_SOC_CS42L42_CORE");
+EXPORT_SYMBOL_NS_GPL(cs42l42_common_remove, SND_SOC_CS42L42_CORE);
 
 MODULE_DESCRIPTION("ASoC CS42L42 driver");
 MODULE_AUTHOR("James Schulman, Cirrus Logic Inc, <james.schulman@cirrus.com>");

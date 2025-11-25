@@ -229,7 +229,8 @@ static void wf_ad7417_init_chip(struct wf_ad7417_priv *pv)
 	pv->config = config;
 }
 
-static int wf_ad7417_probe(struct i2c_client *client)
+static int wf_ad7417_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct wf_ad7417_priv *pv;
 	const struct mpu_data *mpu;
@@ -304,7 +305,7 @@ static void wf_ad7417_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id wf_ad7417_id[] = {
-	{ "MAC,ad7417" },
+	{ "MAC,ad7417", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wf_ad7417_id);

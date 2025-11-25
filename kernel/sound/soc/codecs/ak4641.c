@@ -619,7 +619,7 @@ static void ak4641_i2c_remove(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id ak4641_i2c_id[] = {
-	{ "ak4641" },
+	{ "ak4641", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ak4641_i2c_id);
@@ -628,7 +628,7 @@ static struct i2c_driver ak4641_i2c_driver = {
 	.driver = {
 		.name = "ak4641",
 	},
-	.probe =    ak4641_i2c_probe,
+	.probe_new = ak4641_i2c_probe,
 	.remove =   ak4641_i2c_remove,
 	.id_table = ak4641_i2c_id,
 };

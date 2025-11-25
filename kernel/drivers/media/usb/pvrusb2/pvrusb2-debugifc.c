@@ -9,6 +9,11 @@
 #include "pvrusb2-hdw.h"
 #include "pvrusb2-debug.h"
 
+struct debugifc_mask_item {
+	const char *name;
+	unsigned long msk;
+};
+
 
 static unsigned int debugifc_count_whitespace(const char *buf,
 					      unsigned int count)

@@ -10,6 +10,7 @@
 #include <linux/init.h>
 #include <linux/input.h>
 #include <linux/module.h>
+#include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/acpi.h>
 
@@ -257,25 +258,7 @@ int ts3a227e_enable_jack_detect(struct snd_soc_component *component,
 }
 EXPORT_SYMBOL_GPL(ts3a227e_enable_jack_detect);
 
-static int ts3a227e_set_jack(struct snd_soc_component *component,
-			     struct snd_soc_jack *jack, void *data)
-{
-	if (jack == NULL)
-		return -EINVAL;
-
-	return ts3a227e_enable_jack_detect(component, jack);
-}
-
-static int ts3a227e_get_jack_type(struct snd_soc_component *component)
-{
-	return SND_JACK_HEADSET;
-}
-
-static const struct snd_soc_component_driver ts3a227e_soc_driver = {
-	.name = "ti,ts3a227e",
-	.set_jack = ts3a227e_set_jack,
-	.get_jack_type = ts3a227e_get_jack_type,
-};
+static struct snd_soc_component_driver ts3a227e_soc_driver;
 
 static const struct regmap_config ts3a227e_regmap_config = {
 	.val_bits = 8,
@@ -399,6 +382,7 @@ static int ts3a227e_i2c_probe(struct i2c_client *i2c)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int ts3a227e_suspend(struct device *dev)
 {
 	struct ts3a227e *ts3a227e = dev_get_drvdata(dev);
@@ -418,13 +402,14 @@ static int ts3a227e_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static const struct dev_pm_ops ts3a227e_pm = {
-	SYSTEM_SLEEP_PM_OPS(ts3a227e_suspend, ts3a227e_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(ts3a227e_suspend, ts3a227e_resume)
 };
 
 static const struct i2c_device_id ts3a227e_i2c_ids[] = {
-	{ "ts3a227e" },
+	{ "ts3a227e", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ts3a227e_i2c_ids);
@@ -448,11 +433,11 @@ MODULE_DEVICE_TABLE(acpi, ts3a227e_acpi_match);
 static struct i2c_driver ts3a227e_driver = {
 	.driver = {
 		.name = "ts3a227e",
-		.pm = pm_ptr(&ts3a227e_pm),
+		.pm = &ts3a227e_pm,
 		.of_match_table = of_match_ptr(ts3a227e_of_match),
 		.acpi_match_table = ACPI_PTR(ts3a227e_acpi_match),
 	},
-	.probe = ts3a227e_i2c_probe,
+	.probe_new = ts3a227e_i2c_probe,
 	.id_table = ts3a227e_i2c_ids,
 };
 module_i2c_driver(ts3a227e_driver);

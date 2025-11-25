@@ -140,5 +140,4 @@ static void __exit devfreq_simple_ondemand_exit(void)
 	return;
 }
 module_exit(devfreq_simple_ondemand_exit);
-MODULE_DESCRIPTION("DEVFREQ Simple On-demand governor");
 MODULE_LICENSE("GPL");

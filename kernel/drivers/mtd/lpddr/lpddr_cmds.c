@@ -61,7 +61,7 @@ struct mtd_info *lpddr_cmdset(struct map_info *map)
 		mtd->_point = lpddr_point;
 		mtd->_unpoint = lpddr_unpoint;
 	}
-	mtd->size = 1ULL << lpddr->qinfo->DevSizeShift;
+	mtd->size = 1 << lpddr->qinfo->DevSizeShift;
 	mtd->erasesize = 1 << lpddr->qinfo->UniformBlockSizeShift;
 	mtd->writesize = 1 << lpddr->qinfo->BufSizeShift;
 
@@ -142,7 +142,7 @@ static int wait_for_ready(struct map_info *map, struct flchip *chip,
 		if (dsr & DSR_READY_STATUS)
 			break;
 		if (!timeo) {
-			printk(KERN_ERR "%s: Flash timeout error state %d\n",
+			printk(KERN_ERR "%s: Flash timeout error state %d \n",
 							map->name, chip_state);
 			ret = -ETIME;
 			break;
@@ -186,7 +186,7 @@ static int wait_for_ready(struct map_info *map, struct flchip *chip,
 	if (dsr & DSR_ERR) {
 		/* Clear DSR*/
 		map_write(map, CMD(~(DSR_ERR)), map->pfow_base + PFOW_DSR);
-		printk(KERN_WARNING"%s: Bad status on wait: 0x%x\n",
+		printk(KERN_WARNING"%s: Bad status on wait: 0x%x \n",
 				map->name, dsr);
 		print_drs_error(dsr);
 		ret = -EIO;
@@ -321,7 +321,7 @@ static int chip_ready(struct map_info *map, struct flchip *chip, int mode)
 			/* Resume and pretend we weren't here.  */
 			put_chip(map, chip);
 			printk(KERN_ERR "%s: suspend operation failed."
-					"State may be wrong\n", map->name);
+					"State may be wrong \n", map->name);
 			return -EIO;
 		}
 		chip->erase_suspended = 1;
@@ -406,7 +406,7 @@ static int do_write_buffer(struct map_info *map, struct flchip *chip,
 {
 	struct lpddr_private *lpddr = map->fldrv_priv;
 	map_word datum;
-	int ret, wbufsize, word_gap;
+	int ret, wbufsize, word_gap, words;
 	const struct kvec *vec;
 	unsigned long vec_seek;
 	unsigned long prog_buf_ofs;
@@ -421,7 +421,10 @@ static int do_write_buffer(struct map_info *map, struct flchip *chip,
 	}
 	/* Figure out the number of words to write */
 	word_gap = (-adr & (map_bankwidth(map)-1));
-	if (word_gap) {
+	words = (len - word_gap + map_bankwidth(map) - 1) / map_bankwidth(map);
+	if (!word_gap) {
+		words--;
+	} else {
 		word_gap = map_bankwidth(map) - word_gap;
 		adr -= word_gap;
 		datum = map_word_ff(map);
@@ -468,7 +471,7 @@ static int do_write_buffer(struct map_info *map, struct flchip *chip,
 	chip->state = FL_WRITING;
 	ret = wait_for_ready(map, chip, (1<<lpddr->qinfo->ProgBufferTime));
 	if (ret)	{
-		printk(KERN_WARNING"%s Buffer program error: %d at %lx\n",
+		printk(KERN_WARNING"%s Buffer program error: %d at %lx; \n",
 			map->name, ret, adr);
 		goto out;
 	}
@@ -736,7 +739,7 @@ static int do_xxlock(struct mtd_info *mtd, loff_t adr, uint32_t len, int thunk)
 
 	ret = wait_for_ready(map, chip, 1);
 	if (ret)	{
-		printk(KERN_ERR "%s: block unlock error status %d\n",
+		printk(KERN_ERR "%s: block unlock error status %d \n",
 				map->name, ret);
 		goto out;
 	}

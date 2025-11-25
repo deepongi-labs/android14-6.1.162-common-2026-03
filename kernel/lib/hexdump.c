@@ -9,7 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 #include <linux/export.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 const char hex_asc[] = "0123456789abcdef";
 EXPORT_SYMBOL(hex_asc);

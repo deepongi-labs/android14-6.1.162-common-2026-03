@@ -1470,7 +1470,8 @@ static int switchtec_ntb_reinit_peer(struct switchtec_ntb *sndev)
 	return rc;
 }
 
-static int switchtec_ntb_add(struct device *dev)
+static int switchtec_ntb_add(struct device *dev,
+			     struct class_interface *class_intf)
 {
 	struct switchtec_dev *stdev = to_stdev(dev);
 	struct switchtec_ntb *sndev;
@@ -1540,7 +1541,8 @@ free_and_exit:
 	return rc;
 }
 
-static void switchtec_ntb_remove(struct device *dev)
+static void switchtec_ntb_remove(struct device *dev,
+				 struct class_interface *class_intf)
 {
 	struct switchtec_dev *stdev = to_stdev(dev);
 	struct switchtec_ntb *sndev = stdev->sndev;
@@ -1566,7 +1568,7 @@ static struct class_interface switchtec_interface  = {
 
 static int __init switchtec_ntb_init(void)
 {
-	switchtec_interface.class = &switchtec_class;
+	switchtec_interface.class = switchtec_class;
 	return class_interface_register(&switchtec_interface);
 }
 module_init(switchtec_ntb_init);

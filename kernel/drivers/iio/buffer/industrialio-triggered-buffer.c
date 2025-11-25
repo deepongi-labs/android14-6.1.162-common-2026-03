@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+ /*
  * Copyright (c) 2012 Analog Devices, Inc.
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
  */
@@ -41,7 +41,7 @@ int iio_triggered_buffer_setup_ext(struct iio_dev *indio_dev,
 	irqreturn_t (*thread)(int irq, void *p),
 	enum iio_buffer_direction direction,
 	const struct iio_buffer_setup_ops *setup_ops,
-	const struct iio_dev_attr **buffer_attrs)
+	const struct attribute **buffer_attrs)
 {
 	struct iio_buffer *buffer;
 	int ret;
@@ -120,7 +120,7 @@ int devm_iio_triggered_buffer_setup_ext(struct device *dev,
 					irqreturn_t (*thread)(int irq, void *p),
 					enum iio_buffer_direction direction,
 					const struct iio_buffer_setup_ops *ops,
-					const struct iio_dev_attr **buffer_attrs)
+					const struct attribute **buffer_attrs)
 {
 	int ret;
 

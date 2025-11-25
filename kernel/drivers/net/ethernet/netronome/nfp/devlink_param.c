@@ -132,8 +132,7 @@ exit_close_nsp:
 
 static int
 nfp_devlink_param_u8_set(struct devlink *devlink, u32 id,
-			 struct devlink_param_gset_ctx *ctx,
-			 struct netlink_ext_ack *extack)
+			 struct devlink_param_gset_ctx *ctx)
 {
 	const struct nfp_devlink_param_u8_arg *arg;
 	struct nfp_pf *pf = devlink_priv(devlink);
@@ -234,8 +233,8 @@ int nfp_devlink_params_register(struct nfp_pf *pf)
 	if (err <= 0)
 		return err;
 
-	return devl_params_register(devlink, nfp_devlink_params,
-				    ARRAY_SIZE(nfp_devlink_params));
+	return devlink_params_register(devlink, nfp_devlink_params,
+				       ARRAY_SIZE(nfp_devlink_params));
 }
 
 void nfp_devlink_params_unregister(struct nfp_pf *pf)
@@ -246,6 +245,6 @@ void nfp_devlink_params_unregister(struct nfp_pf *pf)
 	if (err <= 0)
 		return;
 
-	devl_params_unregister(priv_to_devlink(pf), nfp_devlink_params,
-			       ARRAY_SIZE(nfp_devlink_params));
+	devlink_params_unregister(priv_to_devlink(pf), nfp_devlink_params,
+				  ARRAY_SIZE(nfp_devlink_params));
 }

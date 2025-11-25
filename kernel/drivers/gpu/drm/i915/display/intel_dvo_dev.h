@@ -23,22 +23,21 @@
 #ifndef __INTEL_DVO_DEV_H__
 #define __INTEL_DVO_DEV_H__
 
+#include <linux/i2c.h>
+
+#include <drm/drm_crtc.h>
+
 #include "i915_reg_defs.h"
-
-#include "intel_display_limits.h"
-
-enum drm_connector_status;
-struct drm_display_mode;
-struct i2c_adapter;
 
 struct intel_dvo_device {
 	const char *name;
 	int type;
-	/* DVOA/B/C */
-	enum port port;
+	/* DVOA/B/C output register */
+	i915_reg_t dvo_reg;
+	i915_reg_t dvo_srcdim_reg;
 	/* GPIO register used for i2c bus to control this device */
 	u32 gpio;
-	int target_addr;
+	int slave_addr;
 
 	const struct intel_dvo_dev_ops *dev_ops;
 	void *dev_priv;
@@ -54,10 +53,16 @@ struct intel_dvo_dev_ops {
 		     struct i2c_adapter *i2cbus);
 
 	/*
+	 * Called to allow the output a chance to create properties after the
+	 * RandR objects have been created.
+	 */
+	void (*create_resources)(struct intel_dvo_device *dvo);
+
+	/*
 	 * Turn on/off output.
 	 *
 	 * Because none of our dvo drivers support an intermediate power levels,
-	 * we don't expose this in the interface.
+	 * we don't expose this in the interfac.
 	 */
 	void (*dpms)(struct intel_dvo_device *dvo, bool enable);
 
@@ -71,7 +76,17 @@ struct intel_dvo_dev_ops {
 	 * \return MODE_OK if the mode is valid, or another MODE_* otherwise.
 	 */
 	enum drm_mode_status (*mode_valid)(struct intel_dvo_device *dvo,
-					   const struct drm_display_mode *mode);
+					   struct drm_display_mode *mode);
+
+	/*
+	 * Callback for preparing mode changes on an output
+	 */
+	void (*prepare)(struct intel_dvo_device *dvo);
+
+	/*
+	 * Callback for committing mode changes on an output
+	 */
+	void (*commit)(struct intel_dvo_device *dvo);
 
 	/*
 	 * Callback for setting up a video mode after fixups have been made.
@@ -94,6 +109,15 @@ struct intel_dvo_dev_ops {
 	 * is active.
 	 */
 	bool (*get_hw_state)(struct intel_dvo_device *dev);
+
+	/**
+	 * Query the device for the modes it provides.
+	 *
+	 * This function may also update MonInfo, mm_width, and mm_height.
+	 *
+	 * \return singly-linked list of modes or NULL if no modes found.
+	 */
+	struct drm_display_mode *(*get_modes)(struct intel_dvo_device *dvo);
 
 	/**
 	 * Clean up driver-specific bits of the output

@@ -11,9 +11,9 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 
@@ -309,7 +309,7 @@ static void deinterlace_init(struct deinterlace_dev *dev)
 
 static inline struct deinterlace_ctx *deinterlace_file2ctx(struct file *file)
 {
-	return container_of(file_to_v4l2_fh(file), struct deinterlace_ctx, fh);
+	return container_of(file->private_data, struct deinterlace_ctx, fh);
 }
 
 static bool deinterlace_check_format(u32 pixelformat)
@@ -659,6 +659,8 @@ static const struct vb2_ops deinterlace_qops = {
 	.buf_queue		= deinterlace_buf_queue,
 	.start_streaming	= deinterlace_start_streaming,
 	.stop_streaming		= deinterlace_stop_streaming,
+	.wait_prepare		= vb2_ops_wait_prepare,
+	.wait_finish		= vb2_ops_wait_finish,
 };
 
 static int deinterlace_queue_init(void *priv, struct vb2_queue *src_vq,
@@ -671,7 +673,7 @@ static int deinterlace_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->io_modes = VB2_MMAP | VB2_DMABUF;
 	src_vq->drv_priv = ctx;
 	src_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
-	src_vq->min_queued_buffers = 1;
+	src_vq->min_buffers_needed = 1;
 	src_vq->ops = &deinterlace_qops;
 	src_vq->mem_ops = &vb2_dma_contig_memops;
 	src_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
@@ -686,7 +688,7 @@ static int deinterlace_queue_init(void *priv, struct vb2_queue *src_vq,
 	dst_vq->io_modes = VB2_MMAP | VB2_DMABUF;
 	dst_vq->drv_priv = ctx;
 	dst_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
-	dst_vq->min_queued_buffers = 2;
+	dst_vq->min_buffers_needed = 2;
 	dst_vq->ops = &deinterlace_qops;
 	dst_vq->mem_ops = &vb2_dma_contig_memops;
 	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
@@ -730,6 +732,7 @@ static int deinterlace_open(struct file *file)
 	deinterlace_prepare_format(&ctx->dst_fmt);
 
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
+	file->private_data = &ctx->fh;
 	ctx->dev = dev;
 
 	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(dev->m2m_dev, ctx,
@@ -739,7 +742,7 @@ static int deinterlace_open(struct file *file)
 		goto err_free;
 	}
 
-	v4l2_fh_add(&ctx->fh, file);
+	v4l2_fh_add(&ctx->fh);
 
 	mutex_unlock(&dev->dev_mutex);
 
@@ -755,11 +758,12 @@ err_free:
 static int deinterlace_release(struct file *file)
 {
 	struct deinterlace_dev *dev = video_drvdata(file);
-	struct deinterlace_ctx *ctx = deinterlace_file2ctx(file);
+	struct deinterlace_ctx *ctx = container_of(file->private_data,
+						   struct deinterlace_ctx, fh);
 
 	mutex_lock(&dev->dev_mutex);
 
-	v4l2_fh_del(&ctx->fh, file);
+	v4l2_fh_del(&ctx->fh);
 	v4l2_fh_exit(&ctx->fh);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
 
@@ -902,7 +906,7 @@ err_v4l2:
 	return ret;
 }
 
-static void deinterlace_remove(struct platform_device *pdev)
+static int deinterlace_remove(struct platform_device *pdev)
 {
 	struct deinterlace_dev *dev = platform_get_drvdata(pdev);
 
@@ -911,6 +915,8 @@ static void deinterlace_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&dev->v4l2_dev);
 
 	pm_runtime_force_suspend(&pdev->dev);
+
+	return 0;
 }
 
 static int deinterlace_runtime_resume(struct device *device)

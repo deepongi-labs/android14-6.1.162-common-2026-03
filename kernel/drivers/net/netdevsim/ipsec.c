@@ -85,11 +85,11 @@ static int nsim_ipsec_find_empty_idx(struct nsim_ipsec *ipsec)
 	return -ENOSPC;
 }
 
-static int nsim_ipsec_parse_proto_keys(struct net_device *dev,
-				       struct xfrm_state *xs,
+static int nsim_ipsec_parse_proto_keys(struct xfrm_state *xs,
 				       u32 *mykey, u32 *mysalt)
 {
 	const char aes_gcm_name[] = "rfc4106(gcm(aes))";
+	struct net_device *dev = xs->xso.real_dev;
 	unsigned char *key_data;
 	char *alg_name = NULL;
 	int key_len;
@@ -129,38 +129,34 @@ static int nsim_ipsec_parse_proto_keys(struct net_device *dev,
 	return 0;
 }
 
-static int nsim_ipsec_add_sa(struct net_device *dev,
-			     struct xfrm_state *xs,
-			     struct netlink_ext_ack *extack)
+static int nsim_ipsec_add_sa(struct xfrm_state *xs)
 {
 	struct nsim_ipsec *ipsec;
+	struct net_device *dev;
 	struct netdevsim *ns;
 	struct nsim_sa sa;
 	u16 sa_idx;
 	int ret;
 
+	dev = xs->xso.real_dev;
 	ns = netdev_priv(dev);
 	ipsec = &ns->ipsec;
 
 	if (xs->id.proto != IPPROTO_ESP && xs->id.proto != IPPROTO_AH) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported protocol for ipsec offload");
+		netdev_err(dev, "Unsupported protocol 0x%04x for ipsec offload\n",
+			   xs->id.proto);
 		return -EINVAL;
 	}
 
 	if (xs->calg) {
-		NL_SET_ERR_MSG_MOD(extack, "Compression offload not supported");
-		return -EINVAL;
-	}
-
-	if (xs->xso.type != XFRM_DEV_OFFLOAD_CRYPTO) {
-		NL_SET_ERR_MSG_MOD(extack, "Unsupported ipsec offload type");
+		netdev_err(dev, "Compression offload not supported\n");
 		return -EINVAL;
 	}
 
 	/* find the first unused index */
 	ret = nsim_ipsec_find_empty_idx(ipsec);
 	if (ret < 0) {
-		NL_SET_ERR_MSG_MOD(extack, "No space for SA in Rx table!");
+		netdev_err(dev, "No space for SA in Rx table!\n");
 		return ret;
 	}
 	sa_idx = (u16)ret;
@@ -173,9 +169,9 @@ static int nsim_ipsec_add_sa(struct net_device *dev,
 		sa.crypt = xs->ealg || xs->aead;
 
 	/* get the key and salt */
-	ret = nsim_ipsec_parse_proto_keys(dev, xs, sa.key, &sa.salt);
+	ret = nsim_ipsec_parse_proto_keys(xs, sa.key, &sa.salt);
 	if (ret) {
-		NL_SET_ERR_MSG_MOD(extack, "Failed to get key data for SA table");
+		netdev_err(dev, "Failed to get key data for SA table\n");
 		return ret;
 	}
 
@@ -199,9 +195,9 @@ static int nsim_ipsec_add_sa(struct net_device *dev,
 	return 0;
 }
 
-static void nsim_ipsec_del_sa(struct net_device *dev, struct xfrm_state *xs)
+static void nsim_ipsec_del_sa(struct xfrm_state *xs)
 {
-	struct netdevsim *ns = netdev_priv(dev);
+	struct netdevsim *ns = netdev_priv(xs->xso.real_dev);
 	struct nsim_ipsec *ipsec = &ns->ipsec;
 	u16 sa_idx;
 
@@ -216,9 +212,20 @@ static void nsim_ipsec_del_sa(struct net_device *dev, struct xfrm_state *xs)
 	ipsec->count--;
 }
 
+static bool nsim_ipsec_offload_ok(struct sk_buff *skb, struct xfrm_state *xs)
+{
+	struct netdevsim *ns = netdev_priv(xs->xso.real_dev);
+	struct nsim_ipsec *ipsec = &ns->ipsec;
+
+	ipsec->ok++;
+
+	return true;
+}
+
 static const struct xfrmdev_ops nsim_xfrmdev_ops = {
 	.xdo_dev_state_add	= nsim_ipsec_add_sa,
 	.xdo_dev_state_delete	= nsim_ipsec_del_sa,
+	.xdo_dev_offload_ok	= nsim_ipsec_offload_ok,
 };
 
 bool nsim_ipsec_tx(struct netdevsim *ns, struct sk_buff *skb)

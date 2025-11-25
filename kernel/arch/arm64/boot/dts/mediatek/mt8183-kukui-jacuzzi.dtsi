@@ -93,8 +93,18 @@
 	};
 };
 
-&dsi_out {
-	remote-endpoint = <&anx7625_in>;
+&dsi0 {
+	status = "okay";
+	/delete-property/#size-cells;
+	/delete-property/#address-cells;
+	/delete-node/panel@0;
+	ports {
+		port {
+			dsi_out: endpoint {
+				remote-endpoint = <&anx7625_in>;
+			};
+		};
+	};
 };
 
 &i2c0 {
@@ -143,6 +153,7 @@
 		reg = <0x58>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&anx7625_pins>;
+		panel_flags = <1>;
 		enable-gpios = <&pio 45 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&pio 73 GPIO_ACTIVE_HIGH>;
 		vdd10-supply = <&pp1000_mipibrdg>;
@@ -390,14 +401,14 @@
 		"",
 		"";
 
-	pp1000_mipibrdg_en: pp1000-mipibrdg-en-pins {
+	pp1000_mipibrdg_en: pp1000-mipibrdg-en {
 		pins1 {
 			pinmux = <PINMUX_GPIO54__FUNC_GPIO54>;
 			output-low;
 		};
 	};
 
-	pp1800_mipibrdg_en: pp1800-mipibrdg-en-pins {
+	pp1800_mipibrdg_en: pp1800-mipibrdg-en {
 		pins1 {
 			pinmux = <PINMUX_GPIO36__FUNC_GPIO36>;
 			output-low;
@@ -405,20 +416,20 @@
 	};
 
 	pp3300_panel_pins: pp3300-panel-pins {
-		panel_3v3_enable: pins-panel-en {
+		panel_3v3_enable: panel-3v3-enable {
 			pinmux = <PINMUX_GPIO35__FUNC_GPIO35>;
 			output-low;
 		};
 	};
 
-	ppvarp_lcd_en: ppvarp-lcd-en-pins {
+	ppvarp_lcd_en: ppvarp-lcd-en {
 		pins1 {
 			pinmux = <PINMUX_GPIO66__FUNC_GPIO66>;
 			output-low;
 		};
 	};
 
-	ppvarn_lcd_en: ppvarn-lcd-en-pins {
+	ppvarn_lcd_en: ppvarn-lcd-en {
 		pins1 {
 			pinmux = <PINMUX_GPIO166__FUNC_GPIO166>;
 			output-low;
@@ -439,27 +450,27 @@
 	};
 
 	touchscreen_pins: touchscreen-pins {
-		pins-intn {
+		touch-int-odl {
 			pinmux = <PINMUX_GPIO155__FUNC_GPIO155>;
 			input-enable;
 			bias-pull-up;
 		};
 
-		pins-rst {
+		touch-rst-l {
 			pinmux = <PINMUX_GPIO156__FUNC_GPIO156>;
 			output-high;
 		};
 	};
 
 	trackpad_pins: trackpad-pins {
-		pins-intn {
+		trackpad-int {
 			pinmux = <PINMUX_GPIO7__FUNC_GPIO7>;
 			input-enable;
 			bias-disable; /* pulled externally */
 		};
 	};
 
-	pp3300_mipibrdg_en: pp3300-mipibrdg-en-pins {
+	pp3300_mipibrdg_en: pp3300-mipibrdg-en {
 		pins1 {
 			pinmux = <PINMUX_GPIO37__FUNC_GPIO37>;
 			output-low;
@@ -467,13 +478,13 @@
 	};
 
 	volume_button_pins: volume-button-pins {
-		pins-voldn {
+		voldn-btn-odl {
 			pinmux = <PINMUX_GPIO6__FUNC_GPIO6>;
 			input-enable;
 			bias-pull-up;
 		};
 
-		pins-volup {
+		volup-btn-odl {
 			pinmux = <PINMUX_GPIO5__FUNC_GPIO5>;
 			input-enable;
 			bias-pull-up;

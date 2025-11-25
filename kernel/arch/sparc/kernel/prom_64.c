@@ -361,16 +361,14 @@ char * __init build_path_component(struct device_node *dp)
 {
 	const char *name = of_get_property(dp, "name", NULL);
 	char tmp_buf[64], *n;
-	size_t n_sz;
 
 	tmp_buf[0] = '\0';
 	__build_path_component(dp, tmp_buf);
 	if (tmp_buf[0] == '\0')
-		strscpy(tmp_buf, name);
+		strcpy(tmp_buf, name);
 
-	n_sz = strlen(tmp_buf) + 1;
-	n = prom_early_alloc(n_sz);
-	strscpy(n, tmp_buf, n_sz);
+	n = prom_early_alloc(strlen(tmp_buf) + 1);
+	strcpy(n, tmp_buf);
 
 	return n;
 }
@@ -506,7 +504,7 @@ static void *fill_in_one_cpu(struct device_node *dp, int cpuid, int arg)
 	struct device_node *portid_parent = NULL;
 	int portid = -1;
 
-	if (of_property_present(dp, "cpuid")) {
+	if (of_find_property(dp, "cpuid", NULL)) {
 		int limit = 2;
 
 		portid_parent = dp;

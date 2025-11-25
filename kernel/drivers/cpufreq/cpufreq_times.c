@@ -21,6 +21,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/threads.h>
+#include <trace/hooks/cpufreq.h>
 
 static DEFINE_SPINLOCK(task_time_in_state_lock); /* task->time_in_state */
 
@@ -35,7 +36,7 @@ struct cpu_freqs {
 	unsigned int offset;
 	unsigned int max_state;
 	unsigned int last_index;
-	unsigned int freq_table[];
+	unsigned int freq_table[0];
 };
 
 static struct cpu_freqs *all_freqs[NR_CPUS];
@@ -146,6 +147,8 @@ void cpufreq_acct_update_power(struct task_struct *p, u64 cputime)
 	    p->time_in_state)
 		p->time_in_state[state] += cputime;
 	spin_unlock_irqrestore(&task_time_in_state_lock, flags);
+
+	trace_android_vh_cpufreq_acct_update_power(cputime, p, state);
 }
 
 static int cpufreq_times_get_index(struct cpu_freqs *freqs, unsigned int freq)
@@ -176,7 +179,8 @@ void cpufreq_times_create_policy(struct cpufreq_policy *policy)
 	cpufreq_for_each_valid_entry(pos, table)
 		count++;
 
-	tmp = kzalloc(struct_size(freqs, freq_table, count), GFP_KERNEL);
+	tmp =  kzalloc(sizeof(*freqs) + sizeof(freqs->freq_table[0]) * count,
+		       GFP_KERNEL);
 	if (!tmp)
 		return;
 

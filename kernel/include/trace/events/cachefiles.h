@@ -223,10 +223,10 @@ TRACE_EVENT(cachefiles_ref,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			cookie)
-		    __field(enum cachefiles_obj_ref_trace,	why)
-		    __field(int,				usage)
+		    __field(unsigned int,			obj		)
+		    __field(unsigned int,			cookie		)
+		    __field(enum cachefiles_obj_ref_trace,	why		)
+		    __field(int,				usage		)
 			     ),
 
 	    TP_fast_assign(
@@ -249,10 +249,10 @@ TRACE_EVENT(cachefiles_lookup,
 	    TP_ARGS(obj, dir, de),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(short,			error)
-		    __field(unsigned long,		dino)
-		    __field(unsigned long,		ino)
+		    __field(unsigned int,		obj	)
+		    __field(short,			error	)
+		    __field(unsigned long,		dino	)
+		    __field(unsigned long,		ino	)
 			     ),
 
 	    TP_fast_assign(
@@ -273,8 +273,8 @@ TRACE_EVENT(cachefiles_mkdir,
 	    TP_ARGS(dir, subdir),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			dir)
-		    __field(unsigned int,			subdir)
+		    __field(unsigned int,			dir	)
+		    __field(unsigned int,			subdir	)
 			     ),
 
 	    TP_fast_assign(
@@ -293,8 +293,8 @@ TRACE_EVENT(cachefiles_tmpfile,
 	    TP_ARGS(obj, backer),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
 			     ),
 
 	    TP_fast_assign(
@@ -313,8 +313,8 @@ TRACE_EVENT(cachefiles_link,
 	    TP_ARGS(obj, backer),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
 			     ),
 
 	    TP_fast_assign(
@@ -336,9 +336,9 @@ TRACE_EVENT(cachefiles_unlink,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(unsigned int,		ino)
-		    __field(enum fscache_why_object_killed, why)
+		    __field(unsigned int,		obj		)
+		    __field(unsigned int,		ino		)
+		    __field(enum fscache_why_object_killed, why		)
 			     ),
 
 	    TP_fast_assign(
@@ -361,9 +361,9 @@ TRACE_EVENT(cachefiles_rename,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(unsigned int,		ino)
-		    __field(enum fscache_why_object_killed, why)
+		    __field(unsigned int,		obj		)
+		    __field(unsigned int,		ino		)
+		    __field(enum fscache_why_object_killed, why		)
 			     ),
 
 	    TP_fast_assign(
@@ -380,20 +380,17 @@ TRACE_EVENT(cachefiles_rename,
 TRACE_EVENT(cachefiles_coherency,
 	    TP_PROTO(struct cachefiles_object *obj,
 		     ino_t ino,
-		     u64 disk_aux,
 		     enum cachefiles_content content,
 		     enum cachefiles_coherency_trace why),
 
-	    TP_ARGS(obj, ino, disk_aux, content, why),
+	    TP_ARGS(obj, ino, content, why),
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(enum cachefiles_coherency_trace,	why)
-		    __field(enum cachefiles_content,		content)
-		    __field(u64,				ino)
-		    __field(u64,				aux)
-		    __field(u64,				disk_aux)
+		    __field(unsigned int,			obj	)
+		    __field(enum cachefiles_coherency_trace,	why	)
+		    __field(enum cachefiles_content,		content	)
+		    __field(u64,				ino	)
 			     ),
 
 	    TP_fast_assign(
@@ -401,17 +398,13 @@ TRACE_EVENT(cachefiles_coherency,
 		    __entry->why	= why;
 		    __entry->content	= content;
 		    __entry->ino	= ino;
-		    __entry->aux	= be64_to_cpup((__be64 *)obj->cookie->inline_aux);
-		    __entry->disk_aux	= disk_aux;
 			   ),
 
-	    TP_printk("o=%08x %s B=%llx c=%u aux=%llx dsk=%llx",
+	    TP_printk("o=%08x %s B=%llx c=%u",
 		      __entry->obj,
 		      __print_symbolic(__entry->why, cachefiles_coherency_traces),
 		      __entry->ino,
-		      __entry->content,
-		      __entry->aux,
-		      __entry->disk_aux)
+		      __entry->content)
 	    );
 
 TRACE_EVENT(cachefiles_vol_coherency,
@@ -423,9 +416,9 @@ TRACE_EVENT(cachefiles_vol_coherency,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			vol)
-		    __field(enum cachefiles_coherency_trace,	why)
-		    __field(u64,				ino)
+		    __field(unsigned int,			vol	)
+		    __field(enum cachefiles_coherency_trace,	why	)
+		    __field(u64,				ino	)
 			     ),
 
 	    TP_fast_assign(
@@ -441,40 +434,39 @@ TRACE_EVENT(cachefiles_vol_coherency,
 	    );
 
 TRACE_EVENT(cachefiles_prep_read,
-	    TP_PROTO(struct cachefiles_object *obj,
-		     loff_t start,
-		     size_t len,
-		     unsigned short flags,
+	    TP_PROTO(struct netfs_io_subrequest *sreq,
 		     enum netfs_io_source source,
 		     enum cachefiles_prepare_read_trace why,
-		     ino_t cache_inode, ino_t netfs_inode),
+		     ino_t cache_inode),
 
-	    TP_ARGS(obj, start, len, flags, source, why, cache_inode, netfs_inode),
+	    TP_ARGS(sreq, source, why, cache_inode),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(unsigned short,		flags)
-		    __field(enum netfs_io_source,	source)
-		    __field(enum cachefiles_prepare_read_trace,	why)
-		    __field(size_t,			len)
-		    __field(loff_t,			start)
-		    __field(unsigned int,		netfs_inode)
-		    __field(unsigned int,		cache_inode)
+		    __field(unsigned int,		rreq		)
+		    __field(unsigned short,		index		)
+		    __field(unsigned short,		flags		)
+		    __field(enum netfs_io_source,	source		)
+		    __field(enum cachefiles_prepare_read_trace,	why	)
+		    __field(size_t,			len		)
+		    __field(loff_t,			start		)
+		    __field(unsigned int,		netfs_inode	)
+		    __field(unsigned int,		cache_inode	)
 			     ),
 
 	    TP_fast_assign(
-		    __entry->obj	= obj ? obj->debug_id : 0;
-		    __entry->flags	= flags;
+		    __entry->rreq	= sreq->rreq->debug_id;
+		    __entry->index	= sreq->debug_index;
+		    __entry->flags	= sreq->flags;
 		    __entry->source	= source;
 		    __entry->why	= why;
-		    __entry->len	= len;
-		    __entry->start	= start;
-		    __entry->netfs_inode = netfs_inode;
+		    __entry->len	= sreq->len;
+		    __entry->start	= sreq->start;
+		    __entry->netfs_inode = sreq->rreq->inode->i_ino;
 		    __entry->cache_inode = cache_inode;
 			   ),
 
-	    TP_printk("o=%08x %s %s f=%02x s=%llx %zx ni=%x B=%x",
-		      __entry->obj,
+	    TP_printk("R=%08x[%u] %s %s f=%02x s=%llx %zx ni=%x B=%x",
+		      __entry->rreq, __entry->index,
 		      __print_symbolic(__entry->source, netfs_sreq_sources),
 		      __print_symbolic(__entry->why, cachefiles_prepare_read_traces),
 		      __entry->flags,
@@ -491,10 +483,10 @@ TRACE_EVENT(cachefiles_read,
 	    TP_ARGS(obj, backer, start, len),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
-		    __field(size_t,				len)
-		    __field(loff_t,				start)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
+		    __field(size_t,				len	)
+		    __field(loff_t,				start	)
 			     ),
 
 	    TP_fast_assign(
@@ -520,10 +512,10 @@ TRACE_EVENT(cachefiles_write,
 	    TP_ARGS(obj, backer, start, len),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
-		    __field(size_t,				len)
-		    __field(loff_t,				start)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
+		    __field(size_t,				len	)
+		    __field(loff_t,				start	)
 			     ),
 
 	    TP_fast_assign(
@@ -547,11 +539,11 @@ TRACE_EVENT(cachefiles_trunc,
 	    TP_ARGS(obj, backer, from, to, why),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
-		    __field(enum cachefiles_trunc_trace,	why)
-		    __field(loff_t,				from)
-		    __field(loff_t,				to)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
+		    __field(enum cachefiles_trunc_trace,	why	)
+		    __field(loff_t,				from	)
+		    __field(loff_t,				to	)
 			     ),
 
 	    TP_fast_assign(
@@ -578,8 +570,8 @@ TRACE_EVENT(cachefiles_mark_active,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(ino_t,			inode)
+		    __field(unsigned int,		obj		)
+		    __field(ino_t,			inode		)
 			     ),
 
 	    TP_fast_assign(
@@ -599,8 +591,8 @@ TRACE_EVENT(cachefiles_mark_failed,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(ino_t,			inode)
+		    __field(unsigned int,		obj		)
+		    __field(ino_t,			inode		)
 			     ),
 
 	    TP_fast_assign(
@@ -620,8 +612,8 @@ TRACE_EVENT(cachefiles_mark_inactive,
 
 	    /* Note that obj may be NULL */
 	    TP_STRUCT__entry(
-		    __field(unsigned int,		obj)
-		    __field(ino_t,			inode)
+		    __field(unsigned int,		obj		)
+		    __field(ino_t,			inode		)
 			     ),
 
 	    TP_fast_assign(
@@ -640,10 +632,10 @@ TRACE_EVENT(cachefiles_vfs_error,
 	    TP_ARGS(obj, backer, error, where),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
-		    __field(enum cachefiles_error_trace,	where)
-		    __field(short,				error)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
+		    __field(enum cachefiles_error_trace,	where	)
+		    __field(short,				error	)
 			     ),
 
 	    TP_fast_assign(
@@ -667,10 +659,10 @@ TRACE_EVENT(cachefiles_io_error,
 	    TP_ARGS(obj, backer, error, where),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,			obj)
-		    __field(unsigned int,			backer)
-		    __field(enum cachefiles_error_trace,	where)
-		    __field(short,				error)
+		    __field(unsigned int,			obj	)
+		    __field(unsigned int,			backer	)
+		    __field(enum cachefiles_error_trace,	where	)
+		    __field(short,				error	)
 			     ),
 
 	    TP_fast_assign(
@@ -694,11 +686,11 @@ TRACE_EVENT(cachefiles_ondemand_open,
 	    TP_ARGS(obj, msg, load),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	msg_id)
-		    __field(unsigned int,	object_id)
-		    __field(unsigned int,	fd)
-		    __field(unsigned int,	flags)
+		    __field(unsigned int,	obj		)
+		    __field(unsigned int,	msg_id		)
+		    __field(unsigned int,	object_id	)
+		    __field(unsigned int,	fd		)
+		    __field(unsigned int,	flags		)
 			     ),
 
 	    TP_fast_assign(
@@ -724,9 +716,9 @@ TRACE_EVENT(cachefiles_ondemand_copen,
 	    TP_ARGS(obj, msg_id, len),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	msg_id)
-		    __field(long,		len)
+		    __field(unsigned int,	obj	)
+		    __field(unsigned int,	msg_id	)
+		    __field(long,		len	)
 			     ),
 
 	    TP_fast_assign(
@@ -747,9 +739,9 @@ TRACE_EVENT(cachefiles_ondemand_close,
 	    TP_ARGS(obj, msg),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	msg_id)
-		    __field(unsigned int,	object_id)
+		    __field(unsigned int,	obj		)
+		    __field(unsigned int,	msg_id		)
+		    __field(unsigned int,	object_id	)
 			     ),
 
 	    TP_fast_assign(
@@ -771,11 +763,11 @@ TRACE_EVENT(cachefiles_ondemand_read,
 	    TP_ARGS(obj, msg, load),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	msg_id)
-		    __field(unsigned int,	object_id)
-		    __field(loff_t,		start)
-		    __field(size_t,		len)
+		    __field(unsigned int,	obj		)
+		    __field(unsigned int,	msg_id		)
+		    __field(unsigned int,	object_id	)
+		    __field(loff_t,		start		)
+		    __field(size_t,		len		)
 			     ),
 
 	    TP_fast_assign(
@@ -800,8 +792,8 @@ TRACE_EVENT(cachefiles_ondemand_cread,
 	    TP_ARGS(obj, msg_id),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	msg_id)
+		    __field(unsigned int,	obj	)
+		    __field(unsigned int,	msg_id	)
 			     ),
 
 	    TP_fast_assign(
@@ -821,10 +813,10 @@ TRACE_EVENT(cachefiles_ondemand_fd_write,
 	    TP_ARGS(obj, backer, start, len),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	backer)
-		    __field(loff_t,		start)
-		    __field(size_t,		len)
+		    __field(unsigned int,	obj	)
+		    __field(unsigned int,	backer	)
+		    __field(loff_t,		start	)
+		    __field(size_t,		len	)
 			     ),
 
 	    TP_fast_assign(
@@ -847,8 +839,8 @@ TRACE_EVENT(cachefiles_ondemand_fd_release,
 	    TP_ARGS(obj, object_id),
 
 	    TP_STRUCT__entry(
-		    __field(unsigned int,	obj)
-		    __field(unsigned int,	object_id)
+		    __field(unsigned int,	obj		)
+		    __field(unsigned int,	object_id	)
 			     ),
 
 	    TP_fast_assign(

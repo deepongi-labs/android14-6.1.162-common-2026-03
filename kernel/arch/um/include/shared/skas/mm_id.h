@@ -6,19 +6,15 @@
 #ifndef __MM_ID_H
 #define __MM_ID_H
 
-#define STUB_MAX_FDS 4
-
 struct mm_id {
-	int pid;
+	union {
+		int mm_fd;
+		int pid;
+	} u;
 	unsigned long stack;
-	int syscall_data_len;
-
-	/* Only used with SECCOMP mode */
-	int sock;
-	int syscall_fd_num;
-	int syscall_fd_map[STUB_MAX_FDS];
+	int kill;
 };
 
-void notify_mm_kill(int pid);
+void __switch_mm(struct mm_id *mm_idp);
 
 #endif

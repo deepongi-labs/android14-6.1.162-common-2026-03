@@ -42,82 +42,42 @@ The sysfs file showing SRSO mitigation status is:
 
 The possible values in this file are:
 
- * 'Not affected':
+ - 'Not affected'               The processor is not vulnerable
 
-   The processor is not vulnerable
+ - 'Vulnerable: no microcode'   The processor is vulnerable, no
+                                microcode extending IBPB functionality
+                                to address the vulnerability has been
+                                applied.
 
-* 'Vulnerable':
+ - 'Mitigation: microcode'      Extended IBPB functionality microcode
+                                patch has been applied. It does not
+                                address User->Kernel and Guest->Host
+                                transitions protection but it does
+                                address User->User and VM->VM attack
+                                vectors.
 
-   The processor is vulnerable and no mitigations have been applied.
+                                (spec_rstack_overflow=microcode)
 
- * 'Vulnerable: No microcode':
+ - 'Mitigation: safe RET'       Software-only mitigation. It complements
+                                the extended IBPB microcode patch
+                                functionality by addressing User->Kernel
+                                and Guest->Host transitions protection.
 
-   The processor is vulnerable, no microcode extending IBPB
-   functionality to address the vulnerability has been applied.
+                                Selected by default or by
+                                spec_rstack_overflow=safe-ret
 
- * 'Vulnerable: Safe RET, no microcode':
+ - 'Mitigation: IBPB'           Similar protection as "safe RET" above
+                                but employs an IBPB barrier on privilege
+                                domain crossings (User->Kernel,
+                                Guest->Host).
 
-   The "Safe RET" mitigation (see below) has been applied to protect the
-   kernel, but the IBPB-extending microcode has not been applied.  User
-   space tasks may still be vulnerable.
+                                (spec_rstack_overflow=ibpb)
 
- * 'Vulnerable: Microcode, no safe RET':
+ - 'Mitigation: IBPB on VMEXIT' Mitigation addressing the cloud provider
+                                scenario - the Guest->Host transitions
+                                only.
 
-   Extended IBPB functionality microcode patch has been applied. It does
-   not address User->Kernel and Guest->Host transitions protection but it
-   does address User->User and VM->VM attack vectors.
-
-   Note that User->User mitigation is controlled by how the IBPB aspect in
-   the Spectre v2 mitigation is selected:
-
-    * conditional IBPB:
-
-      where each process can select whether it needs an IBPB issued
-      around it PR_SPEC_DISABLE/_ENABLE etc, see :doc:`spectre`
-
-    * strict:
-
-      i.e., always on - by supplying spectre_v2_user=on on the kernel
-      command line
-
-   (spec_rstack_overflow=microcode)
-
- * 'Mitigation: Safe RET':
-
-   Combined microcode/software mitigation. It complements the
-   extended IBPB microcode patch functionality by addressing
-   User->Kernel and Guest->Host transitions protection.
-
-   Selected by default or by spec_rstack_overflow=safe-ret
-
- * 'Mitigation: IBPB':
-
-   Similar protection as "safe RET" above but employs an IBPB barrier on
-   privilege domain crossings (User->Kernel, Guest->Host).
-
-  (spec_rstack_overflow=ibpb)
-
- * 'Mitigation: IBPB on VMEXIT':
-
-   Mitigation addressing the cloud provider scenario - the Guest->Host
-   transitions only.
-
-   (spec_rstack_overflow=ibpb-vmexit)
-
- * 'Mitigation: Reduced Speculation':
-
-   This mitigation gets automatically enabled when the above one "IBPB on
-   VMEXIT" has been selected and the CPU supports the BpSpecReduce bit.
-
-   It gets automatically enabled on machines which have the
-   SRSO_USER_KERNEL_NO=1 CPUID bit. In that case, the code logic is to switch
-   to the above =ibpb-vmexit mitigation because the user/kernel boundary is
-   not affected anymore and thus "safe RET" is not needed.
-
-   After enabling the IBPB on VMEXIT mitigation option, the BpSpecReduce bit
-   is detected (functionality present on all such machines) and that
-   practically overrides IBPB on VMEXIT as it has a lot less performance
-   impact and takes care of the guest->host attack vector too.
+                                (spec_rstack_overflow=ibpb-vmexit)
 
 In order to exploit vulnerability, an attacker needs to:
 
@@ -148,11 +108,11 @@ and does not want to suffer the performance impact, one can always
 disable the mitigation with spec_rstack_overflow=off.
 
 Similarly, 'Mitigation: IBPB' is another full mitigation type employing
-an indirect branch prediction barrier after having applied the required
+an indrect branch prediction barrier after having applied the required
 microcode patch for one's system. This mitigation comes also at
 a performance cost.
 
-Mitigation: Safe RET
+Mitigation: safe RET
 --------------------
 
 The mitigation works by ensuring all RET instructions speculate to
@@ -171,72 +131,3 @@ poisoned BTB entry and using that safe one for all function returns.
 In older Zen1 and Zen2, this is accomplished using a reinterpretation
 technique similar to Retbleed one: srso_untrain_ret() and
 srso_safe_ret().
-
-Checking the safe RET mitigation actually works
------------------------------------------------
-
-In case one wants to validate whether the SRSO safe RET mitigation works
-on a kernel, one could use two performance counters
-
-* PMC_0xc8 - Count of RET/RET lw retired
-* PMC_0xc9 - Count of RET/RET lw retired mispredicted
-
-and compare the number of RETs retired properly vs those retired
-mispredicted, in kernel mode. Another way of specifying those events
-is::
-
-        # perf list ex_ret_near_ret
-
-        List of pre-defined events (to be used in -e or -M):
-
-        core:
-          ex_ret_near_ret
-               [Retired Near Returns]
-          ex_ret_near_ret_mispred
-               [Retired Near Returns Mispredicted]
-
-Either the command using the event mnemonics::
-
-        # perf stat -e ex_ret_near_ret:k -e ex_ret_near_ret_mispred:k sleep 10s
-
-or using the raw PMC numbers::
-
-        # perf stat -e cpu/event=0xc8,umask=0/k -e cpu/event=0xc9,umask=0/k sleep 10s
-
-should give the same amount. I.e., every RET retired should be
-mispredicted::
-
-        [root@brent: ~/kernel/linux/tools/perf> ./perf stat -e cpu/event=0xc8,umask=0/k -e cpu/event=0xc9,umask=0/k sleep 10s
-
-         Performance counter stats for 'sleep 10s':
-
-                   137,167      cpu/event=0xc8,umask=0/k
-                   137,173      cpu/event=0xc9,umask=0/k
-
-              10.004110303 seconds time elapsed
-
-               0.000000000 seconds user
-               0.004462000 seconds sys
-
-vs the case when the mitigation is disabled (spec_rstack_overflow=off)
-or not functioning properly, showing usually a lot smaller number of
-mispredicted retired RETs vs the overall count of retired RETs during
-a workload::
-
-       [root@brent: ~/kernel/linux/tools/perf> ./perf stat -e cpu/event=0xc8,umask=0/k -e cpu/event=0xc9,umask=0/k sleep 10s
-
-        Performance counter stats for 'sleep 10s':
-
-                  201,627      cpu/event=0xc8,umask=0/k
-                    4,074      cpu/event=0xc9,umask=0/k
-
-             10.003267252 seconds time elapsed
-
-              0.002729000 seconds user
-              0.000000000 seconds sys
-
-Also, there is a selftest which performs the above, go to
-tools/testing/selftests/x86/ and do::
-
-        make srso
-        ./srso

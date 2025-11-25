@@ -13,9 +13,9 @@
 */
 
 
-#include <linux/unaligned.h>
-#include <crypto/algapi.h>
+#include <asm/unaligned.h>
 #include <linux/init.h>
+#include <linux/crypto.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/string.h>
@@ -531,7 +531,7 @@ static void __exit cast5_mod_fini(void)
 	crypto_unregister_alg(&alg);
 }
 
-module_init(cast5_mod_init);
+subsys_initcall(cast5_mod_init);
 module_exit(cast5_mod_fini);
 
 MODULE_LICENSE("GPL");

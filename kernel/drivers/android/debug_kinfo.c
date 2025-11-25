@@ -20,9 +20,9 @@
  * These will be re-linked against their real values
  * during the second link stage.
  */
+extern const unsigned long kallsyms_addresses[] __weak;
 extern const int kallsyms_offsets[] __weak;
 extern const u8 kallsyms_names[] __weak;
-extern const u8 kallsyms_seqs_of_names[] __weak;
 
 /*
  * Tell the compiler that the count isn't in the small data section if the arch
@@ -133,16 +133,20 @@ static int debug_kinfo_probe(struct platform_device *pdev)
 	all_info = (struct kernel_all_info *)all_info_addr;
 	info = &(all_info->info);
 	info->enabled_all = IS_ENABLED(CONFIG_KALLSYMS_ALL);
+	info->enabled_base_relative = IS_ENABLED(CONFIG_KALLSYMS_BASE_RELATIVE);
 	info->enabled_absolute_percpu = IS_ENABLED(CONFIG_KALLSYMS_ABSOLUTE_PERCPU);
-	info->enabled_cfi_clang = IS_ENABLED(CONFIG_CFI);
+	info->enabled_cfi_clang = IS_ENABLED(CONFIG_CFI_CLANG);
 	info->num_syms = kallsyms_num_syms;
 	info->name_len = KSYM_NAME_LEN;
 	info->bit_per_long = BITS_PER_LONG;
 	info->module_name_len = MODULE_NAME_LEN;
 	info->symbol_len = KSYM_SYMBOL_LEN;
-	info->_relative_pa = (u64)__pa_symbol((volatile void *)kallsyms_relative_base);
-	info->_offsets_pa = (u64)__pa_symbol((volatile void *)kallsyms_offsets);
-	info->_text_pa = (u64)__pa_symbol(_text);
+	if (!info->enabled_base_relative)
+		info->_addresses_pa = (u64)__pa_symbol((volatile void *)kallsyms_addresses);
+	else {
+		info->_relative_pa = (u64)__pa_symbol((volatile void *)kallsyms_relative_base);
+		info->_offsets_pa = (u64)__pa_symbol((volatile void *)kallsyms_offsets);
+	}
 	info->_stext_pa = (u64)__pa_symbol(_stext);
 	info->_etext_pa = (u64)__pa_symbol(_etext);
 	info->_sinittext_pa = (u64)__pa_symbol(_sinittext);
@@ -152,14 +156,23 @@ static int debug_kinfo_probe(struct platform_device *pdev)
 	info->_token_table_pa = (u64)__pa_symbol((volatile void *)kallsyms_token_table);
 	info->_token_index_pa = (u64)__pa_symbol((volatile void *)kallsyms_token_index);
 	info->_markers_pa = (u64)__pa_symbol((volatile void *)kallsyms_markers);
-	info->_seqs_of_names_pa = (u64)__pa_symbol((volatile void *)kallsyms_seqs_of_names);
 	info->thread_size = THREAD_SIZE;
 	info->swapper_pg_dir_pa = (u64)__pa_symbol(swapper_pg_dir);
-	strscpy(info->last_uts_release, init_utsname()->release, sizeof(info->last_uts_release));
+	strlcpy(info->last_uts_release, init_utsname()->release, sizeof(info->last_uts_release));
 	info->enabled_modules_tree_lookup = IS_ENABLED(CONFIG_MODULES_TREE_LOOKUP);
-	info->mod_mem_offset = offsetof(struct module, mem);
+	info->mod_core_layout_offset = offsetof(struct module, core_layout);
+	info->mod_init_layout_offset = offsetof(struct module, init_layout);
 	info->mod_kallsyms_offset = offsetof(struct module, kallsyms);
-
+#if defined(CONFIG_RANDOMIZE_BASE) && defined(MODULES_VSIZE)
+	info->module_start_va = module_alloc_base;
+	info->module_end_va = info->module_start_va + MODULES_VSIZE;
+#elif defined(CONFIG_MODULES) && defined(MODULES_VADDR)
+	info->module_start_va = MODULES_VADDR;
+	info->module_end_va = MODULES_END;
+#else
+	info->module_start_va = VMALLOC_START;
+	info->module_end_va = VMALLOC_END;
+#endif
 	update_kernel_all_info(all_info);
 
 	return 0;
@@ -179,6 +192,12 @@ static struct platform_driver debug_kinfo_driver = {
 	},
 };
 module_platform_driver(debug_kinfo_driver);
+
+/*
+ * For type visibility
+ */
+const struct kernel_all_info *const ANDROID_GKI_struct_kernel_all_info;
+EXPORT_SYMBOL_GPL(ANDROID_GKI_struct_kernel_all_info);
 
 MODULE_AUTHOR("Jone Chou <jonechou@google.com>");
 MODULE_DESCRIPTION("Debug Kinfo Driver");

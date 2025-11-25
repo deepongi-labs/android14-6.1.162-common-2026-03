@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Xilinx SPI controller driver (host mode only)
+ * Xilinx SPI controller driver (master mode only)
  *
  * Author: MontaVista Software, Inc.
  *	source@mvista.com
@@ -83,14 +83,14 @@ struct xilinx_spi {
 	void __iomem	*regs;	/* virt. address of the control registers */
 
 	int		irq;
-	bool force_irq;		/* force irq to setup host inhibit */
+
 	u8 *rx_ptr;		/* pointer in the Tx buffer */
 	const u8 *tx_ptr;	/* pointer in the Rx buffer */
 	u8 bytes_per_word;
 	int buffer_size;	/* buffer size in words */
 	u32 cs_inactive;	/* Level of the CS pins when inactive*/
-	unsigned int (*read_fn)(void __iomem *addr);
-	void (*write_fn)(u32 val, void __iomem *addr);
+	unsigned int (*read_fn)(void __iomem *);
+	void (*write_fn)(u32, void __iomem *);
 };
 
 static void xspi_write32(u32 val, void __iomem *addr)
@@ -174,10 +174,10 @@ static void xspi_init_hw(struct xilinx_spi *xspi)
 			regs_base + XIPIF_V123B_IIER_OFFSET);
 	/* Disable the global IPIF interrupt */
 	xspi->write_fn(0, regs_base + XIPIF_V123B_DGIER_OFFSET);
-	/* Deselect the Target on the SPI bus */
+	/* Deselect the slave on the SPI bus */
 	xspi->write_fn(0xffff, regs_base + XSPI_SSR_OFFSET);
-	/* Disable the transmitter, enable Manual Target Select Assertion,
-	 * put SPI controller into host mode, and enable it */
+	/* Disable the transmitter, enable Manual Slave Select Assertion,
+	 * put SPI controller into master mode, and enable it */
 	xspi->write_fn(XSPI_CR_MANUAL_SSELECT |	XSPI_CR_MASTER_MODE |
 		XSPI_CR_ENABLE | XSPI_CR_TXFIFO_RESET |	XSPI_CR_RXFIFO_RESET,
 		regs_base + XSPI_CR_OFFSET);
@@ -185,12 +185,12 @@ static void xspi_init_hw(struct xilinx_spi *xspi)
 
 static void xilinx_spi_chipselect(struct spi_device *spi, int is_on)
 {
-	struct xilinx_spi *xspi = spi_controller_get_devdata(spi->controller);
+	struct xilinx_spi *xspi = spi_master_get_devdata(spi->master);
 	u16 cr;
 	u32 cs;
 
 	if (is_on == BITBANG_CS_INACTIVE) {
-		/* Deselect the target on the SPI bus */
+		/* Deselect the slave on the SPI bus */
 		xspi->write_fn(xspi->cs_inactive, xspi->regs + XSPI_SSR_OFFSET);
 		return;
 	}
@@ -213,7 +213,7 @@ static void xilinx_spi_chipselect(struct spi_device *spi, int is_on)
 	 */
 
 	cs = xspi->cs_inactive;
-	cs ^= BIT(spi_get_chipselect(spi, 0));
+	cs ^= BIT(spi->chip_select);
 
 	/* Activate the chip select */
 	xspi->write_fn(cs, xspi->regs + XSPI_SSR_OFFSET);
@@ -225,19 +225,19 @@ static void xilinx_spi_chipselect(struct spi_device *spi, int is_on)
 static int xilinx_spi_setup_transfer(struct spi_device *spi,
 		struct spi_transfer *t)
 {
-	struct xilinx_spi *xspi = spi_controller_get_devdata(spi->controller);
+	struct xilinx_spi *xspi = spi_master_get_devdata(spi->master);
 
 	if (spi->mode & SPI_CS_HIGH)
-		xspi->cs_inactive &= ~BIT(spi_get_chipselect(spi, 0));
+		xspi->cs_inactive &= ~BIT(spi->chip_select);
 	else
-		xspi->cs_inactive |= BIT(spi_get_chipselect(spi, 0));
+		xspi->cs_inactive |= BIT(spi->chip_select);
 
 	return 0;
 }
 
 static int xilinx_spi_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
 {
-	struct xilinx_spi *xspi = spi_controller_get_devdata(spi->controller);
+	struct xilinx_spi *xspi = spi_master_get_devdata(spi->master);
 	int remaining_words;	/* the number of words left to transfer */
 	bool use_irq = false;
 	u16 cr = 0;
@@ -248,10 +248,8 @@ static int xilinx_spi_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
 	xspi->rx_ptr = t->rx_buf;
 	remaining_words = t->len / xspi->bytes_per_word;
 
-	if (xspi->irq >= 0 &&
-	    (xspi->force_irq || remaining_words > xspi->buffer_size)) {
+	if (xspi->irq >= 0 &&  remaining_words > xspi->buffer_size) {
 		u32 isr;
-
 		use_irq = true;
 		/* Inhibit irq to avoid spurious irqs on tx_empty*/
 		cr = xspi->read_fn(xspi->regs + XSPI_CR_OFFSET);
@@ -300,7 +298,7 @@ static int xilinx_spi_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
 
 		/* Read out all the data from the Rx FIFO */
 		rx_words = n_words;
-		stalled = 32;
+		stalled = 10;
 		while (rx_words) {
 			if (rx_words == n_words && !(stalled--) &&
 			    !(sr & XSPI_SR_TX_EMPTY_MASK) &&
@@ -336,9 +334,9 @@ static int xilinx_spi_txrx_bufs(struct spi_device *spi, struct spi_transfer *t)
 }
 
 
-/* This driver supports single host mode only. Hence Tx FIFO Empty
+/* This driver supports single master mode only. Hence Tx FIFO Empty
  * is the only interrupt we care about.
- * Receive FIFO Overrun, Transmit FIFO Underrun, Mode Fault, and Target Mode
+ * Receive FIFO Overrun, Transmit FIFO Underrun, Mode Fault, and Slave Mode
  * Fault are not to happen.
  */
 static irqreturn_t xilinx_spi_irq(int irq, void *dev_id)
@@ -394,8 +392,7 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 	struct xspi_platform_data *pdata;
 	struct resource *res;
 	int ret, num_cs = 0, bits_per_word;
-	struct spi_controller *host;
-	bool force_irq = false;
+	struct spi_master *master;
 	u32 tmp;
 	u8 i;
 
@@ -403,7 +400,6 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 	if (pdata) {
 		num_cs = pdata->num_chipselect;
 		bits_per_word = pdata->bits_per_word;
-		force_irq = pdata->force_irq;
 	} else {
 		of_property_read_u32(pdev->dev.of_node, "xlnx,num-ss-bits",
 					  &num_cs);
@@ -416,38 +412,39 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 
 	if (!num_cs) {
 		dev_err(&pdev->dev,
-			"Missing target select configuration data\n");
+			"Missing slave select configuration data\n");
 		return -EINVAL;
 	}
 
 	if (num_cs > XILINX_SPI_MAX_CS) {
-		dev_err(&pdev->dev, "Invalid number of spi targets\n");
+		dev_err(&pdev->dev, "Invalid number of spi slaves\n");
 		return -EINVAL;
 	}
 
-	host = devm_spi_alloc_host(&pdev->dev, sizeof(struct xilinx_spi));
-	if (!host)
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(struct xilinx_spi));
+	if (!master)
 		return -ENODEV;
 
 	/* the spi->mode bits understood by this driver: */
-	host->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST | SPI_LOOP |
-			  SPI_CS_HIGH;
+	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST | SPI_LOOP |
+			    SPI_CS_HIGH;
 
-	xspi = spi_controller_get_devdata(host);
+	xspi = spi_master_get_devdata(master);
 	xspi->cs_inactive = 0xffffffff;
-	xspi->bitbang.ctlr = host;
+	xspi->bitbang.master = master;
 	xspi->bitbang.chipselect = xilinx_spi_chipselect;
 	xspi->bitbang.setup_transfer = xilinx_spi_setup_transfer;
 	xspi->bitbang.txrx_bufs = xilinx_spi_txrx_bufs;
 	init_completion(&xspi->done);
 
-	xspi->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	xspi->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(xspi->regs))
 		return PTR_ERR(xspi->regs);
 
-	host->bus_num = pdev->id;
-	host->num_chipselect = num_cs;
-	host->dev.of_node = pdev->dev.of_node;
+	master->bus_num = pdev->id;
+	master->num_chipselect = num_cs;
+	master->dev.of_node = pdev->dev.of_node;
 
 	/*
 	 * Detect endianess on the IP via loop bit in CR. Detection
@@ -467,7 +464,7 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 		xspi->write_fn = xspi_write32_be;
 	}
 
-	host->bits_per_word_mask = SPI_BPW_MASK(bits_per_word);
+	master->bits_per_word_mask = SPI_BPW_MASK(bits_per_word);
 	xspi->bytes_per_word = bits_per_word / 8;
 	xspi->buffer_size = xilinx_spi_find_buffer_size(xspi);
 
@@ -480,8 +477,6 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 				dev_name(&pdev->dev), xspi);
 		if (ret)
 			return ret;
-
-		xspi->force_irq = force_irq;
 	}
 
 	/* SPI controller initializations */
@@ -497,17 +492,17 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 
 	if (pdata) {
 		for (i = 0; i < pdata->num_devices; i++)
-			spi_new_device(host, pdata->devices + i);
+			spi_new_device(master, pdata->devices + i);
 	}
 
-	platform_set_drvdata(pdev, host);
+	platform_set_drvdata(pdev, master);
 	return 0;
 }
 
-static void xilinx_spi_remove(struct platform_device *pdev)
+static int xilinx_spi_remove(struct platform_device *pdev)
 {
-	struct spi_controller *host = platform_get_drvdata(pdev);
-	struct xilinx_spi *xspi = spi_controller_get_devdata(host);
+	struct spi_master *master = platform_get_drvdata(pdev);
+	struct xilinx_spi *xspi = spi_master_get_devdata(master);
 	void __iomem *regs_base = xspi->regs;
 
 	spi_bitbang_stop(&xspi->bitbang);
@@ -517,7 +512,9 @@ static void xilinx_spi_remove(struct platform_device *pdev)
 	/* Disable the global IPIF interrupt */
 	xspi->write_fn(0, regs_base + XIPIF_V123B_DGIER_OFFSET);
 
-	spi_controller_put(xspi->bitbang.ctlr);
+	spi_master_put(xspi->bitbang.master);
+
+	return 0;
 }
 
 /* work with hotplug and coldplug */

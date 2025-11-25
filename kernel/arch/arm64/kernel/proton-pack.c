@@ -91,7 +91,12 @@ early_param("nospectre_v2", parse_spectre_v2_param);
 
 static bool spectre_v2_mitigations_off(void)
 {
-	return __nospectre_v2 || cpu_mitigations_off();
+	bool ret = __nospectre_v2 || cpu_mitigations_off();
+
+	if (ret)
+		pr_info_once("spectre-v2 mitigation disabled by command line option\n");
+
+	return ret;
 }
 
 static const char *get_bhb_affected_string(enum mitigation_state bhb_state)
@@ -167,7 +172,7 @@ static enum mitigation_state spectre_v2_get_cpu_hw_mitigation_state(void)
 		return SPECTRE_UNAFFECTED;
 
 	/* Alternatively, we have a list of unaffected CPUs */
-	if (is_midr_in_range_list(spectre_v2_safe_list))
+	if (is_midr_in_range_list(read_cpuid_id(), spectre_v2_safe_list))
 		return SPECTRE_UNAFFECTED;
 
 	return SPECTRE_VULNERABLE;
@@ -326,7 +331,7 @@ bool has_spectre_v3a(const struct arm64_cpu_capabilities *entry, int scope)
 	};
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
-	return is_midr_in_range_list(spectre_v3a_unsafe_list);
+	return is_midr_in_range_list(read_cpuid_id(), spectre_v3a_unsafe_list);
 }
 
 void spectre_v3a_enable_mitigation(const struct arm64_cpu_capabilities *__unused)
@@ -416,8 +421,13 @@ early_param("ssbd", parse_spectre_v4_param);
  */
 static bool spectre_v4_mitigations_off(void)
 {
-	return cpu_mitigations_off() ||
-	       __spectre_v4_policy == SPECTRE_V4_POLICY_MITIGATION_DISABLED;
+	bool ret = cpu_mitigations_off() ||
+		   __spectre_v4_policy == SPECTRE_V4_POLICY_MITIGATION_DISABLED;
+
+	if (ret)
+		pr_info_once("spectre-v4 mitigation disabled by command-line option\n");
+
+	return ret;
 }
 
 /* Do we need to toggle the mitigation state on entry to/exit from the kernel? */
@@ -465,7 +475,7 @@ static enum mitigation_state spectre_v4_get_cpu_hw_mitigation_state(void)
 		{ /* sentinel */ },
 	};
 
-	if (is_midr_in_range_list(spectre_v4_safe_list))
+	if (is_midr_in_range_list(read_cpuid_id(), spectre_v4_safe_list))
 		return SPECTRE_UNAFFECTED;
 
 	/* CPU features are detected first */
@@ -511,13 +521,10 @@ bool has_spectre_v4(const struct arm64_cpu_capabilities *cap, int scope)
 	return state != SPECTRE_UNAFFECTED;
 }
 
-bool try_emulate_el1_ssbs(struct pt_regs *regs, u32 instr)
+static int ssbs_emulation_handler(struct pt_regs *regs, u32 instr)
 {
-	const u32 instr_mask = ~(1U << PSTATE_Imm_shift);
-	const u32 instr_val = 0xd500401f | PSTATE_SSBS;
-
-	if ((instr & instr_mask) != instr_val)
-		return false;
+	if (user_mode(regs))
+		return 1;
 
 	if (instr & BIT(PSTATE_Imm_shift))
 		regs->pstate |= PSR_SSBS_BIT;
@@ -525,11 +532,19 @@ bool try_emulate_el1_ssbs(struct pt_regs *regs, u32 instr)
 		regs->pstate &= ~PSR_SSBS_BIT;
 
 	arm64_skip_faulting_instruction(regs, 4);
-	return true;
+	return 0;
 }
+
+static struct undef_hook ssbs_emulation_hook = {
+	.instr_mask	= ~(1U << PSTATE_Imm_shift),
+	.instr_val	= 0xd500401f | PSTATE_SSBS,
+	.fn		= ssbs_emulation_handler,
+};
 
 static enum mitigation_state spectre_v4_enable_hw_mitigation(void)
 {
+	static bool undef_hook_registered = false;
+	static DEFINE_RAW_SPINLOCK(hook_lock);
 	enum mitigation_state state;
 
 	/*
@@ -539,6 +554,13 @@ static enum mitigation_state spectre_v4_enable_hw_mitigation(void)
 	state = spectre_v4_get_cpu_hw_mitigation_state();
 	if (state != SPECTRE_MITIGATED || !this_cpu_has_cap(ARM64_SSBS))
 		return state;
+
+	raw_spin_lock(&hook_lock);
+	if (!undef_hook_registered) {
+		register_undef_hook(&ssbs_emulation_hook);
+		undef_hook_registered = true;
+	}
+	raw_spin_unlock(&hook_lock);
 
 	if (spectre_v4_mitigations_off()) {
 		sysreg_clear_set(sctlr_el1, 0, SCTLR_ELx_DSSBS);
@@ -854,7 +876,7 @@ static bool is_spectre_bhb_safe(int scope)
 	if (scope != SCOPE_LOCAL_CPU)
 		return all_safe;
 
-	if (is_midr_in_range_list(spectre_bhb_safe_list))
+	if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_safe_list))
 		return true;
 
 	all_safe = false;
@@ -874,7 +896,6 @@ static u8 spectre_bhb_loop_affected(void)
 	static const struct midr_range spectre_bhb_k38_list[] = {
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A715),
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A720),
-		MIDR_ALL_VERSIONS(MIDR_CORTEX_A720AE),
 		{},
 	};
 	static const struct midr_range spectre_bhb_k32_list[] = {
@@ -908,17 +929,17 @@ static u8 spectre_bhb_loop_affected(void)
 		{},
 	};
 
-	if (is_midr_in_range_list(spectre_bhb_k132_list))
+	if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k132_list))
 		k = 132;
-	else if (is_midr_in_range_list(spectre_bhb_k38_list))
+	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k38_list))
 		k = 38;
-	else if (is_midr_in_range_list(spectre_bhb_k32_list))
+	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k32_list))
 		k = 32;
-	else if (is_midr_in_range_list(spectre_bhb_k24_list))
+	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k24_list))
 		k = 24;
-	else if (is_midr_in_range_list(spectre_bhb_k11_list))
+	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k11_list))
 		k = 11;
-	else if (is_midr_in_range_list(spectre_bhb_k8_list))
+	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k8_list))
 		k =  8;
 
 	return k;
@@ -1000,13 +1021,16 @@ static void this_cpu_set_vectors(enum arm64_bp_harden_el1_vectors slot)
 {
 	const char *v = arm64_get_bp_hardening_vector(slot);
 
+	if (slot < 0)
+		return;
+
 	__this_cpu_write(this_cpu_vector, v);
 
 	/*
 	 * When KPTI is in use, the vectors are switched when exiting to
 	 * user-space.
 	 */
-	if (cpus_have_cap(ARM64_UNMAP_KERNEL_AT_EL0))
+	if (arm64_kernel_unmapped_at_el0())
 		return;
 
 	write_sysreg(v, vbar_el1);
@@ -1032,6 +1056,10 @@ void spectre_bhb_enable_mitigation(const struct arm64_cpu_capabilities *entry)
 
 	if (arm64_get_spectre_v2_state() == SPECTRE_VULNERABLE) {
 		/* No point mitigating Spectre-BHB alone. */
+	} else if (!IS_ENABLED(CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY)) {
+		pr_info_once("spectre-bhb mitigation disabled by compile time option\n");
+	} else if (cpu_mitigations_off() || __nospectre_bhb) {
+		pr_info_once("spectre-bhb mitigation disabled by command line option\n");
 	} else if (supports_ecbhb(SCOPE_LOCAL_CPU)) {
 		state = SPECTRE_MITIGATED;
 		set_bit(BHB_HW, &system_bhb_mitigations);
@@ -1185,18 +1213,3 @@ void unpriv_ebpf_notify(int new_state)
 		pr_err("WARNING: %s", EBPF_WARN);
 }
 #endif
-
-void spectre_print_disabled_mitigations(void)
-{
-	/* Keep a single copy of the common message suffix to avoid duplication. */
-	const char *spectre_disabled_suffix = "mitigation disabled by command-line option\n";
-
-	if (spectre_v2_mitigations_off())
-		pr_info("spectre-v2 %s", spectre_disabled_suffix);
-
-	if (spectre_v4_mitigations_off())
-		pr_info("spectre-v4 %s", spectre_disabled_suffix);
-
-	if (__nospectre_bhb || cpu_mitigations_off())
-		pr_info("spectre-bhb %s", spectre_disabled_suffix);
-}

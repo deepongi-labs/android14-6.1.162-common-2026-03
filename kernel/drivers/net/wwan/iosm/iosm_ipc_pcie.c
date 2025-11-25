@@ -69,7 +69,7 @@ static int ipc_pcie_resources_request(struct iosm_pcie *ipc_pcie)
 {
 	struct pci_dev *pci = ipc_pcie->pci;
 	u32 cap = 0;
-	int ret;
+	u32 ret;
 
 	/* Reserved PCI I/O and memory resources.
 	 * Mark all PCI regions associated with PCI device pci as

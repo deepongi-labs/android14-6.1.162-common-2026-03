@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/usb/dwc2.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: DesignWare HS OTG USB 2.0 controller
+title: DesignWare HS OTG USB 2.0 controller Bindings
 
 maintainers:
   - Rob Herring <robh@kernel.org>
@@ -43,23 +43,18 @@ properties:
           - const: rockchip,rk3066-usb
           - const: snps,dwc2
       - const: lantiq,arx100-usb
-      - const: lantiq,ase-usb
-      - const: lantiq,danube-usb
       - const: lantiq,xrx200-usb
-      - const: lantiq,xrx300-usb
       - items:
           - enum:
               - amlogic,meson8-usb
               - amlogic,meson8b-usb
               - amlogic,meson-gxbb-usb
               - amlogic,meson-g12a-usb
-              - amlogic,meson-a1-usb
               - intel,socfpga-agilex-hsotg
           - const: snps,dwc2
       - const: amcc,dwc-otg
       - const: apm,apm82181-dwc-otg
       - const: snps,dwc2
-      - const: sophgo,cv1800b-usb
       - const: st,stm32f4x9-fsotg
       - const: st,stm32f4x9-hsotg
       - const: st,stm32f7-hsotg
@@ -77,14 +72,11 @@ properties:
     maxItems: 1
 
   clocks:
-    minItems: 1
-    maxItems: 2
+    maxItems: 1
 
   clock-names:
     items:
       - const: otg
-      - const: utmi
-    minItems: 1
 
   disable-over-current:
     type: boolean
@@ -173,10 +165,6 @@ properties:
 
   tpl-support: true
 
-  access-controllers:
-    minItems: 1
-    maxItems: 2
-
 dependencies:
   port: [ usb-role-switch ]
   role-switch-default-mode: [ usb-role-switch ]
@@ -188,11 +176,11 @@ required:
   - clocks
   - clock-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
-    usb@101c0000 {
+      usb@101c0000 {
         compatible = "rockchip,rk3066-usb", "snps,dwc2";
         reg = <0x10180000 0x40000>;
         interrupts = <18>;
@@ -200,6 +188,6 @@ examples:
         clock-names = "otg";
         phys = <&usbphy>;
         phy-names = "usb2-phy";
-    };
+      };
 
 ...

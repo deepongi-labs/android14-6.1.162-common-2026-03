@@ -26,6 +26,10 @@
 #include <linux/shmem_fs.h>
 #include "ashmem.h"
 
+#define ASHMEM_NAME_PREFIX "dev/ashmem/"
+#define ASHMEM_NAME_PREFIX_LEN (sizeof(ASHMEM_NAME_PREFIX) - 1)
+#define ASHMEM_FULL_NAME_LEN (ASHMEM_NAME_LEN + ASHMEM_NAME_PREFIX_LEN)
+
 /**
  * struct ashmem_area - The anonymous shared memory area
  * @name:		The optional name in /proc/pid/maps
@@ -99,6 +103,20 @@ static struct kmem_cache *ashmem_range_cachep __read_mostly;
  * syscalls operating on the backing shmem.
  */
 static struct lock_class_key backing_shmem_inode_class;
+
+/* Enable unpinning feature by default to retain compatibility with existing behavior. */
+static bool unpinning_enable = true;
+
+/*
+ * memfd does not allow removing permissions to map a buffer with PROT_READ or PROT_EXEC. These
+ * variables are exposed as tunables so that they can be used to make ashmem behave more like memfd
+ * for test purposes.
+ *
+ * They are set to false by default to retain compatibility with the original behavior of the
+ * driver.
+ */
+static bool ignore_unset_prot_read;
+static bool ignore_unset_prot_exec;
 
 static inline unsigned long range_size(struct ashmem_range *range)
 {
@@ -368,7 +386,7 @@ ashmem_vmfile_get_unmapped_area(struct file *file, unsigned long addr,
 				unsigned long len, unsigned long pgoff,
 				unsigned long flags)
 {
-	return mm_get_unmapped_area(current->mm, file, addr, len, pgoff, flags);
+	return current->mm->get_unmapped_area(file, addr, len, pgoff, flags);
 }
 
 static int ashmem_mmap(struct file *file, struct vm_area_struct *vma)
@@ -475,6 +493,9 @@ ashmem_shrink_scan(struct shrinker *shrink, struct shrink_control *sc)
 {
 	unsigned long freed = 0;
 
+	if (!unpinning_enable)
+		return 0;
+
 	/* We might recurse into filesystem code, so bail out if necessary */
 	if (!(sc->gfp_mask & __GFP_FS))
 		return SHRINK_STOP;
@@ -520,35 +541,32 @@ ashmem_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 	 * objects on the list. This means the scan function needs to return the
 	 * number of pages freed, not the number of objects scanned.
 	 */
-	return lru_count;
+	return unpinning_enable ? lru_count : SHRINK_EMPTY;
 }
 
-static struct shrinker *ashmem_shrinker;
-
-static int __init ashmem_init_shrinker(void)
-{
-	ashmem_shrinker = shrinker_alloc(0, "android-ashmem");
-	if (!ashmem_shrinker)
-		return -ENOMEM;
-
-	ashmem_shrinker->count_objects = ashmem_shrink_count;
-	ashmem_shrinker->scan_objects = ashmem_shrink_scan;
+static struct shrinker ashmem_shrinker = {
+	.count_objects = ashmem_shrink_count,
+	.scan_objects = ashmem_shrink_scan,
 	/*
 	 * XXX (dchinner): I wish people would comment on why they need on
 	 * significant changes to the default value here
 	 */
-	ashmem_shrinker->seeks = DEFAULT_SEEKS * 4;
-
-	shrinker_register(ashmem_shrinker);
-
-	return 0;
-}
+	.seeks = DEFAULT_SEEKS * 4,
+};
 
 static int set_prot_mask(struct ashmem_area *asma, unsigned long prot)
 {
 	int ret = 0;
 
 	mutex_lock(&ashmem_mutex);
+
+	/* Ensure the buffer can only be mapped with PROT_READ iff it has that permission. */
+	if (ignore_unset_prot_read)
+		prot |= asma->prot_mask & PROT_READ;
+
+	/* Ensure the buffer can only be mapped with PROT_EXEC iff it has that permission. */
+	if (ignore_unset_prot_exec)
+		prot |= asma->prot_mask & PROT_EXEC;
 
 	/* the user can only remove, not add, protection bits */
 	if ((asma->prot_mask & prot) != prot) {
@@ -809,7 +827,7 @@ static int ashmem_pin_unpin(struct ashmem_area *asma, unsigned long cmd,
 		ret = ashmem_pin(asma, pgstart, pgend, &range);
 		break;
 	case ASHMEM_UNPIN:
-		ret = ashmem_unpin(asma, pgstart, pgend, &range);
+		ret = unpinning_enable ? ashmem_unpin(asma, pgstart, pgend, &range) : 0;
 		break;
 	case ASHMEM_GET_PIN_STATUS:
 		ret = ashmem_get_pin_status(asma, pgstart, pgend);
@@ -867,8 +885,8 @@ static long ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				.gfp_mask = GFP_KERNEL,
 				.nr_to_scan = LONG_MAX,
 			};
-			ret = ashmem_shrink_count(ashmem_shrinker, &sc);
-			ashmem_shrink_scan(ashmem_shrinker, &sc);
+			ret = ashmem_shrink_count(&ashmem_shrinker, &sc);
+			ashmem_shrink_scan(&ashmem_shrinker, &sc);
 		}
 		break;
 	case ASHMEM_GET_FILE_ID:
@@ -928,6 +946,52 @@ static void ashmem_show_fdinfo(struct seq_file *m, struct file *file)
 	mutex_unlock(&ashmem_mutex);
 }
 #endif
+
+static int unpinning_enable_open(struct inode *inode, struct file *file)
+{
+	file->private_data = &unpinning_enable;
+	return 0;
+}
+
+static int ignore_unset_prot_read_open(struct inode *inode, struct file *file)
+{
+	file->private_data = &ignore_unset_prot_read;
+	return 0;
+}
+
+static int ignore_unset_prot_exec_open(struct inode *inode, struct file *file)
+{
+	file->private_data = &ignore_unset_prot_exec;
+	return 0;
+}
+
+static ssize_t attr_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+{
+	bool *attrp = file->private_data;
+	char val_str[2];
+
+	val_str[0] = *attrp ? '1' : '0';
+	val_str[1] = '\n';
+	return simple_read_from_buffer(buf, count, ppos, val_str, sizeof(val_str));
+}
+
+static ssize_t attr_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+{
+	bool *attrp = file->private_data;
+	bool enable;
+	ssize_t ret = count;
+
+	if (!kstrtobool_from_user(buf, count, &enable)) {
+		mutex_lock(&ashmem_mutex);
+		*attrp = enable;
+		mutex_unlock(&ashmem_mutex);
+	} else {
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
 static const struct file_operations ashmem_fops = {
 	.owner = THIS_MODULE,
 	.open = ashmem_open,
@@ -944,15 +1008,63 @@ static const struct file_operations ashmem_fops = {
 #endif
 };
 
-static struct miscdevice ashmem_misc = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = "ashmem",
-	.fops = &ashmem_fops,
+/*
+ * is_ashmem_file - Check if struct file* is associated with ashmem
+ */
+int is_ashmem_file(struct file *file)
+{
+	return file->f_op == &ashmem_fops;
+}
+EXPORT_SYMBOL_GPL(is_ashmem_file);
+
+static const struct file_operations unpinning_enable_fops = {
+	.owner = THIS_MODULE,
+	.open = unpinning_enable_open,
+	.read = attr_read,
+	.write = attr_write,
+};
+
+static const struct file_operations ignore_unset_prot_read_fops = {
+	.owner = THIS_MODULE,
+	.open = ignore_unset_prot_read_open,
+	.read = attr_read,
+	.write = attr_write,
+};
+
+static const struct file_operations ignore_unset_prot_exec_fops = {
+	.owner = THIS_MODULE,
+	.open = ignore_unset_prot_exec_open,
+	.read= attr_read,
+	.write = attr_write,
+};
+
+static struct miscdevice ashmem_miscs[] = {
+	{
+		.minor = MISC_DYNAMIC_MINOR,
+		.name = "ashmem",
+		.fops = &ashmem_fops,
+	},
+	{
+		.minor = MISC_DYNAMIC_MINOR,
+		.name = "ashmem_unpinning_enable",
+		.fops = &unpinning_enable_fops,
+	},
+	{
+		.minor = MISC_DYNAMIC_MINOR,
+		.name = "ashmem_ignore_unset_prot_read",
+		.fops = &ignore_unset_prot_read_fops,
+	},
+	{
+		.minor = MISC_DYNAMIC_MINOR,
+		.name = "ashmem_ignore_unset_prot_exec",
+		.fops = &ignore_unset_prot_exec_fops,
+	},
 };
 
 static int __init ashmem_init(void)
 {
 	int ret = -ENOMEM;
+	int i;
 
 	ashmem_area_cachep = kmem_cache_create("ashmem_area_cache",
 					       sizeof(struct ashmem_area),
@@ -970,13 +1082,15 @@ static int __init ashmem_init(void)
 		goto out_free1;
 	}
 
-	ret = misc_register(&ashmem_misc);
-	if (ret) {
-		pr_err("failed to register misc device!\n");
-		goto out_free2;
+	for (i = 0; i < ARRAY_SIZE(ashmem_miscs); i++) {
+		ret = misc_register(&ashmem_miscs[i]);
+		if (ret) {
+			pr_err("failed to register %s misc device!\n", ashmem_miscs[i].name);
+			goto out_demisc;
+		}
 	}
 
-	ret = ashmem_init_shrinker();
+	ret = register_shrinker(&ashmem_shrinker, "android-ashmem");
 	if (ret) {
 		pr_err("failed to register shrinker!\n");
 		goto out_demisc;
@@ -987,8 +1101,8 @@ static int __init ashmem_init(void)
 	return 0;
 
 out_demisc:
-	misc_deregister(&ashmem_misc);
-out_free2:
+	while (--i >= 0)
+		misc_deregister(&ashmem_miscs[i]);
 	kmem_cache_destroy(ashmem_range_cachep);
 out_free1:
 	kmem_cache_destroy(ashmem_area_cachep);

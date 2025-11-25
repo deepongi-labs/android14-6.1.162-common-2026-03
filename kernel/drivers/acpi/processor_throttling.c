@@ -18,12 +18,9 @@
 #include <linux/sched.h>
 #include <linux/cpufreq.h>
 #include <linux/acpi.h>
-#include <linux/uaccess.h>
 #include <acpi/processor.h>
 #include <asm/io.h>
-#ifdef CONFIG_X86
-#include <asm/msr.h>
-#endif
+#include <linux/uaccess.h>
 
 /* ignore_tpc:
  *  0 -> acpi processor driver doesn't ignore _TPC values
@@ -53,7 +50,7 @@ static int __acpi_processor_set_throttling(struct acpi_processor *pr,
 
 static int acpi_processor_update_tsd_coord(void)
 {
-	int count_target;
+	int count, count_target;
 	int retval = 0;
 	unsigned int i, j;
 	cpumask_var_t covered_cpus;
@@ -110,6 +107,7 @@ static int acpi_processor_update_tsd_coord(void)
 
 		/* Validate the Domain info */
 		count_target = pdomain->num_processors;
+		count = 1;
 
 		for_each_possible_cpu(j) {
 			if (i == j)
@@ -142,6 +140,7 @@ static int acpi_processor_update_tsd_coord(void)
 
 			cpumask_set_cpu(j, covered_cpus);
 			cpumask_set_cpu(j, pthrottling->shared_cpu_map);
+			count++;
 		}
 		for_each_possible_cpu(j) {
 			if (i == j)
@@ -235,7 +234,7 @@ static int acpi_processor_throttling_notifier(unsigned long event, void *data)
 		if (pr->throttling_platform_limit > target_state)
 			target_state = pr->throttling_platform_limit;
 		if (target_state >= p_throttling->state_count) {
-			pr_warn("Exceed the limit of T-state\n");
+			pr_warn("Exceed the limit of T-state \n");
 			target_state = p_throttling->state_count - 1;
 		}
 		p_tstate->target_state = target_state;

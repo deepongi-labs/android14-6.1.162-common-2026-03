@@ -10,10 +10,8 @@
 
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
-#include <linux/filelock.h>
 #include <linux/nfs4.h>
 #include <linux/percpu_counter.h>
-#include <linux/percpu-refcount.h>
 #include <linux/siphash.h>
 #include <linux/sunrpc/stats.h>
 
@@ -128,16 +126,24 @@ struct nfsd_net {
 	seqlock_t writeverf_lock;
 	unsigned char writeverf[8];
 
+	/*
+	 * Max number of connections this nfsd container will allow. Defaults
+	 * to '0' which is means that it bases this on the number of threads.
+	 */
+	unsigned int max_connections;
+
 	u32 clientid_base;
 	u32 clientid_counter;
 	u32 clverifier_counter;
 
-	struct svc_info nfsd_info;
-#define nfsd_serv nfsd_info.serv
-
-	struct percpu_ref nfsd_net_ref;
-	struct completion nfsd_net_confirm_done;
-	struct completion nfsd_net_free_done;
+	struct svc_serv *nfsd_serv;
+	/* When a listening socket is added to nfsd, keep_active is set
+	 * and this justifies a reference on nfsd_serv.  This stops
+	 * nfsd_serv from being freed.  When the number of threads is
+	 * set, keep_active is cleared and the reference is dropped.  So
+	 * when the last thread exits, the service will be destroyed.
+	 */
+	int keep_active;
 
 	/*
 	 * clientid and stateid data for construction of net unique COPY
@@ -151,8 +157,8 @@ struct nfsd_net {
 	/*
 	 * Version information
 	 */
-	bool nfsd_versions[NFSD_MAXVERS + 1];
-	bool nfsd4_minorversions[NFSD_SUPPORTED_MINOR_VERSION + 1];
+	bool *nfsd_versions;
+	bool *nfsd4_minorversions;
 
 	/*
 	 * Duplicate reply cache
@@ -188,7 +194,7 @@ struct nfsd_net {
 	/* size of cache when we saw the longest hash chain */
 	unsigned int             longest_chain_cachesize;
 
-	struct shrinker		*nfsd_reply_cache_shrinker;
+	struct shrinker		nfsd_reply_cache_shrinker;
 
 	/* tracking server-to-server copy mounts */
 	spinlock_t              nfsd_ssc_lock;
@@ -206,27 +212,16 @@ struct nfsd_net {
 	int			nfs4_max_clients;
 
 	atomic_t		nfsd_courtesy_clients;
-	struct shrinker		*nfsd_client_shrinker;
+	struct shrinker		nfsd_client_shrinker;
 	struct work_struct	nfsd_shrinker_work;
-
-	/* last time an admin-revoke happened for NFSv4.0 */
-	time64_t		nfs40_last_revoke;
-
-#if IS_ENABLED(CONFIG_NFS_LOCALIO)
-	/* Local clients to be invalidated when net is shut down */
-	spinlock_t              local_clients_lock;
-	struct list_head	local_clients;
-#endif
 };
 
 /* Simple check to find out if a given net was properly initialized */
 #define nfsd_netns_ready(nn) ((nn)->sessionid_hashtbl)
 
-extern bool nfsd_support_version(int vers);
-extern unsigned int nfsd_net_id;
+extern void nfsd_netns_free_versions(struct nfsd_net *nn);
 
-bool nfsd_net_try_get(struct net *net);
-void nfsd_net_put(struct net *net);
+extern unsigned int nfsd_net_id;
 
 void nfsd_copy_write_verifier(__be32 verf[2], struct nfsd_net *nn);
 void nfsd_reset_write_verifier(struct nfsd_net *nn);

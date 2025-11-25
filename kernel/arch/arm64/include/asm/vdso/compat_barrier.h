@@ -7,10 +7,11 @@
 
 #ifndef __ASSEMBLY__
 /*
- * Warning: This code is meant to be used from the compat vDSO only.
+ * Warning: This code is meant to be used with
+ * ENABLE_COMPAT_VDSO only.
  */
-#ifdef __arch64__
-#error This header is meant to be used with from the compat vDSO only
+#ifndef ENABLE_COMPAT_VDSO
+#error This header is meant to be used with ENABLE_COMPAT_VDSO only
 #endif
 
 #ifdef dmb

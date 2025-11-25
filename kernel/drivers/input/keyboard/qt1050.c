@@ -208,12 +208,12 @@ static const struct regmap_access_table qt1050_writeable_table = {
 	.n_yes_ranges = ARRAY_SIZE(qt1050_writeable_ranges),
 };
 
-static const struct regmap_config qt1050_regmap_config = {
+static struct regmap_config qt1050_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = QT1050_RES_CAL,
 
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 
 	.wr_table = &qt1050_writeable_table,
 	.rd_table = &qt1050_readable_table,
@@ -346,34 +346,35 @@ static int qt1050_apply_fw_data(struct qt1050_priv *ts)
 static int qt1050_parse_fw(struct qt1050_priv *ts)
 {
 	struct device *dev = &ts->client->dev;
+	struct fwnode_handle *child;
 	int nbuttons;
 
 	nbuttons = device_get_child_node_count(dev);
 	if (nbuttons == 0 || nbuttons > QT1050_MAX_KEYS)
 		return -ENODEV;
 
-	device_for_each_child_node_scoped(dev, child) {
+	device_for_each_child_node(dev, child) {
 		struct qt1050_key button;
 
 		/* Required properties */
 		if (fwnode_property_read_u32(child, "linux,code",
 					     &button.keycode)) {
 			dev_err(dev, "Button without keycode\n");
-			return -EINVAL;
+			goto err;
 		}
 		if (button.keycode >= KEY_MAX) {
 			dev_err(dev, "Invalid keycode 0x%x\n",
 				button.keycode);
-			return -EINVAL;
+			goto err;
 		}
 
 		if (fwnode_property_read_u32(child, "reg",
 					     &button.num)) {
 			dev_err(dev, "Button without pad number\n");
-			return -EINVAL;
+			goto err;
 		}
 		if (button.num < 0 || button.num > QT1050_MAX_KEYS - 1)
-			return -EINVAL;
+			goto err;
 
 		ts->reg_keys |= BIT(button.num);
 
@@ -423,6 +424,10 @@ static int qt1050_parse_fw(struct qt1050_priv *ts)
 	}
 
 	return 0;
+
+err:
+	fwnode_handle_put(child);
+	return -EINVAL;
 }
 
 static int qt1050_probe(struct i2c_client *client)
@@ -547,7 +552,7 @@ static int qt1050_probe(struct i2c_client *client)
 	return 0;
 }
 
-static int qt1050_suspend(struct device *dev)
+static int __maybe_unused qt1050_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct qt1050_priv *ts = i2c_get_clientdata(client);
@@ -563,7 +568,7 @@ static int qt1050_suspend(struct device *dev)
 			    device_may_wakeup(dev) ? 125 : 0);
 }
 
-static int qt1050_resume(struct device *dev)
+static int __maybe_unused qt1050_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct qt1050_priv *ts = i2c_get_clientdata(client);
@@ -574,7 +579,7 @@ static int qt1050_resume(struct device *dev)
 	return regmap_write(ts->regmap, QT1050_LPMODE, 2);
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(qt1050_pm_ops, qt1050_suspend, qt1050_resume);
+static SIMPLE_DEV_PM_OPS(qt1050_pm_ops, qt1050_suspend, qt1050_resume);
 
 static const struct of_device_id __maybe_unused qt1050_of_match[] = {
 	{ .compatible = "microchip,qt1050", },
@@ -586,9 +591,9 @@ static struct i2c_driver qt1050_driver = {
 	.driver	= {
 		.name = "qt1050",
 		.of_match_table = of_match_ptr(qt1050_of_match),
-		.pm = pm_sleep_ptr(&qt1050_pm_ops),
+		.pm = &qt1050_pm_ops,
 	},
-	.probe = qt1050_probe,
+	.probe_new = qt1050_probe,
 };
 
 module_i2c_driver(qt1050_driver);

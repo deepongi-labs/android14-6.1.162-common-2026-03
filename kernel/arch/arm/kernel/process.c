@@ -78,6 +78,7 @@ void arch_cpu_idle(void)
 		arm_pm_idle();
 	else
 		cpu_do_idle();
+	raw_local_irq_enable();
 }
 
 void arch_cpu_idle_prepare(void)
@@ -222,6 +223,7 @@ void flush_thread(void)
 
 	flush_ptrace_hw_breakpoint(tsk);
 
+	memset(thread->used_cp, 0, sizeof(thread->used_cp));
 	memset(&tsk->thread.debug, 0, sizeof(struct debug_info));
 	memset(&thread->fpstate, 0, sizeof(union fp_state));
 
@@ -234,7 +236,7 @@ asmlinkage void ret_from_fork(void) __asm__("ret_from_fork");
 
 int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 {
-	u64 clone_flags = args->flags;
+	unsigned long clone_flags = args->flags;
 	unsigned long stack_start = args->stack;
 	unsigned long tls = args->tls;
 	struct thread_info *thread = task_thread_info(p);
@@ -369,7 +371,7 @@ static unsigned long sigpage_addr(const struct mm_struct *mm,
 
 	slots = ((last - first) >> PAGE_SHIFT) + 1;
 
-	offset = get_random_u32_below(slots);
+	offset = prandom_u32_max(slots);
 
 	addr = first + (offset << PAGE_SHIFT);
 

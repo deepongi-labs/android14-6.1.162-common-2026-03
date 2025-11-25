@@ -16,9 +16,6 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
-#include <linux/of_fdt.h>
-#include <linux/libfdt.h>
-#include <linux/memblock.h>
 #include <asm/hvcall.h>
 #include <asm/machdep.h>
 #include <asm/plpks.h>
@@ -85,12 +82,6 @@ static int pseries_status_to_err(int rc)
 		err = -ENOENT;
 		break;
 	case H_BUSY:
-	case H_LONG_BUSY_ORDER_1_MSEC:
-	case H_LONG_BUSY_ORDER_10_MSEC:
-	case H_LONG_BUSY_ORDER_100_MSEC:
-	case H_LONG_BUSY_ORDER_1_SEC:
-	case H_LONG_BUSY_ORDER_10_SEC:
-	case H_LONG_BUSY_ORDER_100_SEC:
 		err = -EBUSY;
 		break;
 	case H_AUTHORITY:
@@ -121,8 +112,6 @@ static int pseries_status_to_err(int rc)
 		err = -EINVAL;
 	}
 
-	pr_debug("Converted hypervisor code %d to Linux %d\n", rc, err);
-
 	return err;
 }
 
@@ -131,12 +120,6 @@ static int plpks_gen_password(void)
 	unsigned long retbuf[PLPAR_HCALL_BUFSIZE] = { 0 };
 	u8 *password, consumer = PLPKS_OS_OWNER;
 	int rc;
-
-	// If we booted from kexec, we could be reusing an existing password already
-	if (ospassword) {
-		pr_debug("Password of length %u already in use\n", ospasswordlength);
-		return 0;
-	}
 
 	// The password must not cross a page boundary, so we align to the next power of 2
 	password = kzalloc(roundup_pow_of_two(maxpwsize), GFP_KERNEL);
@@ -150,20 +133,20 @@ static int plpks_gen_password(void)
 		ospasswordlength = maxpwsize;
 		ospassword = kzalloc(maxpwsize, GFP_KERNEL);
 		if (!ospassword) {
-			kfree_sensitive(password);
+			kfree(password);
 			return -ENOMEM;
 		}
 		memcpy(ospassword, password, ospasswordlength);
 	} else {
 		if (rc == H_IN_USE) {
-			pr_warn("Password already set - authenticated operations will fail\n");
+			pr_warn("Password is already set for POWER LPAR Platform KeyStore\n");
 			rc = 0;
 		} else {
 			goto out;
 		}
 	}
 out:
-	kfree_sensitive(password);
+	kfree(password);
 
 	return pseries_status_to_err(rc);
 }
@@ -194,7 +177,7 @@ static struct plpks_auth *construct_auth(u8 consumer)
 	return auth;
 }
 
-/*
+/**
  * Label is combination of label attributes + name.
  * Label attributes are used internally by kernel and not exposed to the user.
  */
@@ -202,17 +185,14 @@ static struct label *construct_label(char *component, u8 varos, u8 *name,
 				     u16 namelen)
 {
 	struct label *label;
-	size_t slen = 0;
+	size_t slen;
 
 	if (!name || namelen > PLPKS_MAX_NAME_SIZE)
 		return ERR_PTR(-EINVAL);
 
-	// Support NULL component for signed updates
-	if (component) {
-		slen = strlen(component);
-		if (slen > sizeof(label->attr.prefix))
-			return ERR_PTR(-EINVAL);
-	}
+	slen = strlen(component);
+	if (component && slen > sizeof(label->attr.prefix))
+		return ERR_PTR(-EINVAL);
 
 	// The label structure must not cross a page boundary, so we align to the next power of 2
 	label = kzalloc(roundup_pow_of_two(sizeof(*label)), GFP_KERNEL);
@@ -378,7 +358,7 @@ bool plpks_is_available(void)
 {
 	int rc;
 
-	if (!firmware_has_feature(FW_FEATURE_PLPKS))
+	if (!firmware_has_feature(FW_FEATURE_LPAR))
 		return false;
 
 	rc = _plpks_get_config();
@@ -392,7 +372,6 @@ static int plpks_confirm_object_flushed(struct label *label,
 					struct plpks_auth *auth)
 {
 	unsigned long retbuf[PLPAR_HCALL_BUFSIZE] = { 0 };
-	bool timed_out = true;
 	u64 timeout = 0;
 	u8 status;
 	int rc;
@@ -404,79 +383,19 @@ static int plpks_confirm_object_flushed(struct label *label,
 
 		status = retbuf[0];
 		if (rc) {
-			timed_out = false;
 			if (rc == H_NOT_FOUND && status == 1)
 				rc = 0;
 			break;
 		}
 
-		if (!rc && status == 1) {
-			timed_out = false;
+		if (!rc && status == 1)
 			break;
-		}
 
 		fsleep(PLPKS_FLUSH_SLEEP);
 		timeout = timeout + PLPKS_FLUSH_SLEEP;
 	} while (timeout < PLPKS_MAX_TIMEOUT);
 
-	if (timed_out)
-		return -ETIMEDOUT;
-
-	return pseries_status_to_err(rc);
-}
-
-int plpks_signed_update_var(struct plpks_var *var, u64 flags)
-{
-	unsigned long retbuf[PLPAR_HCALL9_BUFSIZE] = {0};
-	int rc;
-	struct label *label;
-	struct plpks_auth *auth;
-	u64 continuetoken = 0;
-	u64 timeout = 0;
-
-	if (!var->data || var->datalen <= 0 || var->namelen > PLPKS_MAX_NAME_SIZE)
-		return -EINVAL;
-
-	if (!(var->policy & PLPKS_SIGNEDUPDATE))
-		return -EINVAL;
-
-	// Signed updates need the component to be NULL.
-	if (var->component)
-		return -EINVAL;
-
-	auth = construct_auth(PLPKS_OS_OWNER);
-	if (IS_ERR(auth))
-		return PTR_ERR(auth);
-
-	label = construct_label(var->component, var->os, var->name, var->namelen);
-	if (IS_ERR(label)) {
-		rc = PTR_ERR(label);
-		goto out;
-	}
-
-	do {
-		rc = plpar_hcall9(H_PKS_SIGNED_UPDATE, retbuf,
-				  virt_to_phys(auth), virt_to_phys(label),
-				  label->size, var->policy, flags,
-				  virt_to_phys(var->data), var->datalen,
-				  continuetoken);
-
-		continuetoken = retbuf[0];
-		if (pseries_status_to_err(rc) == -EBUSY) {
-			int delay_us = get_longbusy_msecs(rc) * 1000;
-
-			fsleep(delay_us);
-			timeout += delay_us;
-		}
-		rc = pseries_status_to_err(rc);
-	} while (rc == -EBUSY && timeout < PLPKS_MAX_TIMEOUT);
-
-	if (!rc)
-		rc = plpks_confirm_object_flushed(label, auth);
-
-	kfree(label);
-out:
-	kfree(auth);
+	rc = pseries_status_to_err(rc);
 
 	return rc;
 }
@@ -512,6 +431,10 @@ int plpks_write_var(struct plpks_var var)
 	if (!rc)
 		rc = plpks_confirm_object_flushed(label, auth);
 
+	if (rc)
+		pr_err("Failed to write variable %s for component %s with error %d\n",
+		       var.name, var.component, rc);
+
 	rc = pseries_status_to_err(rc);
 	kfree(label);
 out:
@@ -527,7 +450,7 @@ int plpks_remove_var(char *component, u8 varos, struct plpks_var_name vname)
 	struct label *label;
 	int rc;
 
-	if (vname.namelen > PLPKS_MAX_NAME_SIZE)
+	if (!component || vname.namelen > PLPKS_MAX_NAME_SIZE)
 		return -EINVAL;
 
 	auth = construct_auth(PLPKS_OS_OWNER);
@@ -545,6 +468,10 @@ int plpks_remove_var(char *component, u8 varos, struct plpks_var_name vname)
 
 	if (!rc)
 		rc = plpks_confirm_object_flushed(label, auth);
+
+	if (rc)
+		pr_err("Failed to remove variable %s for component %s with error %d\n",
+		       vname.name, component, rc);
 
 	rc = pseries_status_to_err(rc);
 	kfree(label);
@@ -595,18 +522,23 @@ static int plpks_read_var(u8 consumer, struct plpks_var *var)
 
 
 	if (rc != H_SUCCESS) {
+		pr_err("Failed to read variable %s for component %s with error %d\n",
+		       var->name, var->component, rc);
 		rc = pseries_status_to_err(rc);
 		goto out_free_output;
 	}
 
-	if (!var->data || var->datalen > retbuf[0])
+	if (var->datalen == 0 || var->datalen > retbuf[0])
 		var->datalen = retbuf[0];
 
+	var->data = kzalloc(var->datalen, GFP_KERNEL);
+	if (!var->data) {
+		rc = -ENOMEM;
+		goto out_free_output;
+	}
 	var->policy = retbuf[1];
 
-	if (var->data)
-		memcpy(var->data, output, var->datalen);
-
+	memcpy(var->data, output, var->datalen);
 	rc = 0;
 
 out_free_output:
@@ -634,64 +566,9 @@ int plpks_read_bootloader_var(struct plpks_var *var)
 	return plpks_read_var(PLPKS_BOOTLOADER_OWNER, var);
 }
 
-int plpks_populate_fdt(void *fdt)
-{
-	int chosen_offset = fdt_path_offset(fdt, "/chosen");
-
-	if (chosen_offset < 0) {
-		pr_err("Can't find chosen node: %s\n",
-		       fdt_strerror(chosen_offset));
-		return chosen_offset;
-	}
-
-	return fdt_setprop(fdt, chosen_offset, "ibm,plpks-pw", ospassword, ospasswordlength);
-}
-
-// Once a password is registered with the hypervisor it cannot be cleared without
-// rebooting the LPAR, so to keep using the PLPKS across kexec boots we need to
-// recover the previous password from the FDT.
-//
-// There are a few challenges here.  We don't want the password to be visible to
-// users, so we need to clear it from the FDT.  This has to be done in early boot.
-// Clearing it from the FDT would make the FDT's checksum invalid, so we have to
-// manually cause the checksum to be recalculated.
-void __init plpks_early_init_devtree(void)
-{
-	void *fdt = initial_boot_params;
-	int chosen_node = fdt_path_offset(fdt, "/chosen");
-	const u8 *password;
-	int len;
-
-	if (chosen_node < 0)
-		return;
-
-	password = fdt_getprop(fdt, chosen_node, "ibm,plpks-pw", &len);
-	if (len <= 0) {
-		pr_debug("Couldn't find ibm,plpks-pw node.\n");
-		return;
-	}
-
-	ospassword = memblock_alloc_raw(len, SMP_CACHE_BYTES);
-	if (!ospassword) {
-		pr_err("Error allocating memory for password.\n");
-		goto out;
-	}
-
-	memcpy(ospassword, password, len);
-	ospasswordlength = (u16)len;
-
-out:
-	fdt_nop_property(fdt, chosen_node, "ibm,plpks-pw");
-	// Since we've cleared the password, we must update the FDT checksum
-	early_init_dt_verify(fdt, __pa(fdt));
-}
-
 static __init int pseries_plpks_init(void)
 {
 	int rc;
-
-	if (!firmware_has_feature(FW_FEATURE_PLPKS))
-		return -ENODEV;
 
 	rc = _plpks_get_config();
 

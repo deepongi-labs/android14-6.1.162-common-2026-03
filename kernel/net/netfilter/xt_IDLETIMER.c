@@ -210,7 +210,7 @@ static void idletimer_tg_work(struct work_struct *work)
 
 static void idletimer_tg_expired(struct timer_list *t)
 {
-	struct idletimer_tg *timer = timer_container_of(timer, t, timer);
+	struct idletimer_tg *timer = from_timer(timer, t, timer);
 
 	pr_debug("timer %s expired\n", timer->attr.attr.name);
 
@@ -257,7 +257,7 @@ static int idletimer_resume(struct notifier_block *notifier,
 				mod_timer_pending(&timer->timer,
 						  (timer->timer.expires - time_diff));
 			} else {
-				timer_delete(&timer->timer);
+				del_timer(&timer->timer);
 				timer->timer.expires = 0;
 				timer->active = false;
 				timer->work_pending = true;
@@ -272,12 +272,14 @@ static int idletimer_resume(struct notifier_block *notifier,
 	return NOTIFY_DONE;
 }
 
-static void idletimer_tg_alarmproc(struct alarm *alarm, ktime_t now)
+static enum alarmtimer_restart idletimer_tg_alarmproc(struct alarm *alarm,
+							  ktime_t now)
 {
 	struct idletimer_tg *timer = alarm->data;
 
 	pr_debug("alarm %s expired\n", timer->attr.attr.name);
 	schedule_work(&timer->work);
+	return ALARMTIMER_NORESTART;
 }
 
 static int idletimer_check_sysfs_name(const char *name, unsigned int size)
@@ -350,7 +352,7 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 
 	timer_setup(&info->timer->timer, idletimer_tg_expired, 0);
 	mod_timer(&info->timer->timer,
-		  secs_to_jiffies(info->timeout) + jiffies);
+		  msecs_to_jiffies(info->timeout * 1000) + jiffies);
 
 	return 0;
 
@@ -427,7 +429,7 @@ static int idletimer_tg_create_v1(struct idletimer_tg_info_v1 *info)
 	} else {
 		timer_setup(&info->timer->timer, idletimer_tg_expired, 0);
 		mod_timer(&info->timer->timer,
-				secs_to_jiffies(info->timeout) + jiffies);
+			  msecs_to_jiffies(info->timeout * 1000) + jiffies);
 	}
 
 	return 0;
@@ -458,7 +460,7 @@ static void reset_timer(struct idletimer_tg * const info_timer,
 		/* Stores the uid resposible for waking up the radio */
 		if (skb && (skb->sk)) {
 			info_timer->uid = from_kuid_munged(current_user_ns(),
-							   sk_uid(skb_to_full_sk(skb)));
+							   sock_i_uid(skb_to_full_sk(skb)));
 		}
 
 		/* checks if there is a pending inactive notification*/
@@ -471,7 +473,7 @@ static void reset_timer(struct idletimer_tg * const info_timer,
 	}
 
 	info_timer->last_modified_timer = ktime_to_timespec64(ktime_get_boottime());
-	mod_timer(&info_timer->timer, secs_to_jiffies(info_timeout) + now);
+	mod_timer(&info_timer->timer, msecs_to_jiffies(info_timeout * 1000) + now);
 	spin_unlock_bh(&timestamp_lock);
 }
 
@@ -657,24 +659,22 @@ static void idletimer_tg_destroy(const struct xt_tgdtor_param *par)
 
 	mutex_lock(&list_mutex);
 
-	if (--info->timer->refcnt > 0) {
+	if (--info->timer->refcnt == 0) {
+		pr_debug("deleting timer %s\n", info->label);
+
+		list_del(&info->timer->entry);
+		del_timer_sync(&info->timer->timer);
+		sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
+		unregister_pm_notifier(&info->timer->pm_nb);
+		cancel_work_sync(&info->timer->work);
+		kfree(info->timer->attr.attr.name);
+		kfree(info->timer);
+	} else {
 		pr_debug("decreased refcnt of timer %s to %u\n",
 			 info->label, info->timer->refcnt);
-		mutex_unlock(&list_mutex);
-		return;
 	}
 
-	pr_debug("deleting timer %s\n", info->label);
-
-	list_del(&info->timer->entry);
 	mutex_unlock(&list_mutex);
-
-	timer_shutdown_sync(&info->timer->timer);
-	sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
-	unregister_pm_notifier(&info->timer->pm_nb);
-	cancel_work_sync(&info->timer->work);
-	kfree(info->timer->attr.attr.name);
-	kfree(info->timer);
 }
 
 static void idletimer_tg_destroy_v1(const struct xt_tgdtor_param *par)
@@ -685,28 +685,26 @@ static void idletimer_tg_destroy_v1(const struct xt_tgdtor_param *par)
 
 	mutex_lock(&list_mutex);
 
-	if (--info->timer->refcnt > 0) {
+	if (--info->timer->refcnt == 0) {
+		pr_debug("deleting timer %s\n", info->label);
+
+		list_del(&info->timer->entry);
+		if (info->timer->timer_type & XT_IDLETIMER_ALARM) {
+			alarm_cancel(&info->timer->alarm);
+		} else {
+			del_timer_sync(&info->timer->timer);
+		}
+		sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
+		unregister_pm_notifier(&info->timer->pm_nb);
+		cancel_work_sync(&info->timer->work);
+		kfree(info->timer->attr.attr.name);
+		kfree(info->timer);
+	} else {
 		pr_debug("decreased refcnt of timer %s to %u\n",
 			 info->label, info->timer->refcnt);
-		mutex_unlock(&list_mutex);
-		return;
 	}
 
-	pr_debug("deleting timer %s\n", info->label);
-
-	list_del(&info->timer->entry);
 	mutex_unlock(&list_mutex);
-
-	if (info->timer->timer_type & XT_IDLETIMER_ALARM) {
-		alarm_cancel(&info->timer->alarm);
-	} else {
-		timer_shutdown_sync(&info->timer->timer);
-	}
-	sysfs_remove_file(idletimer_tg_kobj, &info->timer->attr.attr);
-	unregister_pm_notifier(&info->timer->pm_nb);
-	cancel_work_sync(&info->timer->work);
-	kfree(info->timer->attr.attr.name);
-	kfree(info->timer);
 }
 
 
@@ -765,7 +763,7 @@ static int __init idletimer_tg_init(void)
 {
 	int err;
 
-	idletimer_tg_class = class_create("xt_idletimer");
+	idletimer_tg_class = class_create(THIS_MODULE, "xt_idletimer");
 	err = PTR_ERR(idletimer_tg_class);
 	if (IS_ERR(idletimer_tg_class)) {
 		pr_debug("couldn't register device class\n");

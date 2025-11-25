@@ -357,21 +357,21 @@ static int scarlett_ctl_put(struct snd_kcontrol *kctl,
 	return changed;
 }
 
-static void scarlett_generate_name(int i, char *dst, size_t size, int offsets[])
+static void scarlett_generate_name(int i, char *dst, int offsets[])
 {
 	if (i > offsets[SCARLETT_OFFSET_MIX])
-		scnprintf(dst, size, "Mix %c",
-			  'A'+(i - offsets[SCARLETT_OFFSET_MIX] - 1));
+		sprintf(dst, "Mix %c",
+			'A'+(i - offsets[SCARLETT_OFFSET_MIX] - 1));
 	else if (i > offsets[SCARLETT_OFFSET_ADAT])
-		scnprintf(dst, size, "ADAT %d", i - offsets[SCARLETT_OFFSET_ADAT]);
+		sprintf(dst, "ADAT %d", i - offsets[SCARLETT_OFFSET_ADAT]);
 	else if (i > offsets[SCARLETT_OFFSET_SPDIF])
-		scnprintf(dst, size, "SPDIF %d", i - offsets[SCARLETT_OFFSET_SPDIF]);
+		sprintf(dst, "SPDIF %d", i - offsets[SCARLETT_OFFSET_SPDIF]);
 	else if (i > offsets[SCARLETT_OFFSET_ANALOG])
-		scnprintf(dst, size, "Analog %d", i - offsets[SCARLETT_OFFSET_ANALOG]);
+		sprintf(dst, "Analog %d", i - offsets[SCARLETT_OFFSET_ANALOG]);
 	else if (i > offsets[SCARLETT_OFFSET_PCM])
-		scnprintf(dst, size, "PCM %d", i - offsets[SCARLETT_OFFSET_PCM]);
+		sprintf(dst, "PCM %d", i - offsets[SCARLETT_OFFSET_PCM]);
 	else
-		scnprintf(dst, size, "Off");
+		sprintf(dst, "Off");
 }
 
 static int scarlett_ctl_enum_dynamic_info(struct snd_kcontrol *kctl,
@@ -391,7 +391,6 @@ static int scarlett_ctl_enum_dynamic_info(struct snd_kcontrol *kctl,
 	/* generate name dynamically based on item number and offset info */
 	scarlett_generate_name(uinfo->value.enumerated.item,
 			       uinfo->value.enumerated.name,
-			       sizeof(uinfo->value.enumerated.name),
 			       opt->offsets);
 
 	return 0;
@@ -461,7 +460,7 @@ static int scarlett_ctl_meter_get(struct snd_kcontrol *kctl,
 	struct snd_usb_audio *chip = elem->head.mixer->chip;
 	unsigned char buf[2 * MAX_CHANNELS] = {0, };
 	int wValue = (elem->control << 8) | elem->idx_off;
-	int idx = snd_usb_ctrl_intf(elem->head.mixer->hostif) | (elem->head.id << 8);
+	int idx = snd_usb_ctrl_intf(chip) | (elem->head.id << 8);
 	int err;
 
 	err = snd_usb_ctl_msg(chip->dev,
@@ -877,8 +876,7 @@ static int scarlett_controls_create_generic(struct usb_mixer_interface *mixer,
 				return err;
 			break;
 		case SCARLETT_SWITCH_IMPEDANCE:
-			scnprintf(mx, sizeof(mx),
-				  "Input %d Impedance Switch", ctl->num);
+			sprintf(mx, "Input %d Impedance Switch", ctl->num);
 			err = add_new_ctl(mixer, &usb_scarlett_ctl_enum,
 					  scarlett_ctl_enum_resume, 0x01,
 					  0x09, ctl->num, USB_MIXER_S16, 1, mx,
@@ -887,8 +885,7 @@ static int scarlett_controls_create_generic(struct usb_mixer_interface *mixer,
 				return err;
 			break;
 		case SCARLETT_SWITCH_PAD:
-			scnprintf(mx, sizeof(mx),
-				  "Input %d Pad Switch", ctl->num);
+			sprintf(mx, "Input %d Pad Switch", ctl->num);
 			err = add_new_ctl(mixer, &usb_scarlett_ctl_enum,
 					  scarlett_ctl_enum_resume, 0x01,
 					  0x0b, ctl->num, USB_MIXER_S16, 1, mx,
@@ -897,8 +894,7 @@ static int scarlett_controls_create_generic(struct usb_mixer_interface *mixer,
 				return err;
 			break;
 		case SCARLETT_SWITCH_GAIN:
-			scnprintf(mx, sizeof(mx),
-				  "Input %d Gain Switch", ctl->num);
+			sprintf(mx, "Input %d Gain Switch", ctl->num);
 			err = add_new_ctl(mixer, &usb_scarlett_ctl_enum,
 					  scarlett_ctl_enum_resume, 0x01,
 					  0x08, ctl->num, USB_MIXER_S16, 1, mx,
@@ -964,9 +960,8 @@ int snd_scarlett_controls_create(struct usb_mixer_interface *mixer)
 			return err;
 
 		for (o = 0; o < info->matrix_out; o++) {
-			scnprintf(mx, sizeof(mx),
-				  "Matrix %02d Mix %c Playback Volume", i+1,
-				  o+'A');
+			sprintf(mx, "Matrix %02d Mix %c Playback Volume", i+1,
+				o+'A');
 			err = add_new_ctl(mixer, &usb_scarlett_ctl,
 					  scarlett_ctl_resume, 0x3c, 0x00,
 					  (i << 3) + (o & 0x07), USB_MIXER_S16,
@@ -1007,7 +1002,7 @@ int snd_scarlett_controls_create(struct usb_mixer_interface *mixer)
 	err = snd_usb_ctl_msg(mixer->chip->dev,
 		usb_sndctrlpipe(mixer->chip->dev, 0), UAC2_CS_CUR,
 		USB_RECIP_INTERFACE | USB_TYPE_CLASS |
-		USB_DIR_OUT, 0x0100, snd_usb_ctrl_intf(mixer->hostif) |
+		USB_DIR_OUT, 0x0100, snd_usb_ctrl_intf(mixer->chip) |
 		(0x29 << 8), sample_rate_buffer, 4);
 	if (err < 0)
 		return err;

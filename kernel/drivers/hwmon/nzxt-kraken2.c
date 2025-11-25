@@ -9,7 +9,7 @@
  * Copyright 2019-2021  Jonas Malaco <jonas@protocubo.io>
  */
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <linux/hid.h>
 #include <linux/hwmon.h>
 #include <linux/jiffies.h>
@@ -34,6 +34,13 @@ struct kraken2_priv_data {
 	u16 fan_input[2];
 	unsigned long updated; /* jiffies */
 };
+
+static umode_t kraken2_is_visible(const void *data,
+				  enum hwmon_sensor_types type,
+				  u32 attr, int channel)
+{
+	return 0444;
+}
 
 static int kraken2_read(struct device *dev, enum hwmon_sensor_types type,
 			u32 attr, int channel, long *val)
@@ -74,12 +81,12 @@ static int kraken2_read_string(struct device *dev, enum hwmon_sensor_types type,
 }
 
 static const struct hwmon_ops kraken2_hwmon_ops = {
-	.visible = 0444,
+	.is_visible = kraken2_is_visible,
 	.read = kraken2_read,
 	.read_string = kraken2_read_string,
 };
 
-static const struct hwmon_channel_info * const kraken2_info[] = {
+static const struct hwmon_channel_info *kraken2_info[] = {
 	HWMON_CHANNEL_INFO(temp,
 			   HWMON_T_INPUT | HWMON_T_LABEL),
 	HWMON_CHANNEL_INFO(fan,

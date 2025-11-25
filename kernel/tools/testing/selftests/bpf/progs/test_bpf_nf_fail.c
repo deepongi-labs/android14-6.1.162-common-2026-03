@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-#define BPF_NO_KFUNC_PROTOTYPES
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>

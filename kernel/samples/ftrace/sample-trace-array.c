@@ -82,7 +82,7 @@ static int simple_thread(void *arg)
 	while (!kthread_should_stop())
 		simple_thread_func(count++);
 
-	timer_delete(&mytimer);
+	del_timer(&mytimer);
 	cancel_work_sync(&trace_work);
 
 	/*
@@ -105,7 +105,7 @@ static int __init sample_trace_array_init(void)
 	 * NOTE: This function increments the reference counter
 	 * associated with the trace array - "tr".
 	 */
-	tr = trace_array_get_by_name("sample-instance", "sched,timer,kprobes");
+	tr = trace_array_get_by_name("sample-instance");
 
 	if (!tr)
 		return -1;

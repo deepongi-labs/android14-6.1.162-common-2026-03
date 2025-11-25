@@ -179,7 +179,6 @@
 #define pr_fmt(fmt) "bcache: %s() " fmt, __func__
 
 #include <linux/bio.h>
-#include <linux/closure.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -193,6 +192,7 @@
 #include "bcache_ondisk.h"
 #include "bset.h"
 #include "util.h"
+#include "closure.h"
 
 struct bucket {
 	atomic_t	pin;
@@ -200,7 +200,6 @@ struct bucket {
 	uint8_t		gen;
 	uint8_t		last_gc; /* Most out of date gen in the btree */
 	uint16_t	gc_mark; /* Bitfield used by GC. See below for field */
-	uint16_t	reclaimable_in_gc:1;
 };
 
 /*
@@ -277,7 +276,7 @@ struct bcache_device {
 
 	int (*cache_miss)(struct btree *b, struct search *s,
 			  struct bio *bio, unsigned int sectors);
-	int (*ioctl)(struct bcache_device *d, blk_mode_t mode,
+	int (*ioctl)(struct bcache_device *d, fmode_t mode,
 		     unsigned int cmd, unsigned long arg);
 };
 
@@ -301,7 +300,6 @@ struct cached_dev {
 	struct list_head	list;
 	struct bcache_device	disk;
 	struct block_device	*bdev;
-	struct file		*bdev_file;
 
 	struct cache_sb		sb;
 	struct cache_sb_disk	*sb_disk;
@@ -424,7 +422,6 @@ struct cache {
 
 	struct kobject		kobj;
 	struct block_device	*bdev;
-	struct file		*bdev_file;
 
 	struct task_struct	*alloc_thread;
 
@@ -545,7 +542,7 @@ struct cache_set {
 	struct bio_set		bio_split;
 
 	/* For the btree cache */
-	struct shrinker		*shrink;
+	struct shrinker		shrink;
 
 	/* For the btree cache and anything allocation related */
 	struct mutex		bucket_lock;
@@ -1008,11 +1005,11 @@ extern struct workqueue_struct *bch_flush_wq;
 extern struct mutex bch_register_lock;
 extern struct list_head bch_cache_sets;
 
-extern const struct kobj_type bch_cached_dev_ktype;
-extern const struct kobj_type bch_flash_dev_ktype;
-extern const struct kobj_type bch_cache_set_ktype;
-extern const struct kobj_type bch_cache_set_internal_ktype;
-extern const struct kobj_type bch_cache_ktype;
+extern struct kobj_type bch_cached_dev_ktype;
+extern struct kobj_type bch_flash_dev_ktype;
+extern struct kobj_type bch_cache_set_ktype;
+extern struct kobj_type bch_cache_set_internal_ktype;
+extern struct kobj_type bch_cache_ktype;
 
 void bch_cached_dev_release(struct kobject *kobj);
 void bch_flash_dev_release(struct kobject *kobj);

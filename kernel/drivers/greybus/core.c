@@ -27,36 +27,6 @@ int greybus_disabled(void)
 }
 EXPORT_SYMBOL_GPL(greybus_disabled);
 
-static int is_gb_host_device(const struct device *dev)
-{
-	return dev->type == &greybus_hd_type;
-}
-
-static int is_gb_module(const struct device *dev)
-{
-	return dev->type == &greybus_module_type;
-}
-
-static int is_gb_interface(const struct device *dev)
-{
-	return dev->type == &greybus_interface_type;
-}
-
-static int is_gb_control(const struct device *dev)
-{
-	return dev->type == &greybus_control_type;
-}
-
-static int is_gb_bundle(const struct device *dev)
-{
-	return dev->type == &greybus_bundle_type;
-}
-
-static int is_gb_svc(const struct device *dev)
-{
-	return dev->type == &greybus_svc_type;
-}
-
 static bool greybus_match_one_id(struct gb_bundle *bundle,
 				 const struct greybus_bundle_id *id)
 {
@@ -90,9 +60,9 @@ greybus_match_id(struct gb_bundle *bundle, const struct greybus_bundle_id *id)
 	return NULL;
 }
 
-static int greybus_match_device(struct device *dev, const struct device_driver *drv)
+static int greybus_match_device(struct device *dev, struct device_driver *drv)
 {
-	const struct greybus_driver *driver = to_greybus_driver(drv);
+	struct greybus_driver *driver = to_greybus_driver(drv);
 	struct gb_bundle *bundle;
 	const struct greybus_bundle_id *id;
 
@@ -108,14 +78,14 @@ static int greybus_match_device(struct device *dev, const struct device_driver *
 	return 0;
 }
 
-static int greybus_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int greybus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct gb_host_device *hd;
-	const struct gb_module *module = NULL;
-	const struct gb_interface *intf = NULL;
-	const struct gb_control *control = NULL;
-	const struct gb_bundle *bundle = NULL;
-	const struct gb_svc *svc = NULL;
+	struct gb_host_device *hd;
+	struct gb_module *module = NULL;
+	struct gb_interface *intf = NULL;
+	struct gb_control *control = NULL;
+	struct gb_bundle *bundle = NULL;
+	struct gb_svc *svc = NULL;
 
 	if (is_gb_host_device(dev)) {
 		hd = to_gb_host_device(dev);
@@ -185,7 +155,7 @@ static void greybus_shutdown(struct device *dev)
 	}
 }
 
-const struct bus_type greybus_bus_type = {
+struct bus_type greybus_bus_type = {
 	.name =		"greybus",
 	.match =	greybus_match_device,
 	.uevent =	greybus_uevent,
@@ -375,6 +345,5 @@ static void __exit gb_exit(void)
 	tracepoint_synchronize_unregister();
 }
 module_exit(gb_exit);
-MODULE_DESCRIPTION("Greybus core driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Greg Kroah-Hartman <gregkh@linuxfoundation.org>");

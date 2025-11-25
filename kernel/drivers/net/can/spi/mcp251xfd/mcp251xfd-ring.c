@@ -12,7 +12,7 @@
 // Copyright (c) 2019 Martin Sperl <kernel@martin.sperl.org>
 //
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include "mcp251xfd.h"
 #include "mcp251xfd-ram.h"
@@ -30,23 +30,11 @@ mcp251xfd_cmd_prepare_write_reg(const struct mcp251xfd_priv *priv,
 	last_byte = mcp251xfd_last_byte_set(mask);
 	len = last_byte - first_byte + 1;
 
-	data = mcp251xfd_spi_cmd_write(priv, write_reg_buf, reg + first_byte, len);
+	data = mcp251xfd_spi_cmd_write(priv, write_reg_buf, reg + first_byte);
 	val_le32 = cpu_to_le32(val >> BITS_PER_BYTE * first_byte);
 	memcpy(data, &val_le32, len);
 
-	if (!(priv->devtype_data.quirks & MCP251XFD_QUIRK_CRC_REG)) {
-		len += sizeof(write_reg_buf->nocrc.cmd);
-	} else if (len == 1) {
-		u16 crc;
-
-		/* CRC */
-		len += sizeof(write_reg_buf->safe.cmd);
-		crc = mcp251xfd_crc16_compute(&write_reg_buf->safe, len);
-		put_unaligned_be16(crc, (void *)write_reg_buf + len);
-
-		/* Total length */
-		len += sizeof(write_reg_buf->safe.crc);
-	} else {
+	if (priv->devtype_data.quirks & MCP251XFD_QUIRK_CRC_REG) {
 		u16 crc;
 
 		mcp251xfd_spi_cmd_crc_set_len_in_reg(&write_reg_buf->crc.cmd,
@@ -58,6 +46,8 @@ mcp251xfd_cmd_prepare_write_reg(const struct mcp251xfd_priv *priv,
 
 		/* Total length */
 		len += sizeof(write_reg_buf->crc.crc);
+	} else {
+		len += sizeof(write_reg_buf->nocrc.cmd);
 	}
 
 	return len;
@@ -541,11 +531,11 @@ int mcp251xfd_ring_alloc(struct mcp251xfd_priv *priv)
 	}
 	priv->rx_ring_num = i;
 
-	hrtimer_setup(&priv->rx_irq_timer, mcp251xfd_rx_irq_timer, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&priv->rx_irq_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	priv->rx_irq_timer.function = mcp251xfd_rx_irq_timer;
 
-	hrtimer_setup(&priv->tx_irq_timer, mcp251xfd_tx_irq_timer, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&priv->tx_irq_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	priv->tx_irq_timer.function = mcp251xfd_tx_irq_timer;
 
 	return 0;
 }

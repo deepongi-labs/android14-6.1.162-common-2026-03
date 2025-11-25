@@ -43,19 +43,19 @@ static unsigned long max_autoclose_max =
 	(MAX_SCHEDULE_TIMEOUT / HZ > UINT_MAX)
 	? UINT_MAX : MAX_SCHEDULE_TIMEOUT / HZ;
 
-static int proc_sctp_do_hmac_alg(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_hmac_alg(struct ctl_table *ctl, int write,
 				 void *buffer, size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_rto_min(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_rto_min(struct ctl_table *ctl, int write,
 				void *buffer, size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_rto_max(const struct ctl_table *ctl, int write, void *buffer,
+static int proc_sctp_do_rto_max(struct ctl_table *ctl, int write, void *buffer,
 				size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_udp_port(const struct ctl_table *ctl, int write, void *buffer,
+static int proc_sctp_do_udp_port(struct ctl_table *ctl, int write, void *buffer,
 				 size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_alpha_beta(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_alpha_beta(struct ctl_table *ctl, int write,
 				   void *buffer, size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_auth(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_auth(struct ctl_table *ctl, int write,
 			     void *buffer, size_t *lenp, loff_t *ppos);
-static int proc_sctp_do_probe_interval(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_probe_interval(struct ctl_table *ctl, int write,
 				       void *buffer, size_t *lenp, loff_t *ppos);
 
 static struct ctl_table sctp_table[] = {
@@ -80,6 +80,8 @@ static struct ctl_table sctp_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+
+	{ /* sentinel */ }
 };
 
 /* The following index defines are used in sctp_sysctl_net_register().
@@ -174,7 +176,7 @@ static struct ctl_table sctp_net_table[] = {
 	},
 	{
 		.procname	= "cookie_hmac_alg",
-		.data		= &init_net.sctp.cookie_auth_enable,
+		.data		= &init_net.sctp.sctp_hmac_alg,
 		.maxlen		= 8,
 		.mode		= 0644,
 		.proc_handler	= proc_sctp_do_hmac_alg,
@@ -355,17 +357,6 @@ static struct ctl_table sctp_net_table[] = {
 		.extra1		= &max_autoclose_min,
 		.extra2		= &max_autoclose_max,
 	},
-#ifdef CONFIG_NET_L3_MASTER_DEV
-	{
-		.procname	= "l3mdev_accept",
-		.data		= &init_net.sctp.l3mdev_accept,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-#endif
 	{
 		.procname	= "pf_enable",
 		.data		= &init_net.sctp.pf_enable,
@@ -382,14 +373,18 @@ static struct ctl_table sctp_net_table[] = {
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &pf_expose_max,
 	},
+
+	{ /* sentinel */ }
 };
 
-static int proc_sctp_do_hmac_alg(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_hmac_alg(struct ctl_table *ctl, int write,
 				 void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net,
-				       sctp.cookie_auth_enable);
+				       sctp.sctp_hmac_alg);
 	struct ctl_table tbl;
+	bool changed = false;
+	char *none = "none";
 	char tmp[8] = {0};
 	int ret;
 
@@ -397,29 +392,38 @@ static int proc_sctp_do_hmac_alg(const struct ctl_table *ctl, int write,
 
 	if (write) {
 		tbl.data = tmp;
-		tbl.maxlen = sizeof(tmp) - 1;
-		ret = proc_dostring(&tbl, 1, buffer, lenp, ppos);
-		if (ret)
-			return ret;
-		if (!strcmp(tmp, "sha256")) {
-			net->sctp.cookie_auth_enable = 1;
-			return 0;
-		}
-		if (!strcmp(tmp, "none")) {
-			net->sctp.cookie_auth_enable = 0;
-			return 0;
-		}
-		return -EINVAL;
+		tbl.maxlen = sizeof(tmp);
+	} else {
+		tbl.data = net->sctp.sctp_hmac_alg ? : none;
+		tbl.maxlen = strlen(tbl.data);
 	}
-	if (net->sctp.cookie_auth_enable)
-		tbl.data = (char *)"sha256";
-	else
-		tbl.data = (char *)"none";
-	tbl.maxlen = strlen(tbl.data);
-	return proc_dostring(&tbl, 0, buffer, lenp, ppos);
+
+	ret = proc_dostring(&tbl, write, buffer, lenp, ppos);
+	if (write && ret == 0) {
+#ifdef CONFIG_CRYPTO_MD5
+		if (!strncmp(tmp, "md5", 3)) {
+			net->sctp.sctp_hmac_alg = "md5";
+			changed = true;
+		}
+#endif
+#ifdef CONFIG_CRYPTO_SHA1
+		if (!strncmp(tmp, "sha1", 4)) {
+			net->sctp.sctp_hmac_alg = "sha1";
+			changed = true;
+		}
+#endif
+		if (!strncmp(tmp, "none", 4)) {
+			net->sctp.sctp_hmac_alg = NULL;
+			changed = true;
+		}
+		if (!changed)
+			ret = -EINVAL;
+	}
+
+	return ret;
 }
 
-static int proc_sctp_do_rto_min(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_rto_min(struct ctl_table *ctl, int write,
 				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net, sctp.rto_min);
@@ -447,7 +451,7 @@ static int proc_sctp_do_rto_min(const struct ctl_table *ctl, int write,
 	return ret;
 }
 
-static int proc_sctp_do_rto_max(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_rto_max(struct ctl_table *ctl, int write,
 				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net, sctp.rto_max);
@@ -475,7 +479,7 @@ static int proc_sctp_do_rto_max(const struct ctl_table *ctl, int write,
 	return ret;
 }
 
-static int proc_sctp_do_alpha_beta(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_alpha_beta(struct ctl_table *ctl, int write,
 				   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	if (write)
@@ -485,7 +489,7 @@ static int proc_sctp_do_alpha_beta(const struct ctl_table *ctl, int write,
 	return proc_dointvec_minmax(ctl, write, buffer, lenp, ppos);
 }
 
-static int proc_sctp_do_auth(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_auth(struct ctl_table *ctl, int write,
 			     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net, sctp.auth_enable);
@@ -516,7 +520,7 @@ static int proc_sctp_do_auth(const struct ctl_table *ctl, int write,
 
 static DEFINE_MUTEX(sctp_sysctl_mutex);
 
-static int proc_sctp_do_udp_port(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_udp_port(struct ctl_table *ctl, int write,
 				 void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net, sctp.udp_port);
@@ -559,7 +563,7 @@ static int proc_sctp_do_udp_port(const struct ctl_table *ctl, int write,
 	return ret;
 }
 
-static int proc_sctp_do_probe_interval(const struct ctl_table *ctl, int write,
+static int proc_sctp_do_probe_interval(struct ctl_table *ctl, int write,
 				       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct net *net = container_of(ctl->data, struct net,
@@ -588,7 +592,6 @@ static int proc_sctp_do_probe_interval(const struct ctl_table *ctl, int write,
 
 int sctp_sysctl_net_register(struct net *net)
 {
-	size_t table_size = ARRAY_SIZE(sctp_net_table);
 	struct ctl_table *table;
 	int i;
 
@@ -596,7 +599,7 @@ int sctp_sysctl_net_register(struct net *net)
 	if (!table)
 		return -ENOMEM;
 
-	for (i = 0; i < table_size; i++)
+	for (i = 0; table[i].data; i++)
 		table[i].data += (char *)(&net->sctp) - (char *)&init_net.sctp;
 
 	table[SCTP_RTO_MIN_IDX].extra2 = &net->sctp.rto_max;
@@ -604,8 +607,7 @@ int sctp_sysctl_net_register(struct net *net)
 	table[SCTP_PF_RETRANS_IDX].extra2 = &net->sctp.ps_retrans;
 	table[SCTP_PS_RETRANS_IDX].extra1 = &net->sctp.pf_retrans;
 
-	net->sctp.sysctl_header = register_net_sysctl_sz(net, "net/sctp",
-							 table, table_size);
+	net->sctp.sysctl_header = register_net_sysctl(net, "net/sctp", table);
 	if (net->sctp.sysctl_header == NULL) {
 		kfree(table);
 		return -ENOMEM;
@@ -615,7 +617,7 @@ int sctp_sysctl_net_register(struct net *net)
 
 void sctp_sysctl_net_unregister(struct net *net)
 {
-	const struct ctl_table *table;
+	struct ctl_table *table;
 
 	table = net->sctp.sysctl_header->ctl_table_arg;
 	unregister_net_sysctl_table(net->sctp.sysctl_header);

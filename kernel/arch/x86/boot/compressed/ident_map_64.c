@@ -8,8 +8,16 @@
  * Copyright (C)      2016  Kees Cook
  */
 
-/* No MITIGATION_PAGE_TABLE_ISOLATION support needed either: */
-#undef CONFIG_MITIGATION_PAGE_TABLE_ISOLATION
+/*
+ * Since we're dealing with identity mappings, physical and virtual
+ * addresses are the same, so override these defines which are ultimately
+ * used by the headers in misc.h.
+ */
+#define __pa(x)  ((unsigned long)(x))
+#define __va(x)  ((void *)((unsigned long)(x)))
+
+/* No PAGE_TABLE_ISOLATION support needed either: */
+#undef CONFIG_PAGE_TABLE_ISOLATION
 
 #include "error.h"
 #include "misc.h"
@@ -284,7 +292,7 @@ static int set_clr_page_flags(struct x86_mapping_info *info,
 	pudp = pud_offset(p4dp, address);
 	pmdp = pmd_offset(pudp, address);
 
-	if (pmd_leaf(*pmdp))
+	if (pmd_large(*pmdp))
 		ptep = split_large_pmd(info, pmdp, address);
 	else
 		ptep = pte_offset_kernel(pmdp, address);
@@ -389,5 +397,5 @@ void do_boot_page_fault(struct pt_regs *regs, unsigned long error_code)
 
 void do_boot_nmi_trap(struct pt_regs *regs, unsigned long error_code)
 {
-	spurious_nmi_count++;
+	/* Empty handler to ignore NMI during early boot */
 }

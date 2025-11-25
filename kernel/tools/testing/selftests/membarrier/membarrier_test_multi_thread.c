@@ -62,12 +62,12 @@ static int test_mt_membarrier(void)
 int main(int argc, char **argv)
 {
 	ksft_print_header();
-	ksft_set_plan(16);
+	ksft_set_plan(13);
 
 	test_membarrier_query();
 
 	/* Multi-threaded */
 	test_mt_membarrier();
 
-	ksft_exit_pass();
+	return ksft_exit_pass();
 }

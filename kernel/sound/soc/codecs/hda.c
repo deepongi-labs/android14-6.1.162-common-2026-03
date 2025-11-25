@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 //
-// Copyright(c) 2021-2022 Intel Corporation
+// Copyright(c) 2021-2022 Intel Corporation. All rights reserved.
 //
 // Author: Cezary Rojewski <cezary.rojewski@intel.com>
 //
@@ -52,7 +52,6 @@ static int hda_codec_create_dais(struct hda_codec *codec, int pcm_count,
 		stream->channels_max = pcm->stream[dir].channels_max;
 		stream->rates = pcm->stream[dir].rates;
 		stream->formats = pcm->stream[dir].formats;
-		stream->subformats = pcm->stream[dir].subformats;
 		stream->sig_bits = pcm->stream[dir].maxbps;
 
 capture_dais:
@@ -72,7 +71,6 @@ capture_dais:
 		stream->channels_max = pcm->stream[dir].channels_max;
 		stream->rates = pcm->stream[dir].rates;
 		stream->formats = pcm->stream[dir].formats;
-		stream->subformats = pcm->stream[dir].subformats;
 		stream->sig_bits = pcm->stream[dir].maxbps;
 	}
 
@@ -128,15 +126,14 @@ static void hda_codec_unregister_dais(struct hda_codec *codec,
 	struct hda_pcm *pcm;
 
 	for_each_component_dais_safe(component, dai, save) {
-		int stream;
-
 		list_for_each_entry(pcm, &codec->pcm_list_head, list) {
 			if (strcmp(dai->driver->name, pcm->name))
 				continue;
 
-			for_each_pcm_streams(stream)
-				snd_soc_dapm_free_widget(snd_soc_dai_get_widget(dai, stream));
-
+			if (dai->playback_widget)
+				snd_soc_dapm_free_widget(dai->playback_widget);
+			if (dai->capture_widget)
+				snd_soc_dapm_free_widget(dai->capture_widget);
 			snd_soc_unregister_dai(dai);
 			break;
 		}
@@ -162,6 +159,7 @@ int hda_codec_probe_complete(struct hda_codec *codec)
 	snd_hda_codec_register(codec);
 
 	/* Complement pm_runtime_get_sync(bus) in probe */
+	pm_runtime_mark_last_busy(bus->dev);
 	pm_runtime_put_autosuspend(bus->dev);
 
 	return ret;
@@ -172,10 +170,10 @@ EXPORT_SYMBOL_GPL(hda_codec_probe_complete);
 static int hda_codec_probe(struct snd_soc_component *component)
 {
 	struct hda_codec *codec = dev_to_hda_codec(component->dev);
-	struct hda_codec_driver *driver = hda_codec_to_driver(codec);
 	struct hdac_device *hdev = &codec->core;
 	struct hdac_bus *bus = hdev->bus;
 	struct hdac_ext_link *hlink;
+	hda_codec_patch_t patch;
 	int ret;
 
 #ifdef CONFIG_PM
@@ -183,7 +181,7 @@ static int hda_codec_probe(struct snd_soc_component *component)
 		!pm_runtime_status_suspended(&hdev->dev));
 #endif
 
-	hlink = snd_hdac_ext_bus_get_hlink_by_addr(bus, hdev->addr);
+	hlink = snd_hdac_ext_bus_link_at(bus, hdev->addr);
 	if (!hlink) {
 		dev_err(&hdev->dev, "hdac link not found\n");
 		return -EIO;
@@ -197,36 +195,38 @@ static int hda_codec_probe(struct snd_soc_component *component)
 	ret = snd_hda_codec_device_new(codec->bus, component->card->snd_card, hdev->addr, codec,
 				       false);
 	if (ret < 0) {
-		dev_err(&hdev->dev, "codec create failed: %d\n", ret);
+		dev_err(&hdev->dev, "create hda codec failed: %d\n", ret);
 		goto device_new_err;
 	}
 
 	ret = snd_hda_codec_set_name(codec, codec->preset->name);
 	if (ret < 0) {
-		dev_err(&hdev->dev, "set name: %s failed: %d\n", codec->preset->name, ret);
+		dev_err(&hdev->dev, "name failed %s\n", codec->preset->name);
 		goto err;
 	}
 
 	ret = snd_hdac_regmap_init(&codec->core);
 	if (ret < 0) {
-		dev_err(&hdev->dev, "regmap init failed: %d\n", ret);
+		dev_err(&hdev->dev, "regmap init failed\n");
 		goto err;
 	}
 
-	if (WARN_ON(!(driver->ops && driver->ops->probe))) {
+	patch = (hda_codec_patch_t)codec->preset->driver_data;
+	if (!patch) {
+		dev_err(&hdev->dev, "no patch specified?\n");
 		ret = -EINVAL;
 		goto err;
 	}
 
-	ret = driver->ops->probe(codec, codec->preset);
+	ret = patch(codec);
 	if (ret < 0) {
-		dev_err(&hdev->dev, "codec init failed: %d\n", ret);
+		dev_err(&hdev->dev, "patch failed %d\n", ret);
 		goto err;
 	}
 
 	ret = snd_hda_codec_parse_pcms(codec);
 	if (ret < 0) {
-		dev_err(&hdev->dev, "unable to map pcms to dai: %d\n", ret);
+		dev_err(&hdev->dev, "unable to map pcms to dai %d\n", ret);
 		goto parse_pcms_err;
 	}
 
@@ -249,8 +249,8 @@ static int hda_codec_probe(struct snd_soc_component *component)
 complete_err:
 	hda_codec_unregister_dais(codec, component);
 parse_pcms_err:
-	if (driver->ops->remove)
-		driver->ops->remove(codec);
+	if (codec->patch_ops.free)
+		codec->patch_ops.free(codec);
 err:
 	snd_hda_codec_cleanup_for_unbind(codec);
 device_new_err:
@@ -259,6 +259,7 @@ device_new_err:
 
 	snd_hdac_ext_bus_link_put(bus, hlink);
 
+	pm_runtime_mark_last_busy(bus->dev);
 	pm_runtime_put_autosuspend(bus->dev);
 	return ret;
 }
@@ -267,7 +268,6 @@ device_new_err:
 static void hda_codec_remove(struct snd_soc_component *component)
 {
 	struct hda_codec *codec = dev_to_hda_codec(component->dev);
-	struct hda_codec_driver *driver = hda_codec_to_driver(codec);
 	struct hdac_device *hdev = &codec->core;
 	struct hdac_bus *bus = hdev->bus;
 	struct hdac_ext_link *hlink;
@@ -278,8 +278,8 @@ static void hda_codec_remove(struct snd_soc_component *component)
 
 	hda_codec_unregister_dais(codec, component);
 
-	if (driver->ops->remove)
-		driver->ops->remove(codec);
+	if (codec->patch_ops.free)
+		codec->patch_ops.free(codec);
 
 	snd_hda_codec_cleanup_for_unbind(codec);
 	pm_runtime_put_noidle(&hdev->dev);
@@ -289,7 +289,7 @@ static void hda_codec_remove(struct snd_soc_component *component)
 	if (hda_codec_is_display(codec))
 		snd_hdac_display_power(bus, hdev->addr, false);
 
-	hlink = snd_hdac_ext_bus_get_hlink_by_addr(bus, hdev->addr);
+	hlink = snd_hdac_ext_bus_link_at(bus, hdev->addr);
 	if (hlink)
 		snd_hdac_ext_bus_link_put(bus, hlink);
 	/*
@@ -297,6 +297,7 @@ static void hda_codec_remove(struct snd_soc_component *component)
 	 * not be called due to early error, leaving bus uc unbalanced
 	 */
 	if (!was_registered) {
+		pm_runtime_mark_last_busy(bus->dev);
 		pm_runtime_put_autosuspend(bus->dev);
 	}
 
@@ -345,11 +346,6 @@ static int hda_hdev_attach(struct hdac_device *hdev)
 {
 	struct hda_codec *codec = dev_to_hda_codec(&hdev->dev);
 	struct snd_soc_component_driver *comp_drv;
-
-	if (hda_codec_is_display(codec) && !hdev->bus->audio_component) {
-		dev_dbg(&hdev->dev, "no i915, skip registration for 0x%08x\n", hdev->vendor_id);
-		return -ENODEV;
-	}
 
 	comp_drv = devm_kzalloc(&hdev->dev, sizeof(*comp_drv), GFP_KERNEL);
 	if (!comp_drv)

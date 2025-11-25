@@ -11,7 +11,6 @@
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
 #include <linux/compat.h>
-#include <linux/export.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/string.h>
@@ -430,7 +429,7 @@ static void qeth_setup_ccw(struct ccw1 *ccw, u8 cmd_code, u8 flags, u32 len,
 	ccw->cmd_code = cmd_code;
 	ccw->flags = flags | CCW_FLAG_SLI;
 	ccw->count = len;
-	ccw->cda = virt_to_dma32(data);
+	ccw->cda = (__u32)virt_to_phys(data);
 }
 
 static int __qeth_issue_next_read(struct qeth_card *card)
@@ -1397,7 +1396,7 @@ static void qeth_clear_output_buffer(struct qeth_qdio_out_q *queue,
 	qeth_tx_complete_buf(queue, buf, error, budget);
 
 	for (i = 0; i < queue->max_elements; ++i) {
-		void *data = dma64_to_virt(buf->buffer->element[i].addr);
+		void *data = phys_to_virt(buf->buffer->element[i].addr);
 
 		if (__test_and_clear_bit(i, buf->from_kmem_cache) && data)
 			kmem_cache_free(qeth_core_header_cache, data);
@@ -1442,7 +1441,7 @@ static void qeth_tx_complete_pending_bufs(struct qeth_card *card,
 			for (i = 0;
 			     i < aob->sb_count && i < queue->max_elements;
 			     i++) {
-				void *data = dma64_to_virt(aob->sba[i]);
+				void *data = phys_to_virt(aob->sba[i]);
 
 				if (test_bit(i, buf->from_kmem_cache) && data)
 					kmem_cache_free(qeth_core_header_cache,
@@ -2620,8 +2619,7 @@ err_qdio_bufs:
 
 static void qeth_tx_completion_timer(struct timer_list *timer)
 {
-	struct qeth_qdio_out_q *queue = timer_container_of(queue, timer,
-							   timer);
+	struct qeth_qdio_out_q *queue = from_timer(queue, timer, timer);
 
 	napi_schedule(&queue->napi);
 	QETH_TXQ_STAT_INC(queue, completion_timer);
@@ -2843,11 +2841,9 @@ static void qeth_print_status_message(struct qeth_card *card)
 		 * of the level OSA sets the first character to zero
 		 * */
 		if (!card->info.mcl_level[0]) {
-			scnprintf(card->info.mcl_level,
-				  sizeof(card->info.mcl_level),
-				  "%02x%02x",
-				  card->info.mcl_level[2],
-				  card->info.mcl_level[3]);
+			sprintf(card->info.mcl_level, "%02x%02x",
+				card->info.mcl_level[2],
+				card->info.mcl_level[3]);
 			break;
 		}
 		fallthrough;
@@ -2960,8 +2956,8 @@ static int qeth_init_input_buffer(struct qeth_card *card,
 	 */
 	for (i = 0; i < QETH_MAX_BUFFER_ELEMENTS(card); ++i) {
 		buf->buffer->element[i].length = PAGE_SIZE;
-		buf->buffer->element[i].addr = u64_to_dma64(
-			page_to_phys(pool_entry->elements[i]));
+		buf->buffer->element[i].addr =
+			page_to_phys(pool_entry->elements[i]);
 		if (i == QETH_MAX_BUFFER_ELEMENTS(card) - 1)
 			buf->buffer->element[i].eflags = SBAL_EFLAGS_LAST_ENTRY;
 		else
@@ -3717,7 +3713,7 @@ static void qeth_flush_queue(struct qeth_qdio_out_q *queue)
 static void qeth_check_outbound_queue(struct qeth_qdio_out_q *queue)
 {
 	/*
-	 * check if we have to switch to non-packing mode or if
+	 * check if weed have to switch to non-packing mode or if
 	 * we have to get a pci flag out on the queue
 	 */
 	if ((atomic_read(&queue->used_buffers) <= QETH_LOW_WATERMARK_PACK) ||
@@ -3794,9 +3790,9 @@ static void qeth_qdio_cq_handler(struct qeth_card *card, unsigned int qdio_err,
 
 		while ((e < QDIO_MAX_ELEMENTS_PER_BUFFER) &&
 		       buffer->element[e].addr) {
-			dma64_t phys_aob_addr = buffer->element[e].addr;
+			unsigned long phys_aob_addr = buffer->element[e].addr;
 
-			qeth_qdio_handle_aob(card, dma64_to_virt(phys_aob_addr));
+			qeth_qdio_handle_aob(card, phys_to_virt(phys_aob_addr));
 			++e;
 		}
 		qeth_scrub_qdio_buffer(buffer, QDIO_MAX_ELEMENTS_PER_BUFFER);
@@ -4071,7 +4067,7 @@ static unsigned int qeth_fill_buffer(struct qeth_qdio_out_buffer *buf,
 	if (hd_len) {
 		is_first_elem = false;
 
-		buffer->element[element].addr = virt_to_dma64(hdr);
+		buffer->element[element].addr = virt_to_phys(hdr);
 		buffer->element[element].length = hd_len;
 		buffer->element[element].eflags = SBAL_EFLAGS_FIRST_FRAG;
 
@@ -4092,7 +4088,7 @@ static unsigned int qeth_fill_buffer(struct qeth_qdio_out_buffer *buf,
 		elem_length = min_t(unsigned int, length,
 				    PAGE_SIZE - offset_in_page(data));
 
-		buffer->element[element].addr = virt_to_dma64(data);
+		buffer->element[element].addr = virt_to_phys(data);
 		buffer->element[element].length = elem_length;
 		length -= elem_length;
 		if (is_first_elem) {
@@ -4122,7 +4118,7 @@ static unsigned int qeth_fill_buffer(struct qeth_qdio_out_buffer *buf,
 			elem_length = min_t(unsigned int, length,
 					    PAGE_SIZE - offset_in_page(data));
 
-			buffer->element[element].addr = virt_to_dma64(data);
+			buffer->element[element].addr = virt_to_phys(data);
 			buffer->element[element].length = elem_length;
 			buffer->element[element].eflags =
 				SBAL_EFLAGS_MIDDLE_FRAG;
@@ -5598,7 +5594,7 @@ next_packet:
 		offset = 0;
 	}
 
-	hdr = dma64_to_virt(element->addr) + offset;
+	hdr = phys_to_virt(element->addr) + offset;
 	offset += sizeof(*hdr);
 	skb = NULL;
 
@@ -5690,7 +5686,7 @@ use_skb:
 walk_packet:
 	while (skb_len) {
 		int data_len = min(skb_len, (int)(element->length - offset));
-		char *data = dma64_to_virt(element->addr) + offset;
+		char *data = phys_to_virt(element->addr) + offset;
 
 		skb_len -= data_len;
 		offset += data_len;
@@ -6119,7 +6115,7 @@ void qeth_dbf_longtext(debug_info_t *id, int level, char *fmt, ...)
 	if (!debug_level_enabled(id, level))
 		return;
 	va_start(args, fmt);
-	vscnprintf(dbf_txt_buf, sizeof(dbf_txt_buf), fmt, args);
+	vsnprintf(dbf_txt_buf, sizeof(dbf_txt_buf), fmt, args);
 	va_end(args);
 	debug_text_event(id, level, dbf_txt_buf);
 }
@@ -6255,7 +6251,7 @@ static int qeth_add_dbf_entry(struct qeth_card *card, char *name)
 	new_entry = kzalloc(sizeof(struct qeth_dbf_entry), GFP_KERNEL);
 	if (!new_entry)
 		goto err_dbg;
-	strscpy(new_entry->dbf_name, name, sizeof(new_entry->dbf_name));
+	strncpy(new_entry->dbf_name, name, DBF_NAME_LEN);
 	new_entry->dbf_info = card->debug;
 	mutex_lock(&qeth_dbf_list_mutex);
 	list_add(&new_entry->dbf_list, &qeth_dbf_list);
@@ -6359,8 +6355,8 @@ static int qeth_core_probe_device(struct ccwgroup_device *gdev)
 		goto err_dev;
 	}
 
-	scnprintf(dbf_name, sizeof(dbf_name), "qeth_card_%s",
-		  dev_name(&gdev->dev));
+	snprintf(dbf_name, sizeof(dbf_name), "qeth_card_%s",
+		dev_name(&gdev->dev));
 	card->debug = qeth_get_dbf_entry(dbf_name);
 	if (!card->debug) {
 		rc = qeth_add_dbf_entry(card, dbf_name);
@@ -7052,16 +7048,14 @@ int qeth_open(struct net_device *dev)
 	card->data.state = CH_STATE_UP;
 	netif_tx_start_all_queues(dev);
 
+	local_bh_disable();
 	qeth_for_each_output_queue(card, queue, i) {
 		netif_napi_add_tx(dev, &queue->napi, qeth_tx_poll);
 		napi_enable(&queue->napi);
-	}
-	napi_enable(&card->napi);
-
-	local_bh_disable();
-	qeth_for_each_output_queue(card, queue, i) {
 		napi_schedule(&queue->napi);
 	}
+
+	napi_enable(&card->napi);
 	napi_schedule(&card->napi);
 	/* kick-start the NAPI softirq: */
 	local_bh_enable();
@@ -7090,7 +7084,7 @@ int qeth_stop(struct net_device *dev)
 	netif_tx_disable(dev);
 
 	qeth_for_each_output_queue(card, queue, i) {
-		timer_delete_sync(&queue->timer);
+		del_timer_sync(&queue->timer);
 		/* Queues may get re-allocated, so remove the NAPIs. */
 		netif_napi_del(&queue->napi);
 	}

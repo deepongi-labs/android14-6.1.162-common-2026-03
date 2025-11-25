@@ -5,6 +5,17 @@
  * Copyright (c) 2010 Intel Corporation. All Rights Reserved.
  *
  * Copyright (c) 2010 Silicon Hive www.siliconhive.com.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License version
+ * 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ *
  */
 
 #ifndef	__ATOMISP_COMMON_H__
@@ -14,7 +25,7 @@
 
 #include <linux/v4l2-mediabus.h>
 
-#include <media/videobuf2-v4l2.h>
+#include <media/videobuf-core.h>
 
 #include "atomisp_compat.h"
 
@@ -22,12 +33,9 @@
 
 extern int dbg_level;
 extern int dbg_func;
+extern int mipicsi_flag;
 extern int pad_w;
 extern int pad_h;
-
-/* Minimum padding requirements for ISP2400 (BYT) */
-#define ISP2400_MIN_PAD_W		12
-#define ISP2400_MIN_PAD_H		12
 
 #define CSS_DTRACE_VERBOSITY_LEVEL	5	/* Controls trace verbosity */
 #define CSS_DTRACE_VERBOSITY_TIMEOUT	9	/* Verbosity on ISP timeout */
@@ -54,6 +62,10 @@ struct atomisp_fmt {
 	u32 width;
 	u32 height;
 	u32 bayer_order;
+};
+
+struct atomisp_buffer {
+	struct videobuf_buffer	vb;
 };
 
 #endif

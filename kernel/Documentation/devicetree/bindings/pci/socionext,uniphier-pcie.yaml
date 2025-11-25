@@ -56,9 +56,6 @@ properties:
     additionalProperties: false
 
     properties:
-      '#address-cells':
-        const: 0
-
       interrupt-controller: true
 
       '#interrupt-cells':
@@ -112,7 +109,6 @@ examples:
                         <0 0 0  4  &pcie_intc 3>;
 
         pcie_intc: interrupt-controller {
-            #address-cells = <0>;
             interrupt-controller;
             #interrupt-cells = <1>;
             interrupt-parent = <&gic>;

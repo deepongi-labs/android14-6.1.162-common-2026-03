@@ -15,15 +15,12 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
-#include <linux/spinlock.h>
-
-#include <linux/pinctrl/consumer.h>
+#include <linux/of_device.h>
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
+#include <linux/spinlock.h>
 
 #include <dt-bindings/pinctrl/rzv2m-pinctrl.h>
 
@@ -120,6 +117,7 @@ struct rzv2m_pinctrl {
 	const struct rzv2m_pinctrl_data	*data;
 	void __iomem			*base;
 	struct device			*dev;
+	struct clk			*clk;
 
 	struct gpio_chip		gpio_chip;
 	struct pinctrl_gpio_range	gpio_range;
@@ -162,10 +160,10 @@ static int rzv2m_pinctrl_set_mux(struct pinctrl_dev *pctldev,
 				 unsigned int group_selector)
 {
 	struct rzv2m_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
-	const struct function_desc *func;
+	struct function_desc *func;
 	unsigned int i, *psel_val;
 	struct group_desc *group;
-	const unsigned int *pins;
+	int *pins;
 
 	func = pinmux_generic_get_function(pctldev, func_selector);
 	if (!func)
@@ -175,9 +173,9 @@ static int rzv2m_pinctrl_set_mux(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 
 	psel_val = func->data;
-	pins = group->grp.pins;
+	pins = group->pins;
 
-	for (i = 0; i < group->grp.npins; i++) {
+	for (i = 0; i < group->num_pins; i++) {
 		dev_dbg(pctrl->dev, "port:%u pin: %u PSEL:%u\n",
 			RZV2M_PIN_ID_TO_PORT(pins[i]), RZV2M_PIN_ID_TO_PIN(pins[i]),
 			psel_val[i]);
@@ -196,7 +194,8 @@ static int rzv2m_map_add_config(struct pinctrl_map *map,
 {
 	unsigned long *cfgs;
 
-	cfgs = kmemdup_array(configs, num_configs, sizeof(*cfgs), GFP_KERNEL);
+	cfgs = kmemdup(configs, num_configs * sizeof(*cfgs),
+		       GFP_KERNEL);
 	if (!cfgs)
 		return -ENOMEM;
 
@@ -387,6 +386,7 @@ static int rzv2m_dt_node_to_map(struct pinctrl_dev *pctldev,
 				unsigned int *num_maps)
 {
 	struct rzv2m_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
+	struct device_node *child;
 	unsigned int index;
 	int ret;
 
@@ -394,11 +394,13 @@ static int rzv2m_dt_node_to_map(struct pinctrl_dev *pctldev,
 	*num_maps = 0;
 	index = 0;
 
-	for_each_child_of_node_scoped(np, child) {
+	for_each_child_of_node(np, child) {
 		ret = rzv2m_dt_subnode_to_map(pctldev, child, np, map,
 					      num_maps, &index);
-		if (ret < 0)
+		if (ret < 0) {
+			of_node_put(child);
 			goto done;
+		}
 	}
 
 	if (*num_maps == 0) {
@@ -415,7 +417,8 @@ static int rzv2m_dt_node_to_map(struct pinctrl_dev *pctldev,
 	ret = -EINVAL;
 
 done:
-	rzv2m_dt_free_map(pctldev, *map, *num_maps);
+	if (ret < 0)
+		rzv2m_dt_free_map(pctldev, *map, *num_maps);
 
 	return ret;
 }
@@ -750,7 +753,7 @@ static int rzv2m_gpio_request(struct gpio_chip *chip, unsigned int offset)
 	u8 bit = RZV2M_PIN_ID_TO_PIN(offset);
 	int ret;
 
-	ret = pinctrl_gpio_request(chip, offset);
+	ret = pinctrl_gpio_request(chip->base + offset);
 	if (ret)
 		return ret;
 
@@ -790,16 +793,14 @@ static int rzv2m_gpio_direction_input(struct gpio_chip *chip,
 	return 0;
 }
 
-static int rzv2m_gpio_set(struct gpio_chip *chip, unsigned int offset,
-			  int value)
+static void rzv2m_gpio_set(struct gpio_chip *chip, unsigned int offset,
+			   int value)
 {
 	struct rzv2m_pinctrl *pctrl = gpiochip_get_data(chip);
 	u32 port = RZV2M_PIN_ID_TO_PORT(offset);
 	u8 bit = RZV2M_PIN_ID_TO_PIN(offset);
 
 	rzv2m_writel_we(pctrl->base + DO(port), bit, !!value);
-
-	return 0;
 }
 
 static int rzv2m_gpio_direction_output(struct gpio_chip *chip,
@@ -830,7 +831,7 @@ static int rzv2m_gpio_get(struct gpio_chip *chip, unsigned int offset)
 
 static void rzv2m_gpio_free(struct gpio_chip *chip, unsigned int offset)
 {
-	pinctrl_gpio_free(chip, offset);
+	pinctrl_gpio_free(chip->base + offset);
 
 	/*
 	 * Set the GPIO as an input to ensure that the next GPIO request won't
@@ -1047,10 +1048,14 @@ static int rzv2m_pinctrl_register(struct rzv2m_pinctrl *pctrl)
 	return 0;
 }
 
+static void rzv2m_pinctrl_clk_disable(void *data)
+{
+	clk_disable_unprepare(data);
+}
+
 static int rzv2m_pinctrl_probe(struct platform_device *pdev)
 {
 	struct rzv2m_pinctrl *pctrl;
-	struct clk *clk;
 	int ret;
 
 	pctrl = devm_kzalloc(&pdev->dev, sizeof(*pctrl), GFP_KERNEL);
@@ -1067,15 +1072,32 @@ static int rzv2m_pinctrl_probe(struct platform_device *pdev)
 	if (IS_ERR(pctrl->base))
 		return PTR_ERR(pctrl->base);
 
-	clk = devm_clk_get_enabled(pctrl->dev, NULL);
-	if (IS_ERR(clk))
-		return dev_err_probe(pctrl->dev, PTR_ERR(clk),
-				     "failed to enable GPIO clk\n");
+	pctrl->clk = devm_clk_get(pctrl->dev, NULL);
+	if (IS_ERR(pctrl->clk)) {
+		ret = PTR_ERR(pctrl->clk);
+		dev_err(pctrl->dev, "failed to get GPIO clk : %i\n", ret);
+		return ret;
+	}
 
 	spin_lock_init(&pctrl->lock);
 	mutex_init(&pctrl->mutex);
 
 	platform_set_drvdata(pdev, pctrl);
+
+	ret = clk_prepare_enable(pctrl->clk);
+	if (ret) {
+		dev_err(pctrl->dev, "failed to enable GPIO clk: %i\n", ret);
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(&pdev->dev, rzv2m_pinctrl_clk_disable,
+				       pctrl->clk);
+	if (ret) {
+		dev_err(pctrl->dev,
+			"failed to register GPIO clk disable action, %i\n",
+			ret);
+		return ret;
+	}
 
 	ret = rzv2m_pinctrl_register(pctrl);
 	if (ret)
@@ -1117,3 +1139,4 @@ core_initcall(rzv2m_pinctrl_init);
 
 MODULE_AUTHOR("Phil Edworthy <phil.edworthy@renesas.com>");
 MODULE_DESCRIPTION("Pin and gpio controller driver for RZ/V2M");
+MODULE_LICENSE("GPL");

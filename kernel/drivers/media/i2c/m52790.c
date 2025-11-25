@@ -129,7 +129,8 @@ static const struct v4l2_subdev_ops m52790_ops = {
 
 /* i2c implementation */
 
-static int m52790_probe(struct i2c_client *client)
+static int m52790_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct m52790_state *state;
 	struct v4l2_subdev *sd;
@@ -163,7 +164,7 @@ static void m52790_remove(struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static const struct i2c_device_id m52790_id[] = {
-	{ "m52790" },
+	{ "m52790", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, m52790_id);

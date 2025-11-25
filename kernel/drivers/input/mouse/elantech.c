@@ -17,7 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/serio.h>
 #include <linux/libps2.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include "psmouse.h"
 #include "elantech.h"
 #include "elan_i2c.h"

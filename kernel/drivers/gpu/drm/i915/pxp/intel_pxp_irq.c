@@ -3,18 +3,14 @@
  * Copyright(c) 2020 Intel Corporation.
  */
 #include <linux/workqueue.h>
-
-#include "gt/intel_gt_irq.h"
-#include "gt/intel_gt_regs.h"
-#include "gt/intel_gt_types.h"
-
-#include "i915_irq.h"
-#include "i915_reg.h"
-
 #include "intel_pxp.h"
 #include "intel_pxp_irq.h"
 #include "intel_pxp_session.h"
-#include "intel_pxp_types.h"
+#include "gt/intel_gt_irq.h"
+#include "gt/intel_gt_regs.h"
+#include "gt/intel_gt_types.h"
+#include "i915_irq.h"
+#include "i915_reg.h"
 #include "intel_runtime_pm.h"
 
 /**
@@ -24,12 +20,10 @@
  */
 void intel_pxp_irq_handler(struct intel_pxp *pxp, u16 iir)
 {
-	struct intel_gt *gt;
+	struct intel_gt *gt = pxp_to_gt(pxp);
 
 	if (GEM_WARN_ON(!intel_pxp_is_enabled(pxp)))
 		return;
-
-	gt = pxp->ctrl_gt;
 
 	lockdep_assert_held(gt->irq_lock);
 
@@ -40,12 +34,11 @@ void intel_pxp_irq_handler(struct intel_pxp *pxp, u16 iir)
 		   GEN12_DISPLAY_APP_TERMINATED_PER_FW_REQ_INTERRUPT)) {
 		/* immediately mark PXP as inactive on termination */
 		intel_pxp_mark_termination_in_progress(pxp);
-		pxp->session_events |= PXP_TERMINATION_REQUEST | PXP_INVAL_REQUIRED |
-				       PXP_EVENT_TYPE_IRQ;
+		pxp->session_events |= PXP_TERMINATION_REQUEST | PXP_INVAL_REQUIRED;
 	}
 
 	if (iir & GEN12_DISPLAY_STATE_RESET_COMPLETE_INTERRUPT)
-		pxp->session_events |= PXP_TERMINATION_COMPLETE | PXP_EVENT_TYPE_IRQ;
+		pxp->session_events |= PXP_TERMINATION_COMPLETE;
 
 	if (pxp->session_events)
 		queue_work(system_unbound_wq, &pxp->session_work);
@@ -69,7 +62,7 @@ static inline void pxp_irq_reset(struct intel_gt *gt)
 
 void intel_pxp_irq_enable(struct intel_pxp *pxp)
 {
-	struct intel_gt *gt = pxp->ctrl_gt;
+	struct intel_gt *gt = pxp_to_gt(pxp);
 
 	spin_lock_irq(gt->irq_lock);
 
@@ -84,7 +77,7 @@ void intel_pxp_irq_enable(struct intel_pxp *pxp)
 
 void intel_pxp_irq_disable(struct intel_pxp *pxp)
 {
-	struct intel_gt *gt = pxp->ctrl_gt;
+	struct intel_gt *gt = pxp_to_gt(pxp);
 
 	/*
 	 * We always need to submit a global termination when we re-enable the

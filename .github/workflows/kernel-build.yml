@@ -60,7 +60,25 @@ jobs:
         run: |
           echo "🔄 Ensuring correct Android 14 6.1 2025-09 kernel source..."
           
-          # Remove existing kernel directory
+          # Check if local kernel exists and is correct version
+          if [ -d "kernel" ] && [ -f "kernel/Makefile" ]; then
+            echo "🔍 Checking existing kernel version..."
+            cd kernel
+            VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3)
+            PATCHLEVEL=$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3)
+            cd ..
+            
+            if [ "$VERSION" = "6" ] && [ "$PATCHLEVEL" = "1" ]; then
+              echo "✅ Local kernel is already correct version (6.1.x), skipping clone"
+              exit 0
+            else
+              echo "⚠️ Local kernel is wrong version ($VERSION.$PATCHLEVEL), will replace"
+            fi
+          else
+            echo "📥 No local kernel found or invalid, will clone"
+          fi
+          
+          # Remove existing kernel directory if wrong version
           rm -rf kernel
           
           # Clone from AOSP mirror with the exact branch

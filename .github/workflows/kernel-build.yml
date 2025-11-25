@@ -401,10 +401,8 @@ jobs:
             echo "🔧 Unpacking stock boot image..."
             ./magiskboot unpack stock_boot.img
             
-            echo "🔧 Cleaning ramdisk..."
-            ./magiskboot cpio ramdisk.cpio "exists .backup" && ./magiskboot cpio ramdisk.cpio "rm .backup"
-            ./magiskboot cpio ramdisk.cpio "exists magisk" && ./magiskboot cpio ramdisk.cpio "rm magisk"
-            ./magiskboot cpio ramdisk.cpio "exists overlay.d" && ./magiskboot cpio ramdisk.cpio "rm overlay.d"
+            # Skip ramdisk cleaning - keep original ramdisk intact
+            echo "🔧 Keeping original ramdisk..."
             
             # Replace kernel with Image file
             echo "🔧 Replacing kernel..."

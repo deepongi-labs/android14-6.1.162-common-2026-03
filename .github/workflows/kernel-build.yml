@@ -377,7 +377,6 @@ jobs:
           CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_LOCALVERSION="-deepongi+"
           CONFIG_ZRAM=y
-          CONFIG_F2FS_FS=y
           CONFIG_NET_SCH_CAKE=y
           EOF
 

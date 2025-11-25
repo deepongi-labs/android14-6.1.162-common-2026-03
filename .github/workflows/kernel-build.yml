@@ -17,7 +17,6 @@ on:
   schedule:
     - cron: '0 0 * * 0'
 
-# Add permissions here
 permissions:
   contents: write
   packages: write
@@ -51,12 +50,99 @@ jobs:
           echo "ENABLE_SUSFS=$ENABLE_SUSFS" >> $GITHUB_ENV
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
 
-      - name: Get Kernel Source
+      - name: Check Kernel Source Updates
+        id: kernel-check
         run: |
+          echo "🔍 Checking for kernel source updates..."
+          
+          if [ ! -d "kernel" ] || [ ! -f "kernel/Makefile" ]; then
+            echo "📥 Kernel source not found, will clone"
+            echo "needs_clone=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          cd kernel
+          VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3)
+          PATCHLEVEL=$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3)
+          cd ..
+          
+          if [ "$VERSION" != "6" ] || [ "$PATCHLEVEL" != "1" ]; then
+            echo "⚠️ Kernel source is wrong version ($VERSION.$PATCHLEVEL), will replace"
+            echo "needs_clone=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if we can check for remote updates
+          if [ -d "kernel/.git" ]; then
+            cd kernel
+            git fetch origin android14-6.1-2025-09
+            LOCAL_COMMIT=$(git rev-parse HEAD)
+            REMOTE_COMMIT=$(git rev-parse origin/android14-6.1-2025-09)
+            
+            if [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
+              echo "🔄 New kernel commits available, will update"
+              echo "needs_clone=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Kernel source is up to date"
+              echo "needs_clone=false" >> $GITHUB_OUTPUT
+            fi
+            cd ..
+          else
+            echo "⚠️ Kernel source is not a git repo, will clone fresh"
+            echo "needs_clone=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Kernel Source
+        if: steps.kernel-check.outputs.needs_clone == 'true'
+        run: |
+          echo "📥 Cloning fresh kernel source..."
           rm -rf kernel
           git clone --depth=1 --branch=android14-6.1-2025-09 \
             https://github.com/aosp-mirror/kernel_common kernel
           rm -rf kernel/.git
+          echo "✅ Kernel source cloned successfully"
+
+      - name: Check SuSFS Updates
+        id: susfs-check
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          echo "🔍 Checking for SuSFS updates..."
+          
+          if [ ! -d "susfs4ksu" ]; then
+            echo "📥 SuSFS source not found, will clone"
+            echo "needs_susfs_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if susfs4ksu is a git repo and has updates
+          if [ -d "susfs4ksu/.git" ]; then
+            cd susfs4ksu
+            git fetch origin
+            LOCAL_COMMIT=$(git rev-parse HEAD)
+            REMOTE_COMMIT=$(git rev-parse origin/gki-android14-6.1)
+            
+            if [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
+              echo "🔄 New SuSFS commits available, will update"
+              echo "needs_susfs_update=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ SuSFS source is up to date"
+              echo "needs_susfs_update=false" >> $GITHUB_OUTPUT
+            fi
+            cd ..
+          else
+            echo "⚠️ SuSFS source is not a git repo, will use existing"
+            echo "needs_susfs_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update SuSFS Source
+        if: env.ENABLE_SUSFS == 'true' && steps.susfs-check.outputs.needs_susfs_update == 'true'
+        run: |
+          echo "📥 Updating SuSFS source..."
+          rm -rf susfs4ksu
+          git clone --depth=1 --branch=gki-android14-6.1 \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          rm -rf susfs4ksu/.git
+          echo "✅ SuSFS source updated successfully"
 
       - name: Setup KernelSU
         run: |
@@ -259,8 +345,15 @@ jobs:
             cp -r ../susfs4ksu/ksu_module_susfs/* modules/
           fi
 
-          TIMESTAMP=$(date +%Y%m%d_%H%M)
-          ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+          TIMESTAMP=$(date +%Y%m%d-%H%M)
+          
+          # Different ZIP names based on SuSFS status
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+          else
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUS.zip"
+          fi
+          
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
           cd ..
           
@@ -279,7 +372,7 @@ jobs:
           retention-days: 30
 
       - name: Create Release
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success()
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}

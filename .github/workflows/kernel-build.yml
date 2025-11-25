@@ -74,13 +74,21 @@ jobs:
           patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
           cd ..
           
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o fix.patch
-          patch -p1 --forward < fix.patch || true
-          rm fix.patch
+          # Apply proc base fix patch (SuSFS related)
+          echo "📋 Applying fix_proc_base.patch"
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix_proc_base.patch" -o fix_proc_base.patch
+          patch -p1 --forward < fix_proc_base.patch || true
+          rm fix_proc_base.patch
+
+      - name: Apply Essential Patches
+        run: |
+          cd kernel
           
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix_proc_base.patch" -o fix.patch
-          patch -p1 --forward < fix.patch || true
-          rm fix.patch
+          # Always apply CLIDR fix patch
+          echo "📋 Applying fix-clidr-uninitialized.patch (essential)"
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o fix-clidr-uninitialized.patch
+          patch -p1 --forward < fix-clidr-uninitialized.patch || true
+          rm fix-clidr-uninitialized.patch
 
       - name: Patch Scripts
         run: |

@@ -355,9 +355,9 @@ jobs:
           
           # Different ZIP names based on SuSFS status
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
           else
-            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUS.zip"
+            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUSFS.zip"
           fi
           
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"

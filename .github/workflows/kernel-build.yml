@@ -652,7 +652,7 @@ jobs:
         run: |
           cd AnyKernel3
           TIMESTAMP=$(date +%Y%m%d_%H%M)
-          ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-susfs${{ env.SUSFS_VERSION }}.zip"
+          ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"

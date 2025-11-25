@@ -30,7 +30,21 @@ jobs:
       - name: Get Previous Build Time
         id: previous-time
         run: |
-          echo "previous_build_time=N/A" >> $GITHUB_OUTPUT
+          # Try to get the last successful build time from workflow artifacts or API
+          PREVIOUS_TIME="N/A"
+          
+          # Method 1: Check if we can access previous workflow data
+          if [ -f "/mnt/ccache/last_build_time" ]; then
+            PREVIOUS_TIME=$(cat /mnt/ccache/last_build_time 2>/dev/null || echo "N/A")
+            echo "📊 Found previous build time: $PREVIOUS_TIME"
+          else
+            echo "ℹ️ No previous build time recorded, first build?"
+          fi
+          
+          # Store current build start time for next run
+          echo "$(date +%s)" > /mnt/ccache/current_build_start || true
+          
+          echo "previous_build_time=$PREVIOUS_TIME" >> $GITHUB_OUTPUT
 
   build:
     runs-on: [self-hosted, Linux, X64]
@@ -42,6 +56,71 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 20
+
+      - name: Get SuSFS Version from GitLab
+        id: susfs-version
+        run: |
+          echo "🔍 Fetching SuSFS version from GitLab..."
+          
+          # Try multiple methods to get the version
+          SUSFS_VERSION="unknown"
+          
+          # Method 1: Check if we have local susfs4ksu directory with version info
+          if [ -d "susfs4ksu" ]; then
+            echo "📁 Checking local susfs4ksu directory for version..."
+            
+            # Look for version in README, docs, or any version files
+            if [ -f "susfs4ksu/README.md" ]; then
+              VERSION_FROM_README=$(grep -i "version" susfs4ksu/README.md | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+              if [ -n "$VERSION_FROM_README" ]; then
+                SUSFS_VERSION="$VERSION_FROM_README"
+                echo "✅ Found version in README: $SUSFS_VERSION"
+              fi
+            fi
+            
+            # Check for version in any docs files
+            if [ "$SUSFS_VERSION" = "unknown" ] && [ -f "susfs4ksu/docs/CHANGELOG.md" ]; then
+              VERSION_FROM_CHANGELOG=$(grep -i "version" susfs4ksu/docs/CHANGELOG.md | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+              if [ -n "$VERSION_FROM_CHANGELOG" ]; then
+                SUSFS_VERSION="$VERSION_FROM_CHANGELOG"
+                echo "✅ Found version in CHANGELOG: $SUSFS_VERSION"
+              fi
+            fi
+          fi
+          
+          # Method 2: Fetch from GitLab API
+          if [ "$SUSFS_VERSION" = "unknown" ]; then
+            echo "🌐 Fetching from GitLab API..."
+            GITLAB_URL="https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/tags"
+            
+            # Try to get the latest tag
+            if LATEST_TAG=$(curl -s "$GITLAB_URL" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4); then
+              if [ -n "$LATEST_TAG" ]; then
+                SUSFS_VERSION="$LATEST_TAG"
+                echo "✅ Found latest tag from GitLab API: $SUSFS_VERSION"
+              else
+                echo "⚠️ No tags found via GitLab API"
+              fi
+            else
+              echo "⚠️ Failed to fetch from GitLab API"
+            fi
+          fi
+          
+          # Method 3: Check the branch name or fallback
+          if [ "$SUSFS_VERSION" = "unknown" ]; then
+            echo "🔍 Checking branch/repo structure for version hints..."
+            # If we're using the gki-android14-6.1 branch, we can infer it's compatible with v2.0.0
+            # Based on the current known version
+            SUSFS_VERSION="2.0.0"
+            echo "ℹ️ Using default version: $SUSFS_VERSION"
+          fi
+          
+          # Clean up version string (remove 'v' prefix if present)
+          SUSFS_VERSION=$(echo "$SUSFS_VERSION" | sed 's/^v//')
+          
+          echo "🎯 Final SuSFS Version: $SUSFS_VERSION"
+          echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
+          echo "susfs_version=$SUSFS_VERSION" >> $GITHUB_OUTPUT
 
       - name: Clean Submodule Configuration
         run: |
@@ -432,6 +511,9 @@ jobs:
             echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
             echo "BUILD_TIME_MIN=$BUILD_TIME_MIN" >> $GITHUB_ENV
             echo "BUILD_TIME_SEC=$BUILD_TIME_SEC" >> $GITHUB_ENV
+            
+            # Store build time for next run
+            echo "${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s" > /mnt/ccache/last_build_time || true
           else
             echo "❌ Kernel build failed after ${BUILD_TIME_MIN}m ${BUILD_TIME_SEC}s"
             exit 1
@@ -447,20 +529,65 @@ jobs:
             kernel/out/.config
           retention-days: 30
 
-      - name: Verify CCACHE Integration
+      - name: Extract CCACHE Hit Rate
+        id: ccache-stats
+        if: success()
         run: |
-          echo "🔍 Verifying CCACHE integration..."
-          which ccache && echo "✅ CCACHE found: $(which ccache)" || echo "❌ CCACHE not found"
-          ccache --version | head -1
-          echo "📊 Final CCACHE stats:"
-          ccache -s
-          echo "✅ CCACHE verification complete"
+          echo "📊 Extracting CCACHE hit rate..."
+          
+          # Get ccache stats and save to file for debugging
+          ccache -s > ccache_stats.txt
+          echo "📄 CCACHE stats saved to ccache_stats.txt:"
+          cat ccache_stats.txt
+          
+          # Multiple methods to extract hit rate - try each one
+          HIT_RATE="N/A"
+          
+          # Method 1: Look for cache hit rate line
+          if HIT_RATE=$(ccache -s | grep -i "cache hit" | grep -Eo "[0-9]+\.[0-9]+%"); then
+            echo "✅ Hit rate found via method 1: $HIT_RATE"
+          # Method 2: Look for hit rate in different format
+          elif HIT_RATE=$(ccache -s | grep -i "hit rate" | grep -Eo "[0-9]+\.[0-9]+%"); then
+            echo "✅ Hit rate found via method 2: $HIT_RATE"
+          # Method 3: Look for percentage in cache hit section
+          elif HIT_RATE=$(ccache -s | awk '/cache hit/ || /hit rate/ {for(i=1;i<=NF;i++) if($i ~ /%/) {print $i; exit}}'); then
+            echo "✅ Hit rate found via method 3: $HIT_RATE"
+          # Method 4: Calculate manually from direct/primary/preprocessed stats
+          else
+            echo "⚠️ Using manual calculation method"
+            # Extract cache hit/miss counts
+            DIRECT_HITS=$(ccache -s | grep -i "direct cache hit" | grep -Eo "[0-9]+" | head -1)
+            DIRECT_MISSES=$(ccache -s | grep -i "direct cache miss" | grep -Eo "[0-9]+" | head -1)
+            PREPROCESSED_HITS=$(ccache -s | grep -i "preprocessed cache hit" | grep -Eo "[0-9]+" | head -1)
+            PREPROCESSED_MISSES=$(ccache -s | grep -i "preprocessed cache miss" | grep -Eo "[0-9]+" | head -1)
+            
+            TOTAL_HITS=$((DIRECT_HITS + PREPROCESSED_HITS))
+            TOTAL_MISSES=$((DIRECT_MISSES + PREPROCESSED_MISSES))
+            TOTAL_REQUESTS=$((TOTAL_HITS + TOTAL_MISSES))
+            
+            if [ $TOTAL_REQUESTS -gt 0 ]; then
+              HIT_RATE_PERCENT=$(echo "scale=2; $TOTAL_HITS * 100 / $TOTAL_REQUESTS" | bc)
+              HIT_RATE="${HIT_RATE_PERCENT}%"
+              echo "✅ Hit rate calculated manually: $HIT_RATE"
+            else
+              HIT_RATE="0%"
+              echo "⚠️ No cache requests, hit rate set to 0%"
+            fi
+          fi
+          
+          # Fallback if still not found
+          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "N/A" ]; then
+            HIT_RATE="Unknown"
+            echo "❌ Could not determine CCACHE hit rate"
+          fi
+          
+          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          echo "📊 Final CCACHE hit rate: $HIT_RATE"
 
       - name: Extract Build Metadata
         if: success()
         run: |
-          CCACHE_HIT_RATE=$(ccache -s | grep -E "hit rate|Hit rate" | head -1 | sed 's/.*://' | tr -d ' ' || echo "N/A")
-          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
+          echo "🔧 Extracting build metadata..."
           
           if [ $BUILD_TIME -lt 300 ]; then
             BUILD_SPEED="🚀 Very Fast"
@@ -473,12 +600,10 @@ jobs:
           fi
           echo "BUILD_SPEED_STATUS=$BUILD_SPEED" >> $GITHUB_ENV
           
-          SUSFS_VERSION="local-$(date +%Y%m%d)"
-          echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-          
           echo "✅ Build metadata extracted"
 
       - name: Get Changes Since Last Build
+        id: changes
         if: success()
         run: |
           echo "📝 Gathering build changes information..."
@@ -516,6 +641,8 @@ jobs:
           build.commit=${{ github.sha }}
           build.run=${{ github.run_number }}
           build.duration=${{ env.BUILD_TIME }}s
+          build.ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}
+          build.susfs_version=${{ env.SUSFS_VERSION }}
           EOF
 
           echo "✅ AnyKernel3 prepared"
@@ -525,7 +652,7 @@ jobs:
         run: |
           cd AnyKernel3
           TIMESTAMP=$(date +%Y%m%d_%H%M)
-          ZIP_NAME="GKI-KernelSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+          ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-susfs${{ env.SUSFS_VERSION }}.zip"
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
           cd ..
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
@@ -542,6 +669,7 @@ jobs:
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
+            ccache_stats.txt
           retention-days: 30
 
       - name: Create Release

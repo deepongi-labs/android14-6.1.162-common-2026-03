@@ -144,6 +144,13 @@ jobs:
           rm -rf susfs4ksu/.git
           echo "✅ SuSFS source updated successfully"
 
+      - name: Clean ABI Exports
+        run: |
+          cd kernel
+          echo "🧹 Cleaning ABI protected exports..."
+          rm -vf android/abi_gki_protected_exports_* || true
+          echo "✅ ABI exports cleaned"
+
       - name: Setup KernelSU
         run: |
           cd kernel
@@ -372,7 +379,7 @@ jobs:
           retention-days: 30
 
       - name: Create Release
-        if: success()
+        if: success() && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}

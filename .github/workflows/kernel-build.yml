@@ -99,7 +99,6 @@ jobs:
           rm -rf kernel
           git clone --depth=1 --branch=android14-6.1-2025-09 \
             https://github.com/aosp-mirror/kernel_common kernel
-          rm -rf kernel/.git
           echo "✅ Kernel source cloned successfully"
 
       - name: Check SuSFS Updates

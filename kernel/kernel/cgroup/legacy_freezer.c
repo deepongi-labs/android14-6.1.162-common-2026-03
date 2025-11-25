@@ -66,9 +66,15 @@ static struct freezer *parent_freezer(struct freezer *freezer)
 bool cgroup_freezing(struct task_struct *task)
 {
 	bool ret;
+	unsigned int state;
 
 	rcu_read_lock();
-	ret = task_freezer(task)->state & CGROUP_FREEZING;
+	/* Check if the cgroup is still FREEZING, but not FROZEN. The extra
+	 * !FROZEN check is required, because the FREEZING bit is not cleared
+	 * when the state FROZEN is reached.
+	 */
+	state = task_freezer(task)->state;
+	ret = (state & CGROUP_FREEZING) && !(state & CGROUP_FROZEN);
 	rcu_read_unlock();
 
 	return ret;
@@ -100,7 +106,8 @@ freezer_css_alloc(struct cgroup_subsys_state *parent_css)
  * @css: css being created
  *
  * We're committing to creation of @css.  Mark it online and inherit
- * parent's freezing state while holding cpus read lock and freezer_mutex.
+ * parent's freezing state while holding both parent's and our
+ * freezer->lock.
  */
 static int freezer_css_online(struct cgroup_subsys_state *css)
 {
@@ -126,7 +133,7 @@ static int freezer_css_online(struct cgroup_subsys_state *css)
  * freezer_css_offline - initiate destruction of a freezer css
  * @css: css being destroyed
  *
- * @css is going away.  Mark it dead and decrement freezer_active if
+ * @css is going away.  Mark it dead and decrement system_freezing_count if
  * it was holding one.
  */
 static void freezer_css_offline(struct cgroup_subsys_state *css)
@@ -423,11 +430,9 @@ static ssize_t freezer_write(struct kernfs_open_file *of,
 
 	if (strcmp(buf, freezer_state_strs(0)) == 0)
 		freeze = false;
-	else if (strcmp(buf, freezer_state_strs(CGROUP_FROZEN)) == 0) {
-		pr_info_once("Freezing with imperfect legacy cgroup freezer. "
-			     "See cgroup.freeze of cgroup v2\n");
+	else if (strcmp(buf, freezer_state_strs(CGROUP_FROZEN)) == 0)
 		freeze = true;
-	} else
+	else
 		return -EINVAL;
 
 	freezer_change_state(css_freezer(of_css(of)), freeze);
@@ -479,3 +484,4 @@ struct cgroup_subsys freezer_cgrp_subsys = {
 	.fork		= freezer_fork,
 	.legacy_cftypes	= files,
 };
+EXPORT_SYMBOL_GPL(freezer_cgrp_subsys);

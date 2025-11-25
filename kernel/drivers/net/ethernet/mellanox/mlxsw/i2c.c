@@ -424,7 +424,9 @@ mlxsw_i2c_cmd(struct device *dev, u16 opcode, u32 in_mod, size_t in_mbox_size,
 
 	if (in_mbox) {
 		reg_size = mlxsw_i2c_get_reg_size(in_mbox);
-		num = DIV_ROUND_UP(reg_size, mlxsw_i2c->block_size);
+		num = reg_size / mlxsw_i2c->block_size;
+		if (reg_size % mlxsw_i2c->block_size)
+			num++;
 
 		if (mutex_lock_interruptible(&mlxsw_i2c->cmd.lock) < 0) {
 			dev_err(&client->dev, "Could not acquire lock");
@@ -516,7 +518,7 @@ static bool mlxsw_i2c_skb_transmit_busy(void *bus_priv,
 }
 
 static int mlxsw_i2c_skb_transmit(void *bus_priv, struct sk_buff *skb,
-				  const struct mlxsw_txhdr_info *txhdr_info)
+				  const struct mlxsw_tx_info *tx_info)
 {
 	return 0;
 }
@@ -631,9 +633,9 @@ static const struct mlxsw_bus mlxsw_i2c_bus = {
 	.cmd_exec		= mlxsw_i2c_cmd_exec,
 };
 
-static int mlxsw_i2c_probe(struct i2c_client *client)
+static int mlxsw_i2c_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	const struct i2c_adapter_quirks *quirks = client->adapter->quirks;
 	struct mlxsw_i2c *mlxsw_i2c;
 	u8 status;

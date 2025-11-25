@@ -104,11 +104,10 @@ static enum event_status read_event(int cpu)
 
 static enum event_status read_page(int cpu)
 {
-	struct buffer_data_read_page *bpage;
 	struct ring_buffer_event *event;
 	struct rb_page *rpage;
 	unsigned long commit;
-	int page_size;
+	void *bpage;
 	int *entry;
 	int ret;
 	int inc;
@@ -118,15 +117,14 @@ static enum event_status read_page(int cpu)
 	if (IS_ERR(bpage))
 		return EVENT_DROPPED;
 
-	page_size = ring_buffer_subbuf_size_get(buffer);
-	ret = ring_buffer_read_page(buffer, bpage, page_size, cpu, 1);
+	ret = ring_buffer_read_page(buffer, &bpage, PAGE_SIZE, cpu, 1);
 	if (ret >= 0) {
-		rpage = ring_buffer_read_page_data(bpage);
+		rpage = bpage;
 		/* The commit may have missed event flags set, clear them */
 		commit = local_read(&rpage->commit) & 0xfffff;
 		for (i = 0; i < commit && !test_error ; i += inc) {
 
-			if (i >= (page_size - offsetof(struct rb_page, data))) {
+			if (i >= (PAGE_SIZE - offsetof(struct rb_page, data))) {
 				TEST_ERROR();
 				break;
 			}
@@ -260,7 +258,7 @@ static void ring_buffer_producer(void)
 				hit++;
 				entry = ring_buffer_event_data(event);
 				*entry = smp_processor_id();
-				ring_buffer_unlock_commit(buffer);
+				ring_buffer_unlock_commit(buffer, event);
 			}
 		}
 		end_time = ktime_get();
@@ -307,14 +305,14 @@ static void ring_buffer_producer(void)
 	if (!disable_reader) {
 		if (consumer_fifo)
 			trace_printk("Running Consumer at SCHED_FIFO %s\n",
-				     str_low_high(consumer_fifo == 1));
+				     consumer_fifo == 1 ? "low" : "high");
 		else
 			trace_printk("Running Consumer at nice: %d\n",
 				     consumer_nice);
 	}
 	if (producer_fifo)
 		trace_printk("Running Producer at SCHED_FIFO %s\n",
-			     str_low_high(producer_fifo == 1));
+			     producer_fifo == 1 ? "low" : "high");
 	else
 		trace_printk("Running Producer at nice: %d\n",
 			     producer_nice);

@@ -22,6 +22,7 @@
 #include <linux/debugfs.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <linux/android_kabi.h>
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
@@ -32,6 +33,8 @@
 #include <linux/phy/phy.h>
 
 #include <linux/power_supply.h>
+
+#include <linux/android_kabi.h>
 
 /*
  * DWC3 Multiport controllers support up to 15 High-Speed PHYs
@@ -81,7 +84,7 @@
 #define DWC3_GSNPSREV_MASK	0xffff
 #define DWC3_GSNPS_ID(p)	(((p) & DWC3_GSNPSID_MASK) >> 16)
 
-/* DWC3 registers memory space boundaries */
+/* DWC3 registers memory space boundries */
 #define DWC3_XHCI_REGS_START		0x0
 #define DWC3_XHCI_REGS_END		0x7fff
 #define DWC3_GLOBALS_REGS_START		0xc100
@@ -90,8 +93,6 @@
 #define DWC3_DEVICE_REGS_END		0xcbff
 #define DWC3_OTG_REGS_START		0xcc00
 #define DWC3_OTG_REGS_END		0xccff
-
-#define DWC3_RTK_RTD_GLOBALS_REGS_START	0x8100
 
 /* Global Registers */
 #define DWC3_GSBUSCFG0		0xc100
@@ -179,7 +180,7 @@
 #define DWC3_OEVTEN		0xcc0C
 #define DWC3_OSTS		0xcc10
 
-#define DWC3_LLUCTL(n)		(0xd024 + ((n) * 0x80))
+#define DWC3_LLUCTL		0xd024
 
 /* Bit fields */
 
@@ -193,10 +194,6 @@
 #define DWC3_GSBUSCFG0_INCR4BRSTENA	(1 << 1) /* INCR4 burst */
 #define DWC3_GSBUSCFG0_INCRBRSTENA	(1 << 0) /* undefined length enable */
 #define DWC3_GSBUSCFG0_INCRBRST_MASK	0xff
-
-/* Global SoC Bus Configuration Register: AHB-prot/AXI-cache/OCP-ReqInfo */
-#define DWC3_GSBUSCFG0_REQINFO(n)	(((n) & 0xffff) << 16)
-#define DWC3_GSBUSCFG0_REQINFO_UNSPECIFIED	0xffffffff
 
 /* Global Debug LSP MUX Select */
 #define DWC3_GDBGLSPMUX_ENDBC		BIT(15)	/* Host only */
@@ -223,11 +220,6 @@
 #define DWC3_GRXTHRCFG_MAXRXBURSTSIZE(n) (((n) & 0x1f) << 19)
 #define DWC3_GRXTHRCFG_RXPKTCNT(n) (((n) & 0xf) << 24)
 #define DWC3_GRXTHRCFG_PKTCNTSEL BIT(29)
-
-/* Global TX Threshold Configuration Register */
-#define DWC3_GTXTHRCFG_MAXTXBURSTSIZE(n) (((n) & 0xff) << 16)
-#define DWC3_GTXTHRCFG_TXPKTCNT(n) (((n) & 0xf) << 24)
-#define DWC3_GTXTHRCFG_PKTCNTSEL BIT(29)
 
 /* Global RX Threshold Configuration Register for DWC_usb31 only */
 #define DWC31_GRXTHRCFG_MAXRXBURSTSIZE(n)	(((n) & 0x1f) << 16)
@@ -298,7 +290,6 @@
 /* Global USB2 PHY Configuration Register */
 #define DWC3_GUSB2PHYCFG_PHYSOFTRST	BIT(31)
 #define DWC3_GUSB2PHYCFG_U2_FREECLK_EXISTS	BIT(30)
-#define DWC3_GUSB2PHYCFG_ULPIEXTVBUSDRV	BIT(17)
 #define DWC3_GUSB2PHYCFG_SUSPHY		BIT(6)
 #define DWC3_GUSB2PHYCFG_ULPI_UTMI	BIT(4)
 #define DWC3_GUSB2PHYCFG_ENBLSLPM	BIT(8)
@@ -425,7 +416,6 @@
 
 /* Global User Control Register 3 */
 #define DWC3_GUCTL3_SPLITDISABLE		BIT(14)
-#define DWC3_GUCTL3_USB20_RETRY_DISABLE		BIT(16)
 
 /* Device Configuration Register */
 #define DWC3_DCFG_NUMLANES(n)	(((n) & 0x3) << 30) /* DWC_usb32 only */
@@ -548,7 +538,6 @@
 #define DWC3_DGCMD_SET_ENDPOINT_NRDY	0x0c
 #define DWC3_DGCMD_SET_ENDPOINT_PRIME	0x0d
 #define DWC3_DGCMD_RUN_SOC_BUS_LOOPBACK	0x10
-#define DWC3_DGCMD_DEV_NOTIFICATION	0x07
 
 #define DWC3_DGCMD_STATUS(n)		(((n) >> 12) & 0x0F)
 #define DWC3_DGCMD_CMDACT		BIT(10)
@@ -561,8 +550,6 @@
 #define DWC3_DGCMDPAR_TX_FIFO			BIT(5)
 #define DWC3_DGCMDPAR_LOOPBACK_DIS		(0 << 0)
 #define DWC3_DGCMDPAR_LOOPBACK_ENA		BIT(0)
-#define DWC3_DGCMDPAR_DN_FUNC_WAKE		BIT(0)
-#define DWC3_DGCMDPAR_INTF_SEL(n)		((n) << 4)
 
 /* Device Endpoint Command Register */
 #define DWC3_DEPCMD_PARAM_SHIFT		16
@@ -704,6 +691,8 @@ struct dwc3_event_buffer {
 	dma_addr_t		dma;
 
 	struct dwc3		*dwc;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #define DWC3_EP_FLAG_STALLED	BIT(0)
@@ -717,7 +706,6 @@ struct dwc3_event_buffer {
 /**
  * struct dwc3_ep - device side endpoint representation
  * @endpoint: usb endpoint
- * @nostream_work: work for handling bulk NoStream
  * @cancelled_list: list of cancelled requests for this endpoint
  * @pending_list: list of pending requests for this endpoint
  * @started_list: list of started requests on this endpoint
@@ -744,7 +732,6 @@ struct dwc3_event_buffer {
  */
 struct dwc3_ep {
 	struct usb_ep		endpoint;
-	struct delayed_work	nostream_work;
 	struct list_head	cancelled_list;
 	struct list_head	pending_list;
 	struct list_head	started_list;
@@ -767,7 +754,7 @@ struct dwc3_ep {
 #define DWC3_EP_WAIT_TRANSFER_COMPLETE	BIT(7)
 #define DWC3_EP_IGNORE_NEXT_NOSTREAM	BIT(8)
 #define DWC3_EP_FORCE_RESTART_STREAM	BIT(9)
-#define DWC3_EP_STREAM_PRIMED		BIT(10)
+#define DWC3_EP_FIRST_STREAM_PRIMED	BIT(10)
 #define DWC3_EP_PENDING_CLEAR_STALL	BIT(11)
 #define DWC3_EP_TXFIFO_RESIZED		BIT(12)
 #define DWC3_EP_DELAY_STOP             BIT(13)
@@ -802,6 +789,9 @@ struct dwc3_ep {
 	/* For isochronous START TRANSFER workaround only */
 	u8			combo_num;
 	int			start_cmd_status;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 enum dwc3_phy {
@@ -913,13 +903,15 @@ struct dwc3_hwparams {
 	u32	hwparams7;
 	u32	hwparams8;
 	u32	hwparams9;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /* HWPARAMS0 */
 #define DWC3_MODE(n)		((n) & 0x7)
 
 /* HWPARAMS1 */
-#define DWC3_SPRAM_TYPE(n)	(((n) >> 23) & 1)
 #define DWC3_NUM_INT(n)		(((n) & (0x3f << 15)) >> 15)
 
 /* HWPARAMS3 */
@@ -929,9 +921,6 @@ struct dwc3_hwparams {
 			(DWC3_NUM_EPS_MASK)) >> 12)
 #define DWC3_NUM_IN_EPS(p)	(((p)->hwparams3 &		\
 			(DWC3_NUM_IN_EPS_MASK)) >> 18)
-
-/* HWPARAMS6 */
-#define DWC3_RAM0_DEPTH(n)	(((n) & (0xffff0000)) >> 16)
 
 /* HWPARAMS7 */
 #define DWC3_RAM1_DEPTH(n)	((n) & 0xffff)
@@ -945,14 +934,18 @@ struct dwc3_hwparams {
  * @request: struct usb_request to be transferred
  * @list: a list_head used for request queueing
  * @dep: struct dwc3_ep owning this request
+ * @sg: pointer to first incomplete sg
  * @start_sg: pointer to the sg which should be queued next
  * @num_pending_sgs: counter to pending sgs
+ * @num_queued_sgs: counter to the number of sgs which already got queued
  * @remaining: amount of data remaining
  * @status: internal dwc3 request status tracking
  * @epnum: endpoint number to which this request refers
  * @trb: pointer to struct dwc3_trb
  * @trb_dma: DMA address of @trb
  * @num_trbs: number of TRBs used by this request
+ * @needs_extra_trb: true when request needs one extra TRB (either due to ZLP
+ *	or unaligned OUT)
  * @direction: IN or OUT direction flag
  * @mapped: true when request has been dma-mapped
  */
@@ -960,9 +953,11 @@ struct dwc3_request {
 	struct usb_request	request;
 	struct list_head	list;
 	struct dwc3_ep		*dep;
+	struct scatterlist	*sg;
 	struct scatterlist	*start_sg;
 
 	unsigned int		num_pending_sgs;
+	unsigned int		num_queued_sgs;
 	unsigned int		remaining;
 
 	unsigned int		status;
@@ -980,8 +975,12 @@ struct dwc3_request {
 
 	unsigned int		num_trbs;
 
+	unsigned int		needs_extra_trb:1;
 	unsigned int		direction:1;
 	unsigned int		mapped:1;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /*
@@ -993,25 +992,16 @@ struct dwc3_scratchpad_array {
 };
 
 /**
- * struct dwc3_glue_ops - The ops indicate the notifications that
- *				need to be passed on to glue layer
- * @pre_set_role: Notify glue of role switch notifications
- * @pre_run_stop: Notify run stop enable/disable information to glue
- */
-struct dwc3_glue_ops {
-	void	(*pre_set_role)(struct dwc3 *dwc, enum usb_role role);
-	void	(*pre_run_stop)(struct dwc3 *dwc, bool is_on);
-};
-
-/**
  * struct dwc3 - representation of our controller
  * @drd_work: workqueue used for role swapping
  * @ep0_trb: trb which is used for the ctrl_req
  * @bounce: address of bounce buffer
+ * @scratchbuf: address of scratch buffer
  * @setup_buf: used while precessing STD USB requests
  * @ep0_trb_addr: dma address of @ep0_trb
  * @bounce_addr: dma address of @bounce
  * @ep0_usb_req: dummy req used while handling STD USB requests
+ * @scratch_addr: dma address of scratchbuf
  * @ep0_in_setup: one control transfer is completed and enter setup phase
  * @lock: for synchronizing
  * @mutex: for mode switching
@@ -1023,12 +1013,9 @@ struct dwc3_glue_ops {
  * @eps: endpoint array
  * @gadget: device side representation of the peripheral controller
  * @gadget_driver: pointer to the gadget driver
- * @glue_ops: Vendor callbacks for flattened device implementations.
  * @bus_clk: clock for accessing the registers
  * @ref_clk: reference clock
  * @susp_clk: clock used when the SS phy is in low power (S3) state
- * @utmi_clk: clock used for USB2 PHY communication
- * @pipe_clk: clock used for USB3 PHY communication
  * @reset: reset control
  * @regs: base address for our registers
  * @regs_size: address space size
@@ -1039,6 +1026,7 @@ struct dwc3_glue_ops {
  * @current_otg_role: current role of operation while using the OTG block
  * @desired_otg_role: desired role of operation while using the OTG block
  * @otg_restart_host: flag that OTG controller needs to restart host
+ * @nr_scratch: number of scratch buffers
  * @u1u2: only used on revisions <1.83a for workaround
  * @maximum_speed: maximum speed requested (mainly for testing purposes)
  * @max_ssp_rate: SuperSpeed Plus maximum signaling rate and lane count
@@ -1062,10 +1050,8 @@ struct dwc3_glue_ops {
  * @usb_psy: pointer to power supply interface.
  * @usb2_phy: pointer to USB2 PHY
  * @usb3_phy: pointer to USB3 PHY
- * @usb2_generic_phy: pointer to array of USB2 PHYs
- * @usb3_generic_phy: pointer to array of USB3 PHYs
- * @num_usb2_ports: number of USB2 ports
- * @num_usb3_ports: number of USB3 ports
+ * @usb2_generic_phy: pointer to USB2 PHY
+ * @usb3_generic_phy: pointer to USB3 PHY
  * @phys_ready: flag to indicate that PHYs are ready
  * @ulpi: pointer to ulpi interface
  * @ulpi_ready: flag to indicate that ULPI is initialized
@@ -1085,23 +1071,19 @@ struct dwc3_glue_ops {
  * @test_mode_nr: test feature selector
  * @lpm_nyet_threshold: LPM NYET response threshold
  * @hird_threshold: HIRD threshold
- * @rx_thr_num_pkt: USB receive packet count
- * @rx_max_burst: max USB receive burst size
- * @tx_thr_num_pkt: USB transmit packet count
- * @tx_max_burst: max USB transmit burst size
  * @rx_thr_num_pkt_prd: periodic ESS receive packet count
  * @rx_max_burst_prd: max periodic ESS receive burst size
  * @tx_thr_num_pkt_prd: periodic ESS transmit packet count
  * @tx_max_burst_prd: max periodic ESS transmit burst size
  * @tx_fifo_resize_max_num: max number of fifos allocated during txfifo resize
  * @clear_stall_protocol: endpoint number that requires a delayed status phase
- * @num_hc_interrupters: number of host controller interrupters
  * @hsphy_interface: "utmi" or "ulpi"
  * @connected: true when we're connected to a host, false otherwise
  * @softconnect: true when gadget connect is called, false when disconnect runs
  * @delayed_status: true when gadget driver asks for delayed status
  * @ep0_bounced: true when we used bounce buffer
  * @ep0_expect_in: true when we expect a DATA IN transfer
+ * @has_hibernation: true when dwc3 was configured with Hibernation
  * @sysdev_is_parent: true when dwc3 device has a parent driver
  * @has_lpm_erratum: true when core was configured with LPM Erratum. Note that
  *			there's now way for software to detect this in runtime.
@@ -1143,16 +1125,12 @@ struct dwc3_glue_ops {
  *			change quirk.
  * @dis_tx_ipgap_linecheck_quirk: set if we disable u2mac linestate
  *			check during HS transmit.
- * @resume_hs_terminations: Set if we enable quirk for fixing improper crc
+ * @resume-hs-terminations: Set if we enable quirk for fixing improper crc
  *			generation after resume from suspend.
- * @ulpi_ext_vbus_drv: Set to confiure the upli chip to drives CPEN pin
- *			VBUS with an external supply.
  * @parkmode_disable_ss_quirk: set if we need to disable all SuperSpeed
  *			instances in park mode.
  * @parkmode_disable_hs_quirk: set if we need to disable all HishSpeed
  *			instances in park mode.
- * @gfladj_refclk_lpm_sel: set if we need to enable SOF/ITP counter
- *                          running based on ref_clk
  * @tx_de_emphasis_quirk: set if we enable Tx de-emphasis quirk
  * @tx_de_emphasis: Tx de-emphasis value
  *	0	- -6dB de-emphasis
@@ -1161,11 +1139,7 @@ struct dwc3_glue_ops {
  *	3	- Reserved
  * @dis_metastability_quirk: set to disable metastability quirk.
  * @dis_split_quirk: set to disable split boundary.
- * @sys_wakeup: set if the device may do system wakeup.
- * @wakeup_configured: set if the device is configured for remote wakeup.
  * @suspended: set to track suspend event due to U3/L2.
- * @susphy_state: state of DWC3_GUSB2PHYCFG_SUSPHY + DWC3_GUSB3PIPECTL_SUSPHY
- *		  before PM suspend.
  * @imod_interval: set the interrupt moderation interval in 250ns
  *			increments or 0 to disable.
  * @max_cfg_eps: current max number of IN eps used across all USB configs.
@@ -1174,20 +1148,16 @@ struct dwc3_glue_ops {
  * @num_ep_resized: carries the current number endpoints which have had its tx
  *		    fifo resized.
  * @debug_root: root debugfs directory for this device to put its files in.
- * @gsbuscfg0_reqinfo: store GSBUSCFG0.DATRDREQINFO, DESRDREQINFO,
- *		       DATWRREQINFO, and DESWRREQINFO value passed from
- *		       glue driver.
- * @wakeup_pending_funcs: Indicates whether any interface has requested for
- *			 function wakeup in bitmap format where bit position
- *			 represents interface_id.
  */
 struct dwc3 {
 	struct work_struct	drd_work;
 	struct dwc3_trb		*ep0_trb;
 	void			*bounce;
+	void			*scratchbuf;
 	u8			*setup_buf;
 	dma_addr_t		ep0_trb_addr;
 	dma_addr_t		bounce_addr;
+	dma_addr_t		scratch_addr;
 	struct dwc3_request	ep0_usb_req;
 	struct completion	ep0_in_setup;
 
@@ -1209,24 +1179,17 @@ struct dwc3 {
 	struct usb_gadget	*gadget;
 	struct usb_gadget_driver *gadget_driver;
 
-	const struct dwc3_glue_ops	*glue_ops;
-
 	struct clk		*bus_clk;
 	struct clk		*ref_clk;
 	struct clk		*susp_clk;
-	struct clk		*utmi_clk;
-	struct clk		*pipe_clk;
 
 	struct reset_control	*reset;
 
 	struct usb_phy		*usb2_phy;
 	struct usb_phy		*usb3_phy;
 
-	struct phy		*usb2_generic_phy[DWC3_USB2_MAX_PORTS];
-	struct phy		*usb3_generic_phy[DWC3_USB3_MAX_PORTS];
-
-	u8			num_usb2_ports;
-	u8			num_usb3_ports;
+	struct phy		*usb2_generic_phy;
+	struct phy		*usb3_generic_phy;
 
 	bool			phys_ready;
 
@@ -1254,6 +1217,7 @@ struct dwc3 {
 	u32			current_otg_role;
 	u32			desired_otg_role;
 	bool			otg_restart_host;
+	u32			nr_scratch;
 	u32			u1u2;
 	u32			maximum_speed;
 	u32			gadget_max_speed;
@@ -1301,7 +1265,6 @@ struct dwc3 {
 #define DWC31_REVISION_170A	0x3137302a
 #define DWC31_REVISION_180A	0x3138302a
 #define DWC31_REVISION_190A	0x3139302a
-#define DWC31_REVISION_200A	0x3230302a
 
 #define DWC32_REVISION_ANY	0x0
 #define DWC32_REVISION_100A	0x3130302a
@@ -1338,17 +1301,12 @@ struct dwc3 {
 	u8			test_mode_nr;
 	u8			lpm_nyet_threshold;
 	u8			hird_threshold;
-	u8			rx_thr_num_pkt;
-	u8			rx_max_burst;
-	u8			tx_thr_num_pkt;
-	u8			tx_max_burst;
 	u8			rx_thr_num_pkt_prd;
 	u8			rx_max_burst_prd;
 	u8			tx_thr_num_pkt_prd;
 	u8			tx_max_burst_prd;
 	u8			tx_fifo_resize_max_num;
 	u8			clear_stall_protocol;
-	u16			num_hc_interrupters;
 
 	const char		*hsphy_interface;
 
@@ -1357,6 +1315,7 @@ struct dwc3 {
 	unsigned		delayed_status:1;
 	unsigned		ep0_bounced:1;
 	unsigned		ep0_expect_in:1;
+	unsigned		has_hibernation:1;
 	unsigned		sysdev_is_parent:1;
 	unsigned		has_lpm_erratum:1;
 	unsigned		is_utmi_l1_suspend:1;
@@ -1389,7 +1348,6 @@ struct dwc3 {
 	unsigned		dis_del_phy_power_chg_quirk:1;
 	unsigned		dis_tx_ipgap_linecheck_quirk:1;
 	unsigned		resume_hs_terminations:1;
-	unsigned		ulpi_ext_vbus_drv:1;
 	unsigned		parkmode_disable_ss_quirk:1;
 	unsigned		parkmode_disable_hs_quirk:1;
 	unsigned		gfladj_refclk_lpm_sel:1;
@@ -1401,10 +1359,7 @@ struct dwc3 {
 
 	unsigned		dis_split_quirk:1;
 	unsigned		async_callbacks:1;
-	unsigned		sys_wakeup:1;
-	unsigned		wakeup_configured:1;
 	unsigned		suspended:1;
-	unsigned		susphy_state:1;
 
 	u16			imod_interval;
 
@@ -1412,8 +1367,28 @@ struct dwc3 {
 	int			last_fifo_depth;
 	int			num_ep_resized;
 	struct dentry		*debug_root;
-	u32			gsbuscfg0_reqinfo;
-	u32			wakeup_pending_funcs;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+};
+
+/**
+ * struct dwc3_vendor - contains parameters without modifying the format of DWC3 core
+ * @dwc: contains dwc3 core reference
+ * @num_usb2_ports: number of USB2 ports
+ * @num_usb3_ports: number of USB3 ports
+ * @usb2_generic_phy: pointer to array of USB2 PHYs
+ * @usb3_generic_phy: pointer to array of USB3 PHYs
+ */
+struct dwc3_vendor {
+	struct dwc3	dwc;
+	u8		num_usb2_ports;
+	u8		num_usb3_ports;
+
+	struct phy		*usb2_generic_phy[DWC3_USB2_MAX_PORTS];
+	struct phy		*usb3_generic_phy[DWC3_USB3_MAX_PORTS];
 };
 
 #define INCRX_BURST_MODE 0
@@ -1627,18 +1602,6 @@ void dwc3_event_buffers_cleanup(struct dwc3 *dwc);
 
 int dwc3_core_soft_reset(struct dwc3 *dwc);
 void dwc3_enable_susphy(struct dwc3 *dwc, bool enable);
-
-static inline void dwc3_pre_set_role(struct dwc3 *dwc, enum usb_role role)
-{
-	if (dwc->glue_ops && dwc->glue_ops->pre_set_role)
-		dwc->glue_ops->pre_set_role(dwc, role);
-}
-
-static inline void dwc3_pre_run_stop(struct dwc3 *dwc, bool is_on)
-{
-	if (dwc->glue_ops && dwc->glue_ops->pre_run_stop)
-		dwc->glue_ops->pre_run_stop(dwc, is_on);
-}
 
 #if IS_ENABLED(CONFIG_USB_DWC3_HOST) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_host_init(struct dwc3 *dwc);

@@ -13,6 +13,7 @@
  * "DVSEC" redundancies removed. When obvious, abbreviations may be used.
  */
 #define PCI_DVSEC_HEADER1_LENGTH_MASK	GENMASK(31, 20)
+#define PCI_DVSEC_VENDOR_ID_CXL		0x1E98
 
 /* CXL 2.0 8.1.3: PCIe DVSEC for CXL Device */
 #define CXL_DVSEC_PCIE_DEVICE					0
@@ -40,12 +41,6 @@
 
 /* CXL 2.0 8.1.6: GPF DVSEC for CXL Port */
 #define CXL_DVSEC_PORT_GPF					4
-#define   CXL_DVSEC_PORT_GPF_PHASE_1_CONTROL_OFFSET		0x0C
-#define     CXL_DVSEC_PORT_GPF_PHASE_1_TMO_BASE_MASK		GENMASK(3, 0)
-#define     CXL_DVSEC_PORT_GPF_PHASE_1_TMO_SCALE_MASK		GENMASK(11, 8)
-#define   CXL_DVSEC_PORT_GPF_PHASE_2_CONTROL_OFFSET		0xE
-#define     CXL_DVSEC_PORT_GPF_PHASE_2_TMO_BASE_MASK		GENMASK(3, 0)
-#define     CXL_DVSEC_PORT_GPF_PHASE_2_TMO_SCALE_MASK		GENMASK(11, 8)
 
 /* CXL 2.0 8.1.7: GPF DVSEC for CXL Device */
 #define CXL_DVSEC_DEVICE_GPF					5
@@ -60,30 +55,23 @@
 #define	    CXL_DVSEC_REG_LOCATOR_BLOCK_ID_MASK			GENMASK(15, 8)
 #define     CXL_DVSEC_REG_LOCATOR_BLOCK_OFF_LOW_MASK		GENMASK(31, 16)
 
-/*
- * NOTE: Currently all the functions which are enabled for CXL require their
- * vectors to be in the first 16.  Use this as the default max.
- */
-#define CXL_PCI_DEFAULT_MAX_VECTORS 16
-
 /* Register Block Identifier (RBI) */
 enum cxl_regloc_type {
 	CXL_REGLOC_RBI_EMPTY = 0,
 	CXL_REGLOC_RBI_COMPONENT,
 	CXL_REGLOC_RBI_VIRT,
 	CXL_REGLOC_RBI_MEMDEV,
-	CXL_REGLOC_RBI_PMU,
 	CXL_REGLOC_RBI_TYPES
 };
 
-/*
- * Table Access DOE, CDAT Read Entry Response
- *
- * Spec refs:
- *
- * CXL 3.1 8.1.11, Table 8-14: Read Entry Response
- * CDAT Specification 1.03: 2 CDAT Data Structures
- */
+static inline resource_size_t cxl_regmap_to_base(struct pci_dev *pdev,
+						 struct cxl_register_map *map)
+{
+	if (map->block_offset == U64_MAX)
+		return CXL_RESOURCE_NONE;
+
+	return pci_resource_start(pdev, map->barno) + map->block_offset;
+}
 
 struct cdat_header {
 	__le32 length;
@@ -99,38 +87,8 @@ struct cdat_entry_header {
 	__le16 length;
 } __packed;
 
-/*
- * The DOE CDAT read response contains a CDAT read entry (either the
- * CDAT header or a structure).
- */
-union cdat_data {
-	struct cdat_header header;
-	struct cdat_entry_header entry;
-} __packed;
-
-/* There is an additional CDAT response header of 4 bytes. */
-struct cdat_doe_rsp {
-	__le32 doe_header;
-	u8 data[];
-} __packed;
-
-/*
- * CXL v3.0 6.2.3 Table 6-4
- * The table indicates that if PCIe Flit Mode is set, then CXL is in 256B flits
- * mode, otherwise it's 68B flits mode.
- */
-static inline bool cxl_pci_flit_256(struct pci_dev *pdev)
-{
-	u16 lnksta2;
-
-	pcie_capability_read_word(pdev, PCI_EXP_LNKSTA2, &lnksta2);
-	return lnksta2 & PCI_EXP_LNKSTA2_FLIT;
-}
-
 int devm_cxl_port_enumerate_dports(struct cxl_port *port);
 struct cxl_dev_state;
+int cxl_hdm_decode_init(struct cxl_dev_state *cxlds, struct cxl_hdm *cxlhdm);
 void read_cdat_data(struct cxl_port *port);
-void cxl_cor_error_detected(struct pci_dev *pdev);
-pci_ers_result_t cxl_error_detected(struct pci_dev *pdev,
-				    pci_channel_state_t state);
 #endif /* __CXL_PCI_H__ */

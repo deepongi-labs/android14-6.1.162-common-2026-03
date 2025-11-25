@@ -10,7 +10,8 @@
 
 #include <linux/err.h>
 #include <linux/export.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
 #include <linux/types.h>
@@ -18,7 +19,149 @@
 
 #include "thermal_core.h"
 
+/**
+ * of_thermal_get_ntrips - function to export number of available trip
+ *			   points.
+ * @tz: pointer to a thermal zone
+ *
+ * This function is a globally visible wrapper to get number of trip points
+ * stored in the local struct __thermal_zone
+ *
+ * Return: number of available trip points, -ENODEV when data not available
+ */
+int of_thermal_get_ntrips(struct thermal_zone_device *tz)
+{
+	return tz->num_trips;
+}
+EXPORT_SYMBOL_GPL(of_thermal_get_ntrips);
+
+/**
+ * of_thermal_is_trip_valid - function to check if trip point is valid
+ *
+ * @tz:	pointer to a thermal zone
+ * @trip:	trip point to evaluate
+ *
+ * This function is responsible for checking if passed trip point is valid
+ *
+ * Return: true if trip point is valid, false otherwise
+ */
+bool of_thermal_is_trip_valid(struct thermal_zone_device *tz, int trip)
+{
+	if (trip >= tz->num_trips || trip < 0)
+		return false;
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(of_thermal_is_trip_valid);
+
+/**
+ * of_thermal_get_trip_points - function to get access to a globally exported
+ *				trip points
+ *
+ * @tz:	pointer to a thermal zone
+ *
+ * This function provides a pointer to trip points table
+ *
+ * Return: pointer to trip points table, NULL otherwise
+ */
+const struct thermal_trip *
+of_thermal_get_trip_points(struct thermal_zone_device *tz)
+{
+	return tz->trips;
+}
+EXPORT_SYMBOL_GPL(of_thermal_get_trip_points);
+
+static int of_thermal_get_trip_type(struct thermal_zone_device *tz, int trip,
+				    enum thermal_trip_type *type)
+{
+	if (trip >= tz->num_trips || trip < 0)
+		return -EDOM;
+
+	*type = tz->trips[trip].type;
+
+	return 0;
+}
+
+static int of_thermal_get_trip_temp(struct thermal_zone_device *tz, int trip,
+				    int *temp)
+{
+	if (trip >= tz->num_trips || trip < 0)
+		return -EDOM;
+
+	*temp = tz->trips[trip].temperature;
+
+	return 0;
+}
+
+static int of_thermal_get_trip_hyst(struct thermal_zone_device *tz, int trip,
+				    int *hyst)
+{
+	if (trip >= tz->num_trips || trip < 0)
+		return -EDOM;
+
+	*hyst = tz->trips[trip].hysteresis;
+
+	return 0;
+}
+
+static int of_thermal_set_trip_hyst(struct thermal_zone_device *tz, int trip,
+				    int hyst)
+{
+	if (trip >= tz->num_trips || trip < 0)
+		return -EDOM;
+
+	/* thermal framework should take care of data->mask & (1 << trip) */
+	tz->trips[trip].hysteresis = hyst;
+
+	return 0;
+}
+
+static int of_thermal_get_crit_temp(struct thermal_zone_device *tz,
+				    int *temp)
+{
+	int i;
+
+	for (i = 0; i < tz->num_trips; i++)
+		if (tz->trips[i].type == THERMAL_TRIP_CRITICAL) {
+			*temp = tz->trips[i].temperature;
+			return 0;
+		}
+
+	return -EINVAL;
+}
+
 /***   functions parsing device tree nodes   ***/
+
+static int of_find_trip_id(struct device_node *np, struct device_node *trip)
+{
+	struct device_node *trips;
+	struct device_node *t;
+	int i = 0;
+
+	trips = of_get_child_by_name(np, "trips");
+	if (!trips) {
+		pr_err("Failed to find 'trips' node\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Find the trip id point associated with the cooling device map
+	 */
+	for_each_child_of_node(trips, t) {
+
+		if (t == trip) {
+			of_node_put(t);
+			goto out;
+		}
+		i++;
+	}
+
+	i = -ENXIO;
+out:
+	of_node_put(trips);
+
+	return i;
+}
 
 /*
  * It maps 'enum thermal_trip_type' found in include/linux/thermal.h
@@ -86,20 +229,18 @@ static int thermal_of_populate_trip(struct device_node *np,
 		return ret;
 	}
 
-	trip->flags = THERMAL_TRIP_FLAG_RW_TEMP;
-
-	trip->priv = np;
-
 	return 0;
 }
 
 static struct thermal_trip *thermal_of_trips_init(struct device_node *np, int *ntrips)
 {
+	struct thermal_trip *tt;
+	struct device_node *trips;
 	int ret, count;
 
 	*ntrips = 0;
 	
-	struct device_node *trips __free(device_node) = of_get_child_by_name(np, "trips");
+	trips = of_get_child_by_name(np, "trips");
 	if (!trips)
 		return NULL;
 
@@ -107,27 +248,39 @@ static struct thermal_trip *thermal_of_trips_init(struct device_node *np, int *n
 	if (!count)
 		return NULL;
 
-	struct thermal_trip *tt __free(kfree) = kcalloc(count, sizeof(*tt), GFP_KERNEL);
-	if (!tt)
-		return ERR_PTR(-ENOMEM);
+	tt = kzalloc(sizeof(*tt) * count, GFP_KERNEL);
+	if (!tt) {
+		ret = -ENOMEM;
+		goto out_of_node_put;
+	}
+
+	*ntrips = count;
 
 	count = 0;
 	for_each_child_of_node_scoped(trips, trip) {
 		ret = thermal_of_populate_trip(trip, &tt[count++]);
 		if (ret)
-			return ERR_PTR(ret);
+			goto out_kfree;
 	}
 
-	*ntrips = count;
+	of_node_put(trips);
 
-	return no_free_ptr(tt);
+	return tt;
+
+out_kfree:
+	kfree(tt);
+out_of_node_put:
+	of_node_put(trips);
+
+	return ERR_PTR(ret);
 }
 
 static struct device_node *of_thermal_zone_find(struct device_node *sensor, int id)
 {
+	struct device_node *np, *tz;
 	struct of_phandle_args sensor_specs;
 
-	struct device_node *np __free(device_node) = of_find_node_by_name(NULL, "thermal-zones");
+	np = of_find_node_by_name(NULL, "thermal-zones");
 	if (!np) {
 		pr_debug("No thermal zones description\n");
 		return ERR_PTR(-ENODEV);
@@ -145,7 +298,8 @@ static struct device_node *of_thermal_zone_find(struct device_node *sensor, int 
 						   "#thermal-sensor-cells");
 		if (count <= 0) {
 			pr_err("%pOFn: missing thermal sensor\n", child);
-			return ERR_PTR(-EINVAL);
+			tz = ERR_PTR(-EINVAL);
+			goto out;
 		}
 
 		for (i = 0; i < count; i++) {
@@ -157,19 +311,23 @@ static struct device_node *of_thermal_zone_find(struct device_node *sensor, int 
 							 i, &sensor_specs);
 			if (ret < 0) {
 				pr_err("%pOFn: Failed to read thermal-sensors cells: %d\n", child, ret);
-				return ERR_PTR(ret);
+				tz = ERR_PTR(ret);
+				goto out;
 			}
 
 			of_node_put(sensor_specs.np);
 			if ((sensor == sensor_specs.np) && id == (sensor_specs.args_count ?
 								  sensor_specs.args[0] : 0)) {
 				pr_debug("sensor %pOFn id=%d belongs to %pOFn\n", sensor, id, child);
-				return no_free_ptr(child);
+				tz = no_free_ptr(child);
+				goto out;
 			}
 		}
 	}
-
-	return ERR_PTR(-ENODEV);
+	tz = ERR_PTR(-ENODEV);
+out:
+	of_node_put(np);
+	return tz;
 }
 
 static int thermal_of_monitor_init(struct device_node *np, int *delay, int *pdelay)
@@ -195,12 +353,16 @@ static int thermal_of_monitor_init(struct device_node *np, int *delay, int *pdel
 	return 0;
 }
 
-static void thermal_of_parameters_init(struct device_node *np,
-				       struct thermal_zone_params *tzp)
+static struct thermal_zone_params *thermal_of_parameters_init(struct device_node *np)
 {
+	struct thermal_zone_params *tzp;
 	int coef[2];
 	int ncoef = ARRAY_SIZE(coef);
 	int prop, ret;
+
+	tzp = kzalloc(sizeof(*tzp), GFP_KERNEL);
+	if (!tzp)
+		return ERR_PTR(-ENOMEM);
 
 	tzp->no_hwmon = true;
 
@@ -220,6 +382,8 @@ static void thermal_of_parameters_init(struct device_node *np,
 
 	tzp->slope = coef[0];
 	tzp->offset = coef[1];
+
+	return tzp;
 }
 
 static struct device_node *thermal_of_zone_get_by_name(struct thermal_zone_device *tz)
@@ -240,9 +404,39 @@ static struct device_node *thermal_of_zone_get_by_name(struct thermal_zone_devic
 	return tz_np;
 }
 
-static bool thermal_of_get_cooling_spec(struct device_node *map_np, int index,
-					struct thermal_cooling_device *cdev,
-					struct cooling_spec *c)
+static int __thermal_of_unbind(struct device_node *map_np, int index, int trip_id,
+			       struct thermal_zone_device *tz, struct thermal_cooling_device *cdev)
+{
+	struct of_phandle_args cooling_spec;
+	int ret;
+
+	ret = of_parse_phandle_with_args(map_np, "cooling-device", "#cooling-cells",
+					 index, &cooling_spec);
+
+	if (ret < 0) {
+		pr_err("Invalid cooling-device entry\n");
+		return ret;
+	}
+
+	of_node_put(cooling_spec.np);
+
+	if (cooling_spec.args_count < 2) {
+		pr_err("wrong reference to cooling device, missing limits\n");
+		return -EINVAL;
+	}
+
+	if (cooling_spec.np != cdev->np)
+		return 0;
+
+	ret = thermal_zone_unbind_cooling_device(tz, trip_id, cdev);
+	if (ret)
+		pr_err("Failed to unbind '%s' with '%s': %d\n", tz->type, cdev->type, ret);
+
+	return ret;
+}
+
+static int __thermal_of_bind(struct device_node *map_np, int index, int trip_id,
+			     struct thermal_zone_device *tz, struct thermal_cooling_device *cdev)
 {
 	struct of_phandle_args cooling_spec;
 	int ret, weight = THERMAL_WEIGHT_DEFAULT;
@@ -254,80 +448,104 @@ static bool thermal_of_get_cooling_spec(struct device_node *map_np, int index,
 
 	if (ret < 0) {
 		pr_err("Invalid cooling-device entry\n");
-		return false;
+		return ret;
 	}
 
 	of_node_put(cooling_spec.np);
 
 	if (cooling_spec.args_count < 2) {
 		pr_err("wrong reference to cooling device, missing limits\n");
-		return false;
+		return -EINVAL;
 	}
 
 	if (cooling_spec.np != cdev->np)
-		return false;
+		return 0;
 
-	c->lower = cooling_spec.args[0];
-	c->upper = cooling_spec.args[1];
-	c->weight = weight;
+	ret = thermal_zone_bind_cooling_device(tz, trip_id, cdev, cooling_spec.args[1],
+					       cooling_spec.args[0],
+					       weight);
+	if (ret)
+		pr_err("Failed to bind '%s' with '%s': %d\n", tz->type, cdev->type, ret);
 
-	return true;
+	return ret;
 }
 
-static bool thermal_of_cm_lookup(struct device_node *cm_np,
-				 const struct thermal_trip *trip,
-				 struct thermal_cooling_device *cdev,
-				 struct cooling_spec *c)
+static int thermal_of_for_each_cooling_device(struct device_node *tz_np, struct device_node *map_np,
+					      struct thermal_zone_device *tz, struct thermal_cooling_device *cdev,
+					      int (*action)(struct device_node *, int, int,
+							    struct thermal_zone_device *, struct thermal_cooling_device *))
 {
-	for_each_child_of_node_scoped(cm_np, child) {
-		struct device_node *tr_np;
-		int count, i;
+	struct device_node *tr_np;
+	int count, i, trip_id;
 
-		tr_np = of_parse_phandle(child, "trip", 0);
-		if (tr_np != trip->priv)
-			continue;
+	tr_np = of_parse_phandle(map_np, "trip", 0);
+	if (!tr_np)
+		return -ENODEV;
 
-		/* The trip has been found, look up the cdev. */
-		count = of_count_phandle_with_args(child, "cooling-device",
-						   "#cooling-cells");
-		if (count <= 0)
-			pr_err("Add a cooling_device property with at least one device\n");
+	trip_id = of_find_trip_id(tz_np, tr_np);
+	if (trip_id < 0)
+		return trip_id;
 
-		for (i = 0; i < count; i++) {
-			if (thermal_of_get_cooling_spec(child, i, cdev, c))
-				return true;
-		}
+	count = of_count_phandle_with_args(map_np, "cooling-device", "#cooling-cells");
+	if (count <= 0) {
+		pr_err("Add a cooling_device property with at least one device\n");
+		return -ENOENT;
 	}
 
-	return false;
+	/*
+	 * At this point, we don't want to bail out when there is an
+	 * error, we will try to bind/unbind as many as possible
+	 * cooling devices
+	 */
+	for (i = 0; i < count; i++)
+		action(map_np, i, trip_id, tz, cdev);
+
+	return 0;
 }
 
-static bool thermal_of_should_bind(struct thermal_zone_device *tz,
-				   const struct thermal_trip *trip,
-				   struct thermal_cooling_device *cdev,
-				   struct cooling_spec *c)
+static int thermal_of_for_each_cooling_maps(struct thermal_zone_device *tz,
+					    struct thermal_cooling_device *cdev,
+					    int (*action)(struct device_node *, int, int,
+							  struct thermal_zone_device *, struct thermal_cooling_device *))
 {
-	struct device_node *tz_np, *cm_np;
-	bool result = false;
+	struct device_node *tz_np, *cm_np, *child;
+	int ret = 0;
 
 	tz_np = thermal_of_zone_get_by_name(tz);
 	if (IS_ERR(tz_np)) {
 		pr_err("Failed to get node tz by name\n");
-		return false;
+		return PTR_ERR(tz_np);
 	}
 
 	cm_np = of_get_child_by_name(tz_np, "cooling-maps");
 	if (!cm_np)
 		goto out;
 
-	/* Look up the trip and the cdev in the cooling maps. */
-	result = thermal_of_cm_lookup(cm_np, trip, cdev, c);
+	for_each_child_of_node(cm_np, child) {
+		ret = thermal_of_for_each_cooling_device(tz_np, child, tz, cdev, action);
+		if (ret) {
+			of_node_put(child);
+			break;
+		}
+	}
 
 	of_node_put(cm_np);
 out:
 	of_node_put(tz_np);
 
-	return result;
+	return ret;
+}
+
+static int thermal_of_bind(struct thermal_zone_device *tz,
+			   struct thermal_cooling_device *cdev)
+{
+	return thermal_of_for_each_cooling_maps(tz, cdev, __thermal_of_bind);
+}
+
+static int thermal_of_unbind(struct thermal_zone_device *tz,
+			     struct thermal_cooling_device *cdev)
+{
+	return thermal_of_for_each_cooling_maps(tz, cdev, __thermal_of_unbind);
 }
 
 /**
@@ -338,11 +556,19 @@ out:
  *
  * @tz: a pointer to the thermal zone structure
  */
-static void thermal_of_zone_unregister(struct thermal_zone_device *tz)
+void thermal_of_zone_unregister(struct thermal_zone_device *tz)
 {
+	struct thermal_trip *trips = tz->trips;
+	struct thermal_zone_params *tzp = tz->tzp;
+	struct thermal_zone_device_ops *ops = tz->ops;
+
 	thermal_zone_device_disable(tz);
 	thermal_zone_device_unregister(tz);
+	kfree(trips);
+	kfree(tzp);
+	kfree(ops);
 }
+EXPORT_SYMBOL_GPL(thermal_of_zone_unregister);
 
 /**
  * thermal_of_zone_register - Register a thermal zone with device node
@@ -360,35 +586,39 @@ static void thermal_of_zone_unregister(struct thermal_zone_device *tz)
  * @ops: A set of thermal sensor ops
  *
  * Return: a valid thermal zone structure pointer on success.
- *	- EINVAL: if the device tree thermal description is malformed
+ * 	- EINVAL: if the device tree thermal description is malformed
  *	- ENOMEM: if one structure can not be allocated
  *	- Other negative errors are returned by the underlying called functions
  */
-static struct thermal_zone_device *thermal_of_zone_register(struct device_node *sensor, int id, void *data,
-							    const struct thermal_zone_device_ops *ops)
+struct thermal_zone_device *thermal_of_zone_register(struct device_node *sensor, int id, void *data,
+						     const struct thermal_zone_device_ops *ops)
 {
-	struct thermal_zone_device_ops of_ops = *ops;
 	struct thermal_zone_device *tz;
 	struct thermal_trip *trips;
-	struct thermal_zone_params tzp = {};
+	struct thermal_zone_params *tzp;
+	struct thermal_zone_device_ops *of_ops;
 	struct device_node *np;
-	const char *action;
 	int delay, pdelay;
-	int ntrips;
+	int ntrips, mask;
 	int ret;
+
+	of_ops = kmemdup(ops, sizeof(*ops), GFP_KERNEL);
+	if (!of_ops)
+		return ERR_PTR(-ENOMEM);
 
 	np = of_thermal_zone_find(sensor, id);
 	if (IS_ERR(np)) {
 		if (PTR_ERR(np) != -ENODEV)
 			pr_err("Failed to find thermal zone for %pOFn id=%d\n", sensor, id);
-		return ERR_CAST(np);
+		ret = PTR_ERR(np);
+		goto out_kfree_of_ops;
 	}
 
 	trips = thermal_of_trips_init(np, &ntrips);
 	if (IS_ERR(trips)) {
 		pr_err("Failed to parse trip points for %pOFn id=%d\n", sensor, id);
 		ret = PTR_ERR(trips);
-		goto out_of_node_put;
+		goto out_kfree_of_ops;
 	}
 
 	if (!trips)
@@ -400,29 +630,31 @@ static struct thermal_zone_device *thermal_of_zone_register(struct device_node *
 		goto out_kfree_trips;
 	}
 
-	thermal_of_parameters_init(np, &tzp);
-
-	of_ops.should_bind = thermal_of_should_bind;
-
-	ret = of_property_read_string(np, "critical-action", &action);
-	if (!ret && !of_ops.critical) {
-		if (!strcasecmp(action, "reboot"))
-			of_ops.critical = thermal_zone_device_critical_reboot;
-		else if (!strcasecmp(action, "shutdown"))
-			of_ops.critical = thermal_zone_device_critical_shutdown;
+	tzp = thermal_of_parameters_init(np);
+	if (IS_ERR(tzp)) {
+		ret = PTR_ERR(tzp);
+		pr_err("Failed to initialize parameter from %pOFn: %d\n", np, ret);
+		goto out_kfree_trips;
 	}
 
+	of_ops->get_trip_type = of_ops->get_trip_type ? : of_thermal_get_trip_type;
+	of_ops->get_trip_temp = of_ops->get_trip_temp ? : of_thermal_get_trip_temp;
+	of_ops->get_trip_hyst = of_ops->get_trip_hyst ? : of_thermal_get_trip_hyst;
+	of_ops->set_trip_hyst = of_ops->set_trip_hyst ? : of_thermal_set_trip_hyst;
+	of_ops->get_crit_temp = of_ops->get_crit_temp ? : of_thermal_get_crit_temp;
+	of_ops->bind = thermal_of_bind;
+	of_ops->unbind = thermal_of_unbind;
+
+	mask = GENMASK_ULL((ntrips) - 1, 0);
+
 	tz = thermal_zone_device_register_with_trips(np->name, trips, ntrips,
-						     data, &of_ops, &tzp,
+						     mask, data, of_ops, tzp,
 						     pdelay, delay);
 	if (IS_ERR(tz)) {
 		ret = PTR_ERR(tz);
 		pr_err("Failed to register thermal zone %pOFn: %d\n", np, ret);
-		goto out_kfree_trips;
+		goto out_kfree_tzp;
 	}
-
-	of_node_put(np);
-	kfree(trips);
 
 	ret = thermal_zone_device_enable(tz);
 	if (ret) {
@@ -434,13 +666,16 @@ static struct thermal_zone_device *thermal_of_zone_register(struct device_node *
 
 	return tz;
 
+out_kfree_tzp:
+	kfree(tzp);
 out_kfree_trips:
 	kfree(trips);
-out_of_node_put:
-	of_node_put(np);
+out_kfree_of_ops:
+	kfree(of_ops);
 
 	return ERR_PTR(ret);
 }
+EXPORT_SYMBOL_GPL(thermal_of_zone_register);
 
 static void devm_thermal_of_zone_release(struct device *dev, void *res)
 {

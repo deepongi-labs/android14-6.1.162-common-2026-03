@@ -8,11 +8,9 @@
 #include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
-#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
-#include <uapi/linux/ethtool.h>
 #include "cifspdu.h"
 #include "cifsglob.h"
 #include "cifsproto.h"
@@ -24,10 +22,8 @@
 #endif
 #ifdef CONFIG_CIFS_SMB_DIRECT
 #include "smbdirect.h"
-#include "../common/smbdirect/smbdirect_pdu.h"
 #endif
 #include "cifs_swn.h"
-#include "cached_dir.h"
 
 void
 cifs_dump_mem(char *label, void *data, int length)
@@ -61,7 +57,7 @@ void cifs_dump_mids(struct TCP_Server_Info *server)
 		return;
 
 	cifs_dbg(VFS, "Dump pending requests:\n");
-	spin_lock(&server->mid_queue_lock);
+	spin_lock(&server->mid_lock);
 	list_for_each_entry(mid_entry, &server->pending_mid_q, qhead) {
 		cifs_dbg(VFS, "State: %d Cmd: %d Pid: %d Cbdata: %p Mid %llu\n",
 			 mid_entry->mid_state,
@@ -84,7 +80,7 @@ void cifs_dump_mids(struct TCP_Server_Info *server)
 				mid_entry->resp_buf, 62);
 		}
 	}
-	spin_unlock(&server->mid_queue_lock);
+	spin_unlock(&server->mid_lock);
 #endif /* CONFIG_CIFS_DEBUG2 */
 }
 
@@ -113,7 +109,7 @@ static void cifs_debug_tcon(struct seq_file *m, struct cifs_tcon *tcon)
 	if ((tcon->seal) ||
 	    (tcon->ses->session_flags & SMB2_SESSION_FLAG_ENCRYPT_DATA) ||
 	    (tcon->share_flags & SHI1005_FLAGS_ENCRYPT_DATA))
-		seq_puts(m, " encrypted");
+		seq_printf(m, " Encrypted");
 	if (tcon->nocase)
 		seq_printf(m, " nocase");
 	if (tcon->unix_ext)
@@ -126,12 +122,6 @@ static void cifs_debug_tcon(struct seq_file *m, struct cifs_tcon *tcon)
 		seq_puts(m, " nosparse");
 	if (tcon->need_reconnect)
 		seq_puts(m, "\tDISCONNECTED ");
-	spin_lock(&tcon->tc_lock);
-	if (tcon->origin_fullpath) {
-		seq_printf(m, "\n\tDFS origin fullpath: %s",
-			   tcon->origin_fullpath);
-	}
-	spin_unlock(&tcon->tc_lock);
 	seq_putc(m, '\n');
 }
 
@@ -140,20 +130,13 @@ cifs_dump_channel(struct seq_file *m, int i, struct cifs_chan *chan)
 {
 	struct TCP_Server_Info *server = chan->server;
 
-	if (!server) {
-		seq_printf(m, "\n\n\t\tChannel: %d DISABLED", i+1);
-		return;
-	}
-
 	seq_printf(m, "\n\n\t\tChannel: %d ConnectionId: 0x%llx"
-		   "\n\t\tNumber of credits: %d,%d,%d Dialect 0x%x"
+		   "\n\t\tNumber of credits: %d Dialect 0x%x"
 		   "\n\t\tTCP status: %d Instance: %d"
 		   "\n\t\tLocal Users To Server: %d SecMode: 0x%x Req On Wire: %d"
 		   "\n\t\tIn Send: %d In MaxReq Wait: %d",
 		   i+1, server->conn_id,
 		   server->credits,
-		   server->echo_credits,
-		   server->oplock_credits,
 		   server->dialect,
 		   server->tcpStatus,
 		   server->reconnect_instance,
@@ -162,53 +145,6 @@ cifs_dump_channel(struct seq_file *m, int i, struct cifs_chan *chan)
 		   in_flight(server),
 		   atomic_read(&server->in_send),
 		   atomic_read(&server->num_waiters));
-#ifdef CONFIG_NET_NS
-	if (server->net)
-		seq_printf(m, " Net namespace: %u ", server->net->ns.inum);
-#endif /* NET_NS */
-
-}
-
-static inline const char *smb_speed_to_str(size_t bps)
-{
-	size_t mbps = bps / 1000 / 1000;
-
-	switch (mbps) {
-	case SPEED_10:
-		return "10Mbps";
-	case SPEED_100:
-		return "100Mbps";
-	case SPEED_1000:
-		return "1Gbps";
-	case SPEED_2500:
-		return "2.5Gbps";
-	case SPEED_5000:
-		return "5Gbps";
-	case SPEED_10000:
-		return "10Gbps";
-	case SPEED_14000:
-		return "14Gbps";
-	case SPEED_20000:
-		return "20Gbps";
-	case SPEED_25000:
-		return "25Gbps";
-	case SPEED_40000:
-		return "40Gbps";
-	case SPEED_50000:
-		return "50Gbps";
-	case SPEED_56000:
-		return "56Gbps";
-	case SPEED_100000:
-		return "100Gbps";
-	case SPEED_200000:
-		return "200Gbps";
-	case SPEED_400000:
-		return "400Gbps";
-	case SPEED_800000:
-		return "800Gbps";
-	default:
-		return "Unknown";
-	}
 }
 
 static void
@@ -217,14 +153,12 @@ cifs_dump_iface(struct seq_file *m, struct cifs_server_iface *iface)
 	struct sockaddr_in *ipv4 = (struct sockaddr_in *)&iface->sockaddr;
 	struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&iface->sockaddr;
 
-	seq_printf(m, "\tSpeed: %s\n", smb_speed_to_str(iface->speed));
+	seq_printf(m, "\tSpeed: %zu bps\n", iface->speed);
 	seq_puts(m, "\t\tCapabilities: ");
 	if (iface->rdma_capable)
 		seq_puts(m, "rdma ");
 	if (iface->rss_capable)
 		seq_puts(m, "rss ");
-	if (!iface->rdma_capable && !iface->rss_capable)
-		seq_puts(m, "None");
 	seq_putc(m, '\n');
 	if (iface->sockaddr.ss_family == AF_INET)
 		seq_printf(m, "\t\tIPv4: %pI4\n", &ipv4->sin_addr);
@@ -240,18 +174,14 @@ static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon;
 	struct cifsFileInfo *cfile;
-	struct inode *inode;
-	struct cifsInodeInfo *cinode;
-	char lease[4];
-	int n;
 
 	seq_puts(m, "# Version:1\n");
 	seq_puts(m, "# Format:\n");
 	seq_puts(m, "# <tree id> <ses id> <persistent fid> <flags> <count> <pid> <uid>");
 #ifdef CONFIG_CIFS_DEBUG2
-	seq_puts(m, " <filename> <lease> <mid>\n");
+	seq_printf(m, " <filename> <mid>\n");
 #else
-	seq_puts(m, " <filename> <lease>\n");
+	seq_printf(m, " <filename>\n");
 #endif /* CIFS_DEBUG2 */
 	spin_lock(&cifs_tcp_ses_lock);
 	list_for_each_entry(server, &cifs_tcp_ses_list, tcp_ses_list) {
@@ -271,30 +201,11 @@ static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 						cfile->pid,
 						from_kuid(&init_user_ns, cfile->uid),
 						cfile->dentry);
-
-					/* Append lease/oplock caching state as RHW letters */
-					inode = d_inode(cfile->dentry);
-					n = 0;
-					if (inode) {
-						cinode = CIFS_I(inode);
-						if (CIFS_CACHE_READ(cinode))
-							lease[n++] = 'R';
-						if (CIFS_CACHE_HANDLE(cinode))
-							lease[n++] = 'H';
-						if (CIFS_CACHE_WRITE(cinode))
-							lease[n++] = 'W';
-					}
-					lease[n] = '\0';
-					seq_puts(m, " ");
-					if (n)
-						seq_printf(m, "%s", lease);
-					else
-						seq_puts(m, "NONE");
-
 #ifdef CONFIG_CIFS_DEBUG2
-					seq_printf(m, " %llu", cfile->fid.mid);
-#endif /* CONFIG_CIFS_DEBUG2 */
+					seq_printf(m, " %llu\n", cfile->fid.mid);
+#else
 					seq_printf(m, "\n");
+#endif /* CIFS_DEBUG2 */
 				}
 				spin_unlock(&tcon->open_file_lock);
 			}
@@ -303,94 +214,6 @@ static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 	spin_unlock(&cifs_tcp_ses_lock);
 	seq_putc(m, '\n');
 	return 0;
-}
-
-static int cifs_debug_dirs_proc_show(struct seq_file *m, void *v)
-{
-	struct list_head *stmp, *tmp, *tmp1;
-	struct TCP_Server_Info *server;
-	struct cifs_ses *ses;
-	struct cifs_tcon *tcon;
-	struct cached_fids *cfids;
-	struct cached_fid *cfid;
-	LIST_HEAD(entry);
-
-	seq_puts(m, "# Version:1\n");
-	seq_puts(m, "# Format:\n");
-	seq_puts(m, "# <tree id> <sess id> <persistent fid> <path>\n");
-
-	spin_lock(&cifs_tcp_ses_lock);
-	list_for_each(stmp, &cifs_tcp_ses_list) {
-		server = list_entry(stmp, struct TCP_Server_Info,
-				    tcp_ses_list);
-		list_for_each(tmp, &server->smb_ses_list) {
-			ses = list_entry(tmp, struct cifs_ses, smb_ses_list);
-			list_for_each(tmp1, &ses->tcon_list) {
-				tcon = list_entry(tmp1, struct cifs_tcon, tcon_list);
-				cfids = tcon->cfids;
-				if (!cfids)
-					continue;
-				spin_lock(&cfids->cfid_list_lock); /* check lock ordering */
-				seq_printf(m, "Num entries: %d, cached_dirents: %lu entries, %llu bytes\n",
-						cfids->num_entries,
-						(unsigned long)atomic_long_read(&cfids->total_dirents_entries),
-						(unsigned long long)atomic64_read(&cfids->total_dirents_bytes));
-				list_for_each_entry(cfid, &cfids->entries, entry) {
-					seq_printf(m, "0x%x 0x%llx 0x%llx     %s",
-						tcon->tid,
-						ses->Suid,
-						cfid->fid.persistent_fid,
-						cfid->path);
-					if (cfid->file_all_info_is_valid)
-						seq_printf(m, "\tvalid file info");
-					if (cfid->dirents.is_valid)
-						seq_printf(m, ", valid dirents");
-					if (!list_empty(&cfid->dirents.entries))
-						seq_printf(m, ", dirents: %lu entries, %lu bytes",
-						cfid->dirents.entries_count, cfid->dirents.bytes_used);
-					seq_printf(m, "\n");
-				}
-				spin_unlock(&cfids->cfid_list_lock);
-			}
-		}
-	}
-	spin_unlock(&cifs_tcp_ses_lock);
-	seq_putc(m, '\n');
-	return 0;
-}
-
-static __always_inline const char *compression_alg_str(__le16 alg)
-{
-	switch (alg) {
-	case SMB3_COMPRESS_NONE:
-		return "NONE";
-	case SMB3_COMPRESS_LZNT1:
-		return "LZNT1";
-	case SMB3_COMPRESS_LZ77:
-		return "LZ77";
-	case SMB3_COMPRESS_LZ77_HUFF:
-		return "LZ77-Huffman";
-	case SMB3_COMPRESS_PATTERN:
-		return "Pattern_V1";
-	default:
-		return "invalid";
-	}
-}
-
-static __always_inline const char *cipher_alg_str(__le16 cipher)
-{
-	switch (cipher) {
-	case SMB2_ENCRYPTION_AES128_CCM:
-		return "AES128-CCM";
-	case SMB2_ENCRYPTION_AES128_GCM:
-		return "AES128-GCM";
-	case SMB2_ENCRYPTION_AES256_CCM:
-		return "AES256-CCM";
-	case SMB2_ENCRYPTION_AES256_GCM:
-		return "AES256-GCM";
-	default:
-		return "UNKNOWN";
-	}
 }
 
 static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
@@ -445,9 +268,6 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 #ifdef CONFIG_CIFS_SWN_UPCALL
 	seq_puts(m, ",WITNESS");
 #endif
-#ifdef CONFIG_CIFS_COMPRESSION
-	seq_puts(m, ",COMPRESSION");
-#endif
 	seq_putc(m, '\n');
 	seq_printf(m, "CIFSMaxBufSize: %d\n", CIFSMaxBufSize);
 	seq_printf(m, "Active VFS Requests: %d\n", GlobalTotalActiveXid);
@@ -457,13 +277,8 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 	c = 0;
 	spin_lock(&cifs_tcp_ses_lock);
 	list_for_each_entry(server, &cifs_tcp_ses_list, tcp_ses_list) {
-#ifdef CONFIG_CIFS_SMB_DIRECT
-		struct smbdirect_socket *sc;
-		struct smbdirect_socket_parameters *sp;
-#endif
-
 		/* channel info will be printed as a part of sessions below */
-		if (SERVER_IS_CHAN(server))
+		if (CIFS_SERVER_IS_CHAN(server))
 			continue;
 
 		c++;
@@ -473,7 +288,6 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 		spin_lock(&server->srv_lock);
 		if (server->hostname)
 			seq_printf(m, "Hostname: %s ", server->hostname);
-		seq_printf(m, "\nClientGUID: %pUL", server->client_guid);
 		spin_unlock(&server->srv_lock);
 #ifdef CONFIG_CIFS_SMB_DIRECT
 		if (!server->rdma)
@@ -483,73 +297,78 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 			seq_printf(m, "\nSMBDirect transport not available");
 			goto skip_rdma;
 		}
-		sc = &server->smbd_conn->socket;
-		sp = &sc->parameters;
 
-		seq_printf(m, "\nSMBDirect protocol version: 0x%x "
-			"transport status: %s (%u)",
-			SMBDIRECT_V1,
-			smbdirect_socket_status_string(sc->status),
-			sc->status);
-		seq_printf(m, "\nConn receive_credit_max: %u "
-			"send_credit_target: %u max_send_size: %u",
-			sp->recv_credit_max,
-			sp->send_credit_target,
-			sp->max_send_size);
-		seq_printf(m, "\nConn max_fragmented_recv_size: %u "
-			"max_fragmented_send_size: %u max_receive_size:%u",
-			sp->max_fragmented_recv_size,
-			sp->max_fragmented_send_size,
-			sp->max_recv_size);
-		seq_printf(m, "\nConn keep_alive_interval: %u "
-			"max_readwrite_size: %u rdma_readwrite_threshold: %u",
-			sp->keepalive_interval_msec * 1000,
-			sp->max_read_write_size,
-			server->rdma_readwrite_threshold);
-		seq_printf(m, "\nDebug count_get_receive_buffer: %llu "
-			"count_put_receive_buffer: %llu count_send_empty: %llu",
-			sc->statistics.get_receive_buffer,
-			sc->statistics.put_receive_buffer,
-			sc->statistics.send_empty);
-		seq_printf(m, "\nRead Queue "
-			"count_enqueue_reassembly_queue: %llu "
-			"count_dequeue_reassembly_queue: %llu "
-			"reassembly_data_length: %u "
-			"reassembly_queue_length: %u",
-			sc->statistics.enqueue_reassembly_queue,
-			sc->statistics.dequeue_reassembly_queue,
-			sc->recv_io.reassembly.data_length,
-			sc->recv_io.reassembly.queue_length);
-		seq_printf(m, "\nCurrent Credits send_credits: %u "
-			"receive_credits: %u receive_credit_target: %u",
-			atomic_read(&sc->send_io.credits.count),
-			atomic_read(&sc->recv_io.credits.count),
-			sc->recv_io.credits.target);
-		seq_printf(m, "\nPending send_pending: %u ",
-			atomic_read(&sc->send_io.pending.count));
-		seq_printf(m, "\nMR responder_resources: %u "
-			"max_frmr_depth: %u mr_type: 0x%x",
-			sp->responder_resources,
-			sp->max_frmr_depth,
-			sc->mr_io.type);
-		seq_printf(m, "\nMR mr_ready_count: %u mr_used_count: %u",
-			atomic_read(&sc->mr_io.ready.count),
-			atomic_read(&sc->mr_io.used.count));
+		seq_printf(m, "\nSMBDirect (in hex) protocol version: %x "
+			"transport status: %x",
+			server->smbd_conn->protocol,
+			server->smbd_conn->transport_status);
+		seq_printf(m, "\nConn receive_credit_max: %x "
+			"send_credit_target: %x max_send_size: %x",
+			server->smbd_conn->receive_credit_max,
+			server->smbd_conn->send_credit_target,
+			server->smbd_conn->max_send_size);
+		seq_printf(m, "\nConn max_fragmented_recv_size: %x "
+			"max_fragmented_send_size: %x max_receive_size:%x",
+			server->smbd_conn->max_fragmented_recv_size,
+			server->smbd_conn->max_fragmented_send_size,
+			server->smbd_conn->max_receive_size);
+		seq_printf(m, "\nConn keep_alive_interval: %x "
+			"max_readwrite_size: %x rdma_readwrite_threshold: %x",
+			server->smbd_conn->keep_alive_interval,
+			server->smbd_conn->max_readwrite_size,
+			server->smbd_conn->rdma_readwrite_threshold);
+		seq_printf(m, "\nDebug count_get_receive_buffer: %x "
+			"count_put_receive_buffer: %x count_send_empty: %x",
+			server->smbd_conn->count_get_receive_buffer,
+			server->smbd_conn->count_put_receive_buffer,
+			server->smbd_conn->count_send_empty);
+		seq_printf(m, "\nRead Queue count_reassembly_queue: %x "
+			"count_enqueue_reassembly_queue: %x "
+			"count_dequeue_reassembly_queue: %x "
+			"fragment_reassembly_remaining: %x "
+			"reassembly_data_length: %x "
+			"reassembly_queue_length: %x",
+			server->smbd_conn->count_reassembly_queue,
+			server->smbd_conn->count_enqueue_reassembly_queue,
+			server->smbd_conn->count_dequeue_reassembly_queue,
+			server->smbd_conn->fragment_reassembly_remaining,
+			server->smbd_conn->reassembly_data_length,
+			server->smbd_conn->reassembly_queue_length);
+		seq_printf(m, "\nCurrent Credits send_credits: %x "
+			"receive_credits: %x receive_credit_target: %x",
+			atomic_read(&server->smbd_conn->send_credits),
+			atomic_read(&server->smbd_conn->receive_credits),
+			server->smbd_conn->receive_credit_target);
+		seq_printf(m, "\nPending send_pending: %x ",
+			atomic_read(&server->smbd_conn->send_pending));
+		seq_printf(m, "\nReceive buffers count_receive_queue: %x "
+			"count_empty_packet_queue: %x",
+			server->smbd_conn->count_receive_queue,
+			server->smbd_conn->count_empty_packet_queue);
+		seq_printf(m, "\nMR responder_resources: %x "
+			"max_frmr_depth: %x mr_type: %x",
+			server->smbd_conn->responder_resources,
+			server->smbd_conn->max_frmr_depth,
+			server->smbd_conn->mr_type);
+		seq_printf(m, "\nMR mr_ready_count: %x mr_used_count: %x",
+			atomic_read(&server->smbd_conn->mr_ready_count),
+			atomic_read(&server->smbd_conn->mr_used_count));
 skip_rdma:
 #endif
-		seq_printf(m, "\nNumber of credits: %d,%d,%d Dialect 0x%x",
-			server->credits,
-			server->echo_credits,
-			server->oplock_credits,
-			server->dialect);
+		seq_printf(m, "\nNumber of credits: %d Dialect 0x%x",
+			server->credits,  server->dialect);
+		if (server->compress_algorithm == SMB3_COMPRESS_LZNT1)
+			seq_printf(m, " COMPRESS_LZNT1");
+		else if (server->compress_algorithm == SMB3_COMPRESS_LZ77)
+			seq_printf(m, " COMPRESS_LZ77");
+		else if (server->compress_algorithm == SMB3_COMPRESS_LZ77_HUFF)
+			seq_printf(m, " COMPRESS_LZ77_HUFF");
 		if (server->sign)
 			seq_printf(m, " signed");
 		if (server->posix_ext_supported)
 			seq_printf(m, " posix");
 		if (server->nosharesock)
 			seq_printf(m, " nosharesock");
-
-		seq_printf(m, "\nServer capabilities: 0x%x", server->capabilities);
 
 		if (server->rdma)
 			seq_printf(m, "\nRDMA ");
@@ -559,34 +378,10 @@ skip_rdma:
 				server->reconnect_instance,
 				server->srv_count,
 				server->sec_mode, in_flight(server));
-#ifdef CONFIG_NET_NS
-		if (server->net)
-			seq_printf(m, " Net namespace: %u ", server->net->ns.inum);
-#endif /* NET_NS */
 
 		seq_printf(m, "\nIn Send: %d In MaxReq Wait: %d",
 				atomic_read(&server->in_send),
 				atomic_read(&server->num_waiters));
-
-		if (server->leaf_fullpath) {
-			seq_printf(m, "\nDFS leaf full path: %s",
-				   server->leaf_fullpath);
-		}
-
-		seq_puts(m, "\nCompression: ");
-		if (!IS_ENABLED(CONFIG_CIFS_COMPRESSION))
-			seq_puts(m, "no built-in support");
-		else if (!server->compression.requested)
-			seq_puts(m, "disabled on mount");
-		else if (server->compression.enabled)
-			seq_printf(m, "enabled (%s)", compression_alg_str(server->compression.alg));
-		else
-			seq_puts(m, "disabled (not supported by this server)");
-
-		/* Show negotiated encryption cipher, even if not required */
-		seq_puts(m, "\nEncryption: ");
-		if (server->cipher_type)
-			seq_printf(m, "Negotiated cipher (%s)", cipher_alg_str(server->cipher_type));
 
 		seq_printf(m, "\n\n\tSessions: ");
 		i = 0;
@@ -616,8 +411,6 @@ skip_rdma:
 				ses->ses_count, ses->serverOS, ses->serverNOS,
 				ses->capabilities, ses->ses_status);
 			}
-			if (ses->expired_pwd)
-				seq_puts(m, "password no longer valid ");
 			spin_unlock(&ses->ses_lock);
 
 			seq_printf(m, "\n\tSecurity type: %s ",
@@ -633,11 +426,6 @@ skip_rdma:
 			seq_printf(m, "\n\tUser: %d Cred User: %d",
 				   from_kuid(&init_user_ns, ses->linux_uid),
 				   from_kuid(&init_user_ns, ses->cred_uid));
-
-			if (ses->dfs_root_ses) {
-				seq_printf(m, "\n\tDFS root session id: 0x%llx",
-					   ses->dfs_root_ses->Suid);
-			}
 
 			spin_lock(&ses->chan_lock);
 			if (CIFS_CHAN_NEEDS_RECONNECT(ses, 0))
@@ -715,7 +503,7 @@ skip_rdma:
 
 				seq_printf(m, "\n\tServer ConnectionId: 0x%llx",
 					   chan_server->conn_id);
-				spin_lock(&chan_server->mid_queue_lock);
+				spin_lock(&chan_server->mid_lock);
 				list_for_each_entry(mid_entry, &chan_server->pending_mid_q, qhead) {
 					seq_printf(m, "\n\t\tState: %d com: %d pid: %d cbdata: %p mid %llu",
 						   mid_entry->mid_state,
@@ -724,7 +512,7 @@ skip_rdma:
 						   mid_entry->callback_data,
 						   mid_entry->mid);
 				}
-				spin_unlock(&chan_server->mid_queue_lock);
+				spin_unlock(&chan_server->mid_lock);
 			}
 			spin_unlock(&ses->chan_lock);
 			seq_puts(m, "\n--\n");
@@ -787,7 +575,6 @@ static ssize_t cifs_stats_proc_write(struct file *file,
 					spin_lock(&tcon->stat_lock);
 					tcon->bytes_read = 0;
 					tcon->bytes_written = 0;
-					tcon->stats_from_time = ktime_get_real_seconds();
 					spin_unlock(&tcon->stat_lock);
 					if (server->ops->clear_stats)
 						server->ops->clear_stats(tcon);
@@ -868,9 +655,8 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
 				seq_printf(m, "\n%d) %s", i, tcon->tree_name);
 				if (tcon->need_reconnect)
 					seq_puts(m, "\tDISCONNECTED ");
-				seq_printf(m, "\nSMBs: %d since %ptTs UTC",
-					   atomic_read(&tcon->num_smbs_sent),
-					   &tcon->stats_from_time);
+				seq_printf(m, "\nSMBs: %d",
+					   atomic_read(&tcon->num_smbs_sent));
 				if (server->ops->print_stats)
 					server->ops->print_stats(m, tcon);
 			}
@@ -901,14 +687,14 @@ static ssize_t name##_write(struct file *file, const char __user *buffer, \
 	size_t count, loff_t *ppos) \
 { \
 	int rc; \
-	rc = kstrtoint_from_user(buffer, count, 10, &name); \
+	rc = kstrtoint_from_user(buffer, count, 10, & name); \
 	if (rc) \
 		return rc; \
 	return count; \
 } \
 static int name##_proc_show(struct seq_file *m, void *v) \
 { \
-	seq_printf(m, "%d\n", name); \
+	seq_printf(m, "%d\n", name ); \
 	return 0; \
 } \
 static int name##_open(struct inode *inode, struct file *file) \
@@ -955,9 +741,6 @@ cifs_proc_init(void)
 	proc_create_single("open_files", 0400, proc_fs_cifs,
 			cifs_debug_files_proc_show);
 
-	proc_create_single("open_dirs", 0400, proc_fs_cifs,
-			cifs_debug_dirs_proc_show);
-
 	proc_create("Stats", 0644, proc_fs_cifs, &cifs_stats_proc_ops);
 	proc_create("cifsFYI", 0644, proc_fs_cifs, &cifsFYI_proc_ops);
 	proc_create("traceSMB", 0644, proc_fs_cifs, &traceSMB_proc_ops);
@@ -1002,7 +785,6 @@ cifs_proc_clean(void)
 
 	remove_proc_entry("DebugData", proc_fs_cifs);
 	remove_proc_entry("open_files", proc_fs_cifs);
-	remove_proc_entry("open_dirs", proc_fs_cifs);
 	remove_proc_entry("cifsFYI", proc_fs_cifs);
 	remove_proc_entry("traceSMB", proc_fs_cifs);
 	remove_proc_entry("Stats", proc_fs_cifs);
@@ -1048,7 +830,7 @@ static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
 	rc = get_user(c[0], buffer);
 	if (rc)
 		return rc;
-	if (kstrtobool(c, &bv) == 0)
+	if (strtobool(c, &bv) == 0)
 		cifsFYI = bv;
 	else if ((c[0] > '1') && (c[0] <= '9'))
 		cifsFYI = (int) (c[0] - '0'); /* see cifs_debug.h for meanings */
@@ -1201,14 +983,14 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 	if ((count < 1) || (count > 11))
 		return -EINVAL;
 
-	memset(flags_string, 0, sizeof(flags_string));
+	memset(flags_string, 0, 12);
 
 	if (copy_from_user(flags_string, buffer, count))
 		return -EFAULT;
 
 	if (count < 3) {
 		/* single char or single char followed by null */
-		if (kstrtobool(flags_string, &bv) == 0) {
+		if (strtobool(flags_string, &bv) == 0) {
 			global_secflags = bv ? CIFSSEC_MAX : CIFSSEC_DEF;
 			return count;
 		} else if (!isdigit(flags_string[0])) {

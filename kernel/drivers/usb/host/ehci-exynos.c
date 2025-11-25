@@ -48,6 +48,7 @@ struct exynos_ehci_hcd {
 static int exynos_ehci_get_phy(struct device *dev,
 				struct exynos_ehci_hcd *exynos_ehci)
 {
+	struct device_node *child;
 	struct phy *phy;
 	int phy_number, num_phys;
 	int ret;
@@ -65,22 +66,34 @@ static int exynos_ehci_get_phy(struct device *dev,
 		return 0;
 
 	/* Get PHYs using legacy bindings */
-	for_each_available_child_of_node_scoped(dev->of_node, child) {
+	for_each_available_child_of_node(dev->of_node, child) {
 		ret = of_property_read_u32(child, "reg", &phy_number);
 		if (ret) {
 			dev_err(dev, "Failed to parse device tree\n");
+			of_node_put(child);
 			return ret;
 		}
 
 		if (phy_number >= PHY_NUMBER) {
 			dev_err(dev, "Invalid number of PHYs\n");
+			of_node_put(child);
 			return -EINVAL;
 		}
 
-		phy = devm_of_phy_optional_get(dev, child, NULL);
+		phy = devm_of_phy_get(dev, child, NULL);
 		exynos_ehci->phy[phy_number] = phy;
-		if (IS_ERR(phy))
-			return PTR_ERR(phy);
+		if (IS_ERR(phy)) {
+			ret = PTR_ERR(phy);
+			if (ret == -EPROBE_DEFER) {
+				of_node_put(child);
+				return ret;
+			} else if (ret != -ENOSYS && ret != -ENODEV) {
+				dev_err(dev,
+					"Error retrieving usb2 phy: %d\n", ret);
+				of_node_put(child);
+				return ret;
+			}
+		}
 	}
 
 	exynos_ehci->legacy_phy = true;
@@ -95,10 +108,12 @@ static int exynos_ehci_phy_enable(struct device *dev)
 	int ret = 0;
 
 	for (i = 0; ret == 0 && i < PHY_NUMBER; i++)
-		ret = phy_power_on(exynos_ehci->phy[i]);
+		if (!IS_ERR(exynos_ehci->phy[i]))
+			ret = phy_power_on(exynos_ehci->phy[i]);
 	if (ret)
 		for (i--; i >= 0; i--)
-			phy_power_off(exynos_ehci->phy[i]);
+			if (!IS_ERR(exynos_ehci->phy[i]))
+				phy_power_off(exynos_ehci->phy[i]);
 
 	return ret;
 }
@@ -110,7 +125,8 @@ static void exynos_ehci_phy_disable(struct device *dev)
 	int i;
 
 	for (i = 0; i < PHY_NUMBER; i++)
-		phy_power_off(exynos_ehci->phy[i]);
+		if (!IS_ERR(exynos_ehci->phy[i]))
+			phy_power_off(exynos_ehci->phy[i]);
 }
 
 static void exynos_setup_vbus_gpio(struct device *dev)
@@ -154,17 +170,22 @@ static int exynos_ehci_probe(struct platform_device *pdev)
 
 	err = exynos_ehci_get_phy(&pdev->dev, exynos_ehci);
 	if (err)
-		goto fail_io;
+		goto fail_clk;
 
-	exynos_ehci->clk = devm_clk_get_enabled(&pdev->dev, "usbhost");
+	exynos_ehci->clk = devm_clk_get(&pdev->dev, "usbhost");
 
 	if (IS_ERR(exynos_ehci->clk)) {
 		dev_err(&pdev->dev, "Failed to get usbhost clock\n");
 		err = PTR_ERR(exynos_ehci->clk);
-		goto fail_io;
+		goto fail_clk;
 	}
 
-	hcd->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	err = clk_prepare_enable(exynos_ehci->clk);
+	if (err)
+		goto fail_clk;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hcd->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hcd->regs)) {
 		err = PTR_ERR(hcd->regs);
 		goto fail_io;
@@ -214,11 +235,13 @@ fail_add_hcd:
 	exynos_ehci_phy_disable(&pdev->dev);
 	pdev->dev.of_node = exynos_ehci->of_node;
 fail_io:
+	clk_disable_unprepare(exynos_ehci->clk);
+fail_clk:
 	usb_put_hcd(hcd);
 	return err;
 }
 
-static void exynos_ehci_remove(struct platform_device *pdev)
+static int exynos_ehci_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct exynos_ehci_hcd *exynos_ehci = to_exynos_ehci(hcd);
@@ -229,9 +252,14 @@ static void exynos_ehci_remove(struct platform_device *pdev)
 
 	exynos_ehci_phy_disable(&pdev->dev);
 
+	clk_disable_unprepare(exynos_ehci->clk);
+
 	usb_put_hcd(hcd);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM
 static int exynos_ehci_suspend(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
@@ -274,9 +302,15 @@ static int exynos_ehci_resume(struct device *dev)
 	ehci_resume(hcd, false);
 	return 0;
 }
+#else
+#define exynos_ehci_suspend	NULL
+#define exynos_ehci_resume	NULL
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(exynos_ehci_pm_ops,
-				exynos_ehci_suspend, exynos_ehci_resume);
+static const struct dev_pm_ops exynos_ehci_pm_ops = {
+	.suspend	= exynos_ehci_suspend,
+	.resume		= exynos_ehci_resume,
+};
 
 #ifdef CONFIG_OF
 static const struct of_device_id exynos_ehci_match[] = {
@@ -292,7 +326,7 @@ static struct platform_driver exynos_ehci_driver = {
 	.shutdown	= usb_hcd_platform_shutdown,
 	.driver = {
 		.name	= "exynos-ehci",
-		.pm	= pm_ptr(&exynos_ehci_pm_ops),
+		.pm	= &exynos_ehci_pm_ops,
 		.of_match_table = of_match_ptr(exynos_ehci_match),
 	}
 };

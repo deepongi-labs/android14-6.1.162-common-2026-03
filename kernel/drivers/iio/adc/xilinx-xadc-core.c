@@ -625,17 +625,20 @@ static int xadc_update_scan_mode(struct iio_dev *indio_dev,
 	const unsigned long *mask)
 {
 	struct xadc *xadc = iio_priv(indio_dev);
-	size_t n;
+	size_t new_size, n;
 	void *data;
 
-	n = bitmap_weight(mask, iio_get_masklength(indio_dev));
+	n = bitmap_weight(mask, indio_dev->masklength);
 
-	data = devm_krealloc_array(indio_dev->dev.parent, xadc->data,
-				   n, sizeof(*xadc->data), GFP_KERNEL);
+	if (check_mul_overflow(n, sizeof(*xadc->data), &new_size))
+		return -ENOMEM;
+
+	data = devm_krealloc(indio_dev->dev.parent, xadc->data,
+			     new_size, GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
-	memset(data, 0, n * sizeof(*xadc->data));
+	memset(data, 0, new_size);
 	xadc->data = data;
 
 	return 0;
@@ -681,7 +684,8 @@ static irqreturn_t xadc_trigger_handler(int irq, void *p)
 		goto out;
 
 	j = 0;
-	iio_for_each_active_channel(indio_dev, i) {
+	for_each_set_bit(i, indio_dev->active_scan_mask,
+		indio_dev->masklength) {
 		chan = xadc_scan_index_to_channel(i);
 		xadc_read_adc_reg(xadc, chan, &xadc->data[j]);
 		j++;
@@ -1186,7 +1190,7 @@ static const struct of_device_id xadc_of_match_table[] = {
 		.compatible = "xlnx,system-management-wiz-1.3",
 		.data = &xadc_us_axi_ops
 	},
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, xadc_of_match_table);
 
@@ -1245,8 +1249,8 @@ static int xadc_parse_dt(struct iio_dev *indio_dev, unsigned int *conf, int irq)
 		channel_templates = xadc_us_channels;
 		max_channels = ARRAY_SIZE(xadc_us_channels);
 	}
-	channels = devm_kmemdup_array(dev, channel_templates, max_channels,
-				      sizeof(*channel_templates), GFP_KERNEL);
+	channels = devm_kmemdup(dev, channel_templates,
+				sizeof(channels[0]) * max_channels, GFP_KERNEL);
 	if (!channels)
 		return -ENOMEM;
 
@@ -1288,9 +1292,9 @@ static int xadc_parse_dt(struct iio_dev *indio_dev, unsigned int *conf, int irq)
 	}
 
 	indio_dev->num_channels = num_channels;
-	indio_dev->channels = devm_krealloc_array(dev, channels,
-						  num_channels, sizeof(*channels),
-						  GFP_KERNEL);
+	indio_dev->channels = devm_krealloc(dev, channels,
+					    sizeof(*channels) * num_channels,
+					    GFP_KERNEL);
 	/* If we can't resize the channels array, just use the original */
 	if (!indio_dev->channels)
 		indio_dev->channels = channels;

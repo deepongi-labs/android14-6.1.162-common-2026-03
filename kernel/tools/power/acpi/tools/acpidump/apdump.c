@@ -3,7 +3,7 @@
  *
  * Module Name: apdump - Dump routines for ACPI tables (acpidump)
  *
- * Copyright (C) 2000 - 2025, Intel Corp.
+ * Copyright (C) 2000 - 2022, Intel Corp.
  *
  *****************************************************************************/
 
@@ -78,18 +78,15 @@ u8 ap_is_valid_checksum(struct acpi_table_header *table)
 		rsdp = ACPI_CAST_PTR(struct acpi_table_rsdp, table);
 		status = acpi_tb_validate_rsdp(rsdp);
 	} else {
-		/* We don't have to check for a CDAT here, since CDAT is not in the RSDT/XSDT */
-
-		status = acpi_ut_verify_checksum(table, table->length);
+		status = acpi_tb_verify_checksum(table, table->length);
 	}
 
 	if (ACPI_FAILURE(status)) {
 		fprintf(stderr, "%4.4s: Warning: wrong checksum in table\n",
 			table->signature);
-		return (FALSE);
 	}
 
-	return (TRUE);
+	return (AE_OK);
 }
 
 /******************************************************************************

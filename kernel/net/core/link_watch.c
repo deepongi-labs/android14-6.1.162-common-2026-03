@@ -33,37 +33,14 @@ static DECLARE_DELAYED_WORK(linkwatch_work, linkwatch_event);
 static LIST_HEAD(lweventlist);
 static DEFINE_SPINLOCK(lweventlist_lock);
 
-static unsigned int default_operstate(const struct net_device *dev)
+static unsigned char default_operstate(const struct net_device *dev)
 {
 	if (netif_testing(dev))
 		return IF_OPER_TESTING;
 
-	/* Some uppers (DSA) have additional sources for being down, so
-	 * first check whether lower is indeed the source of its down state.
-	 */
-	if (!netif_carrier_ok(dev)) {
-		struct net_device *peer;
-		int iflink;
-
-		/* If called from netdev_run_todo()/linkwatch_sync_dev(),
-		 * dev_net(dev) can be already freed, and RTNL is not held.
-		 */
-		if (dev->reg_state <= NETREG_REGISTERED)
-			iflink = dev_get_iflink(dev);
-		else
-			iflink = dev->ifindex;
-
-		if (iflink == dev->ifindex)
-			return IF_OPER_DOWN;
-
-		ASSERT_RTNL();
-		peer = __dev_get_by_index(dev_net(dev), iflink);
-		if (!peer)
-			return IF_OPER_DOWN;
-
-		return netif_carrier_ok(peer) ? IF_OPER_DOWN :
-						IF_OPER_LOWERLAYERDOWN;
-	}
+	if (!netif_carrier_ok(dev))
+		return (dev->ifindex != dev_get_iflink(dev) ?
+			IF_OPER_LOWERLAYERDOWN : IF_OPER_DOWN);
 
 	if (netif_dormant(dev))
 		return IF_OPER_DORMANT;
@@ -71,12 +48,15 @@ static unsigned int default_operstate(const struct net_device *dev)
 	return IF_OPER_UP;
 }
 
+
 static void rfc2863_policy(struct net_device *dev)
 {
-	unsigned int operstate = default_operstate(dev);
+	unsigned char operstate = default_operstate(dev);
 
 	if (operstate == READ_ONCE(dev->operstate))
 		return;
+
+	write_lock(&dev_base_lock);
 
 	switch(dev->link_mode) {
 	case IF_LINK_MODE_TESTING:
@@ -94,6 +74,8 @@ static void rfc2863_policy(struct net_device *dev)
 	}
 
 	WRITE_ONCE(dev->operstate, operstate);
+
+	write_unlock(&dev_base_lock);
 }
 
 
@@ -157,9 +139,9 @@ static void linkwatch_schedule_work(int urgent)
 	 * override the existing timer.
 	 */
 	if (test_bit(LW_URGENT, &linkwatch_flags))
-		mod_delayed_work(system_dfl_wq, &linkwatch_work, 0);
+		mod_delayed_work(system_unbound_wq, &linkwatch_work, 0);
 	else
-		queue_delayed_work(system_dfl_wq, &linkwatch_work, delay);
+		queue_delayed_work(system_unbound_wq, &linkwatch_work, delay);
 }
 
 
@@ -183,7 +165,7 @@ static void linkwatch_do_dev(struct net_device *dev)
 		else
 			dev_deactivate(dev);
 
-		netif_state_change(dev);
+		netdev_state_change(dev);
 	}
 	/* Note: our callers are responsible for calling netdev_tracker_free().
 	 * This is the reason we use __dev_put() instead of dev_put().
@@ -196,10 +178,7 @@ static void __linkwatch_run_queue(int urgent_only)
 #define MAX_DO_DEV_PER_LOOP	100
 
 	int do_dev = MAX_DO_DEV_PER_LOOP;
-	/* Use a local list here since we add non-urgent
-	 * events back to the global one when called with
-	 * urgent_only=1.
-	 */
+	struct net_device *dev;
 	LIST_HEAD(wrk);
 
 	/* Give urgent case more budget */
@@ -225,7 +204,6 @@ static void __linkwatch_run_queue(int urgent_only)
 	list_splice_init(&lweventlist, &wrk);
 
 	while (!list_empty(&wrk) && do_dev > 0) {
-		struct net_device *dev;
 
 		dev = list_first_entry(&wrk, struct net_device, link_watch_list);
 		list_del_init(&dev->link_watch_list);
@@ -240,9 +218,7 @@ static void __linkwatch_run_queue(int urgent_only)
 		 */
 		netdev_tracker_free(dev, &dev->linkwatch_dev_tracker);
 		spin_unlock_irq(&lweventlist_lock);
-		netdev_lock_ops(dev);
 		linkwatch_do_dev(dev);
-		netdev_unlock_ops(dev);
 		do_dev--;
 		spin_lock_irq(&lweventlist_lock);
 	}
@@ -255,41 +231,25 @@ static void __linkwatch_run_queue(int urgent_only)
 	spin_unlock_irq(&lweventlist_lock);
 }
 
-static bool linkwatch_clean_dev(struct net_device *dev)
+void linkwatch_forget_dev(struct net_device *dev)
 {
 	unsigned long flags;
-	bool clean = false;
+	int clean = 0;
 
 	spin_lock_irqsave(&lweventlist_lock, flags);
 	if (!list_empty(&dev->link_watch_list)) {
 		list_del_init(&dev->link_watch_list);
-		clean = true;
+		clean = 1;
 		/* We must release netdev tracker under
 		 * the spinlock protection.
 		 */
 		netdev_tracker_free(dev, &dev->linkwatch_dev_tracker);
 	}
 	spin_unlock_irqrestore(&lweventlist_lock, flags);
-
-	return clean;
-}
-
-void __linkwatch_sync_dev(struct net_device *dev)
-{
-	netdev_ops_assert_locked(dev);
-
-	if (linkwatch_clean_dev(dev))
+	if (clean)
 		linkwatch_do_dev(dev);
 }
 
-void linkwatch_sync_dev(struct net_device *dev)
-{
-	if (linkwatch_clean_dev(dev)) {
-		netdev_lock_ops(dev);
-		linkwatch_do_dev(dev);
-		netdev_unlock_ops(dev);
-	}
-}
 
 /* Must be called with the rtnl semaphore held */
 void linkwatch_run_queue(void)

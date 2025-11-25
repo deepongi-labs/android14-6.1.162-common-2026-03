@@ -9,7 +9,6 @@
 #include <linux/pci.h>	/* for scatterlist macros */
 #include <linux/usb.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/timer.h>
@@ -1038,7 +1037,6 @@ char *usb_cache_string(struct usb_device *udev, int index)
 	}
 	return smallbuf;
 }
-EXPORT_SYMBOL_GPL(usb_cache_string);
 
 /*
  * usb_get_device_descriptor - read the device descriptor
@@ -1198,8 +1196,6 @@ EXPORT_SYMBOL_GPL(usb_get_status);
  * same status code used to report a true stall.
  *
  * This call is synchronous, and may not be used in an interrupt context.
- * If a thread in your driver uses this call, make sure your disconnect()
- * method can wait for it to complete.
  *
  * Return: Zero on success, or else the status code returned by the
  * underlying usb_control_msg() call.
@@ -1518,8 +1514,7 @@ void usb_enable_interface(struct usb_device *dev,
  * This call is synchronous, and may not be used in an interrupt context.
  * Also, drivers must not change altsettings while urbs are scheduled for
  * endpoints in that interface; all such urbs must first be completed
- * (perhaps forced by unlinking). If a thread in your driver uses this call,
- * make sure your disconnect() method can wait for it to complete.
+ * (perhaps forced by unlinking).
  *
  * Return: Zero on success, or else the status code returned by the
  * underlying usb_control_msg() call.
@@ -1818,11 +1813,11 @@ void usb_authorize_interface(struct usb_interface *intf)
 	}
 }
 
-static int usb_if_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int usb_if_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct usb_device *usb_dev;
-	const struct usb_interface *intf;
-	const struct usb_host_interface *alt;
+	struct usb_device *usb_dev;
+	struct usb_interface *intf;
+	struct usb_host_interface *alt;
 
 	intf = to_usb_interface(dev);
 	usb_dev = interface_to_usbdev(intf);
@@ -1852,7 +1847,7 @@ static int usb_if_uevent(const struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
-const struct device_type usb_if_device_type = {
+struct device_type usb_if_device_type = {
 	.name =		"usb_interface",
 	.release =	usb_release_interface,
 	.uevent =	usb_if_uevent,
@@ -1907,45 +1902,6 @@ static void __usb_queue_reset_device(struct work_struct *ws)
 	usb_put_intf(iface);	/* Undo _get_ in usb_queue_reset_device() */
 }
 
-/*
- * Internal function to set the wireless_status sysfs attribute
- * See usb_set_wireless_status() for more details
- */
-static void __usb_wireless_status_intf(struct work_struct *ws)
-{
-	struct usb_interface *iface =
-		container_of(ws, struct usb_interface, wireless_status_work);
-
-	device_lock(iface->dev.parent);
-	if (iface->sysfs_files_created)
-		usb_update_wireless_status_attr(iface);
-	device_unlock(iface->dev.parent);
-	usb_put_intf(iface);	/* Undo _get_ in usb_set_wireless_status() */
-}
-
-/**
- * usb_set_wireless_status - sets the wireless_status struct member
- * @iface: the interface to modify
- * @status: the new wireless status
- *
- * Set the wireless_status struct member to the new value, and emit
- * sysfs changes as necessary.
- *
- * Returns: 0 on success, -EALREADY if already set.
- */
-int usb_set_wireless_status(struct usb_interface *iface,
-		enum usb_wireless_status status)
-{
-	if (iface->wireless_status == status)
-		return -EALREADY;
-
-	usb_get_intf(iface);
-	iface->wireless_status = status;
-	schedule_work(&iface->wireless_status_work);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(usb_set_wireless_status);
 
 /*
  * usb_set_configuration - Makes a particular device setting be current
@@ -2138,7 +2094,6 @@ free_interfaces:
 		intf->dev.type = &usb_if_device_type;
 		intf->dev.groups = usb_interface_groups;
 		INIT_WORK(&intf->reset_ws, __usb_queue_reset_device);
-		INIT_WORK(&intf->wireless_status_work, __usb_wireless_status_intf);
 		intf->minor = -1;
 		device_initialize(&intf->dev);
 		pm_runtime_no_callbacks(&intf->dev);

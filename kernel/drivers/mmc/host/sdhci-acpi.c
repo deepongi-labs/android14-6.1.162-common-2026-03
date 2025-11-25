@@ -651,10 +651,10 @@ static int sdhci_acpi_emmc_amd_probe_slot(struct platform_device *pdev,
 	 *       in reading a garbage value and using the wrong presets.
 	 *
 	 *       Since HS400 and HS200 presets must be identical, we could
-	 *       instead use the SDR104 preset register.
+	 *       instead use the the SDR104 preset register.
 	 *
 	 *    If the above issues are resolved we could remove this quirk for
-	 *    firmware that has valid presets (i.e., SDR12 <= 12 MHz).
+	 *    firmware that that has valid presets (i.e., SDR12 <= 12 MHz).
 	 */
 	host->quirks2 |= SDHCI_QUIRK2_PRESET_VALUE_BROKEN;
 
@@ -822,6 +822,8 @@ static int sdhci_acpi_probe(struct platform_device *pdev)
 	struct acpi_device *device;
 	struct sdhci_acpi_host *c;
 	struct sdhci_host *host;
+	struct resource *iomem;
+	resource_size_t len;
 	size_t priv_size;
 	int quirks = 0;
 	int err;
@@ -841,6 +843,17 @@ static int sdhci_acpi_probe(struct platform_device *pdev)
 
 	if (sdhci_acpi_byt_defer(dev))
 		return -EPROBE_DEFER;
+
+	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!iomem)
+		return -ENOMEM;
+
+	len = resource_size(iomem);
+	if (len < 0x100)
+		dev_err(dev, "Invalid iomem size!\n");
+
+	if (!devm_request_mem_region(dev, iomem->start, len, dev_name(dev)))
+		return -ENOMEM;
 
 	priv_size = slot ? slot->priv_size : 0;
 	host = sdhci_alloc_host(dev, sizeof(struct sdhci_acpi_host) + priv_size);
@@ -863,9 +876,10 @@ static int sdhci_acpi_probe(struct platform_device *pdev)
 		goto err_free;
 	}
 
-	host->ioaddr = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(host->ioaddr)) {
-		err = PTR_ERR(host->ioaddr);
+	host->ioaddr = devm_ioremap(dev, iomem->start,
+					    resource_size(iomem));
+	if (host->ioaddr == NULL) {
+		err = -ENOMEM;
 		goto err_free;
 	}
 
@@ -948,10 +962,11 @@ err_free:
 	if (c->slot && c->slot->free_slot)
 		c->slot->free_slot(pdev);
 
+	sdhci_free_host(c->host);
 	return err;
 }
 
-static void sdhci_acpi_remove(struct platform_device *pdev)
+static int sdhci_acpi_remove(struct platform_device *pdev)
 {
 	struct sdhci_acpi_host *c = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -971,9 +986,14 @@ static void sdhci_acpi_remove(struct platform_device *pdev)
 
 	if (c->slot && c->slot->free_slot)
 		c->slot->free_slot(pdev);
+
+	sdhci_free_host(c->host);
+
+	return 0;
 }
 
-static void sdhci_acpi_reset_signal_voltage_if_needed(struct device *dev)
+static void __maybe_unused sdhci_acpi_reset_signal_voltage_if_needed(
+	struct device *dev)
 {
 	struct sdhci_acpi_host *c = dev_get_drvdata(dev);
 	struct sdhci_host *host = c->host;
@@ -987,6 +1007,8 @@ static void sdhci_acpi_reset_signal_voltage_if_needed(struct device *dev)
 		intel_dsm(intel_host, dev, fn, &result);
 	}
 }
+
+#ifdef CONFIG_PM_SLEEP
 
 static int sdhci_acpi_suspend(struct device *dev)
 {
@@ -1014,15 +1036,22 @@ static int sdhci_acpi_resume(struct device *dev)
 	return sdhci_resume_host(c->host);
 }
 
+#endif
+
+#ifdef CONFIG_PM
+
 static int sdhci_acpi_runtime_suspend(struct device *dev)
 {
 	struct sdhci_acpi_host *c = dev_get_drvdata(dev);
 	struct sdhci_host *host = c->host;
+	int ret;
 
 	if (host->tuning_mode != SDHCI_TUNING_MODE_3)
 		mmc_retune_needed(host->mmc);
 
-	sdhci_runtime_suspend_host(host);
+	ret = sdhci_runtime_suspend_host(host);
+	if (ret)
+		return ret;
 
 	sdhci_acpi_reset_signal_voltage_if_needed(dev);
 	return 0;
@@ -1034,13 +1063,15 @@ static int sdhci_acpi_runtime_resume(struct device *dev)
 
 	sdhci_acpi_byt_setting(&c->pdev->dev);
 
-	sdhci_runtime_resume_host(c->host, 0);
-	return 0;
+	return sdhci_runtime_resume_host(c->host, 0);
 }
 
+#endif
+
 static const struct dev_pm_ops sdhci_acpi_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(sdhci_acpi_suspend, sdhci_acpi_resume)
-	RUNTIME_PM_OPS(sdhci_acpi_runtime_suspend, sdhci_acpi_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(sdhci_acpi_suspend, sdhci_acpi_resume)
+	SET_RUNTIME_PM_OPS(sdhci_acpi_runtime_suspend,
+			sdhci_acpi_runtime_resume, NULL)
 };
 
 static struct platform_driver sdhci_acpi_driver = {
@@ -1048,10 +1079,10 @@ static struct platform_driver sdhci_acpi_driver = {
 		.name			= "sdhci-acpi",
 		.probe_type		= PROBE_PREFER_ASYNCHRONOUS,
 		.acpi_match_table	= sdhci_acpi_ids,
-		.pm			= pm_ptr(&sdhci_acpi_pm_ops),
+		.pm			= &sdhci_acpi_pm_ops,
 	},
 	.probe	= sdhci_acpi_probe,
-	.remove = sdhci_acpi_remove,
+	.remove	= sdhci_acpi_remove,
 };
 
 module_platform_driver(sdhci_acpi_driver);

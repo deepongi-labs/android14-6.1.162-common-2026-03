@@ -468,7 +468,7 @@ static int sis900_probe(struct pci_dev *pci_dev,
 	SET_NETDEV_DEV(net_dev, &pci_dev->dev);
 
 	/* We do a request_region() to register /proc/ioports info. */
-	ret = pcim_request_all_regions(pci_dev, "sis900");
+	ret = pci_request_regions(pci_dev, "sis900");
 	if (ret)
 		goto err_out;
 
@@ -1314,8 +1314,7 @@ static void sis630_set_eq(struct net_device *net_dev, u8 revision)
 
 static void sis900_timer(struct timer_list *t)
 {
-	struct sis900_private *sis_priv = timer_container_of(sis_priv, t,
-							     timer);
+	struct sis900_private *sis_priv = from_timer(sis_priv, t, timer);
 	struct net_device *net_dev = sis_priv->mii_info.dev;
 	struct mii_phy *mii_phy = sis_priv->mii;
 	static const int next_tick = 5*HZ;
@@ -1984,7 +1983,7 @@ static int sis900_close(struct net_device *net_dev)
 	/* Stop the chip's Tx and Rx Status Machine */
 	sw32(cr, RxDIS | TxDIS | sr32(cr));
 
-	timer_delete(&sis_priv->timer);
+	del_timer(&sis_priv->timer);
 
 	free_irq(pdev->irq, net_dev);
 
@@ -2274,7 +2273,7 @@ static int sis900_set_config(struct net_device *dev, struct ifmap *map)
 		 * (which seems to be different from the ifport(pcmcia) definition) */
 		switch(map->port){
 		case IF_PORT_UNKNOWN: /* use auto here */
-			WRITE_ONCE(dev->if_port, map->port);
+			dev->if_port = map->port;
 			/* we are going to change the media type, so the Link
 			 * will be temporary down and we need to reflect that
 			 * here. When the Link comes up again, it will be
@@ -2295,7 +2294,7 @@ static int sis900_set_config(struct net_device *dev, struct ifmap *map)
 			break;
 
 		case IF_PORT_10BASET: /* 10BaseT */
-			WRITE_ONCE(dev->if_port, map->port);
+			dev->if_port = map->port;
 
 			/* we are going to change the media type, so the Link
 			 * will be temporary down and we need to reflect that
@@ -2316,7 +2315,7 @@ static int sis900_set_config(struct net_device *dev, struct ifmap *map)
 
 		case IF_PORT_100BASET: /* 100BaseT */
 		case IF_PORT_100BASETX: /* 100BaseTx */
-			WRITE_ONCE(dev->if_port, map->port);
+			dev->if_port = map->port;
 
 			/* we are going to change the media type, so the Link
 			 * will be temporary down and we need to reflect that

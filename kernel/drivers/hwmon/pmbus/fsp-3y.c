@@ -282,7 +282,7 @@ static struct i2c_driver fsp3y_driver = {
 	.driver = {
 		   .name = "fsp3y",
 		   },
-	.probe = fsp3y_probe,
+	.probe_new = fsp3y_probe,
 	.id_table = fsp3y_id
 };
 
@@ -291,4 +291,4 @@ module_i2c_driver(fsp3y_driver);
 MODULE_AUTHOR("Václav Kubernát");
 MODULE_DESCRIPTION("PMBus driver for FSP/3Y-Power power supplies");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("PMBUS");
+MODULE_IMPORT_NS(PMBUS);

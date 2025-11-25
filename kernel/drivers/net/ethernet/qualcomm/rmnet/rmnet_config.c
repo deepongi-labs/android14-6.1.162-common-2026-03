@@ -12,7 +12,6 @@
 #include "rmnet_handlers.h"
 #include "rmnet_vnd.h"
 #include "rmnet_private.h"
-#include "rmnet_map.h"
 
 /* Local Definitions and Declarations */
 
@@ -39,8 +38,6 @@ static int rmnet_unregister_real_device(struct net_device *real_dev)
 
 	if (port->nr_rmnet_devs)
 		return -EINVAL;
-
-	rmnet_map_tx_aggregate_exit(port);
 
 	netdev_rx_handler_unregister(real_dev);
 
@@ -82,8 +79,6 @@ static int rmnet_register_real_device(struct net_device *real_dev,
 	for (entry = 0; entry < RMNET_MAX_LOGICAL_EP; entry++)
 		INIT_HLIST_HEAD(&port->muxed_ep[entry]);
 
-	rmnet_map_tx_aggregate_init(port);
-
 	netdev_dbg(real_dev, "registered with rmnet\n");
 	return 0;
 }
@@ -117,14 +112,11 @@ static void rmnet_unregister_bridge(struct rmnet_port *port)
 	rmnet_unregister_real_device(bridge_dev);
 }
 
-static int rmnet_newlink(struct net_device *dev,
-			 struct rtnl_newlink_params *params,
+static int rmnet_newlink(struct net *src_net, struct net_device *dev,
+			 struct nlattr *tb[], struct nlattr *data[],
 			 struct netlink_ext_ack *extack)
 {
-	struct net *link_net = rtnl_newlink_link_net(params);
 	u32 data_format = RMNET_FLAGS_INGRESS_DEAGGREGATION;
-	struct nlattr **data = params->data;
-	struct nlattr **tb = params->tb;
 	struct net_device *real_dev;
 	int mode = RMNET_EPMODE_VND;
 	struct rmnet_endpoint *ep;
@@ -137,7 +129,7 @@ static int rmnet_newlink(struct net_device *dev,
 		return -EINVAL;
 	}
 
-	real_dev = __dev_get_by_index(link_net, nla_get_u32(tb[IFLA_LINK]));
+	real_dev = __dev_get_by_index(src_net, nla_get_u32(tb[IFLA_LINK]));
 	if (!real_dev) {
 		NL_SET_ERR_MSG_MOD(extack, "link does not exist");
 		return -ENODEV;
@@ -523,5 +515,4 @@ static void __exit rmnet_exit(void)
 module_init(rmnet_init)
 module_exit(rmnet_exit)
 MODULE_ALIAS_RTNL_LINK("rmnet");
-MODULE_DESCRIPTION("Qualcomm RmNet MAP driver");
 MODULE_LICENSE("GPL v2");

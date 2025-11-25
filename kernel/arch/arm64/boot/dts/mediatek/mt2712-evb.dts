@@ -11,7 +11,6 @@
 
 / {
 	model = "MediaTek MT2712 evaluation board";
-	chassis-type = "embedded";
 	compatible = "mediatek,mt2712-evb", "mediatek,mt2712";
 
 	aliases {
@@ -43,12 +42,12 @@
 
 	extcon_usb: extcon_iddig {
 		compatible = "linux,extcon-usb-gpio";
-		id-gpios = <&pio 12 GPIO_ACTIVE_HIGH>;
+		id-gpio = <&pio 12 GPIO_ACTIVE_HIGH>;
 	};
 
 	extcon_usb1: extcon_iddig1 {
 		compatible = "linux,extcon-usb-gpio";
-		id-gpios = <&pio 14 GPIO_ACTIVE_HIGH>;
+		id-gpio = <&pio 14 GPIO_ACTIVE_HIGH>;
 	};
 
 	usb_p0_vbus: regulator-usb-p0-vbus {
@@ -115,7 +114,6 @@
 	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&eth_default>;
 	pinctrl-1 = <&eth_sleep>;
-	mediatek,mac-wol;
 	status = "okay";
 
 	mdio {
@@ -138,7 +136,7 @@
 				 <MT2712_PIN_74_GBE_TXD0__FUNC_GBE_TXD0>,
 				 <MT2712_PIN_75_GBE_TXC__FUNC_GBE_TXC>,
 				 <MT2712_PIN_76_GBE_TXEN__FUNC_GBE_TXEN>;
-			drive-strength = <8>;
+			drive-strength = <MTK_DRIVE_8mA>;
 		};
 		rx_pins {
 			pinmux = <MT2712_PIN_78_GBE_RXD3__FUNC_GBE_RXD3>,
@@ -152,7 +150,7 @@
 		mdio_pins {
 			pinmux = <MT2712_PIN_85_GBE_MDC__FUNC_GBE_MDC>,
 				 <MT2712_PIN_86_GBE_MDIO__FUNC_GBE_MDIO>;
-			drive-strength = <8>;
+			drive-strength = <MTK_DRIVE_8mA>;
 			input-enable;
 		};
 	};

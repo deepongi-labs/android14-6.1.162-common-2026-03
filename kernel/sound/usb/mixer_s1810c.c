@@ -93,7 +93,6 @@ struct s1810c_ctl_packet {
 
 #define SC1810C_CTL_LINE_SW	0
 #define SC1810C_CTL_MUTE_SW	1
-#define SC1824C_CTL_MONO_SW	2
 #define SC1810C_CTL_AB_SW	3
 #define SC1810C_CTL_48V_SW	4
 
@@ -124,7 +123,6 @@ struct s1810c_state_packet {
 #define SC1810C_STATE_48V_SW	58
 #define SC1810C_STATE_LINE_SW	59
 #define SC1810C_STATE_MUTE_SW	60
-#define SC1824C_STATE_MONO_SW	61
 #define SC1810C_STATE_AB_SW	62
 
 struct s1810_mixer_state {
@@ -147,7 +145,12 @@ snd_s1810c_send_ctl_packet(struct usb_device *dev, u32 a,
 	pkt.b = b;
 	pkt.c = c;
 	pkt.d = d;
-	pkt.e = e;
+	/*
+	 * Value for settings 0/1 for this
+	 * output channel is always 0 (probably because
+	 * there is no ADAT output on 1810c)
+	 */
+	pkt.e = (c == 4) ? 0 : e;
 
 	ret = snd_usb_ctl_msg(dev, usb_sndctrlpipe(dev, 0),
 			      SC1810C_CMD_REQ,
@@ -178,7 +181,7 @@ snd_sc1810c_get_status_field(struct usb_device *dev,
 
 	pkt_out.fields[SC1810C_STATE_F1_IDX] = SC1810C_SET_STATE_F1;
 	pkt_out.fields[SC1810C_STATE_F2_IDX] = SC1810C_SET_STATE_F2;
-	ret = snd_usb_ctl_msg(dev, usb_sndctrlpipe(dev, 0),
+	ret = snd_usb_ctl_msg(dev, usb_rcvctrlpipe(dev, 0),
 			      SC1810C_SET_STATE_REQ,
 			      SC1810C_SET_STATE_REQTYPE,
 			      (*seqnum), 0, &pkt_out, sizeof(pkt_out));
@@ -210,164 +213,115 @@ snd_sc1810c_get_status_field(struct usb_device *dev,
  */
 static int snd_s1810c_init_mixer_maps(struct snd_usb_audio *chip)
 {
-	u32 a, b, c, e, n, off, left, right;
+	u32 a, b, c, e, n, off;
 	struct usb_device *dev = chip->dev;
 
-	switch (chip->usb_id) {
-	case USB_ID(0x194f, 0x010c): /* 1810c */
-		/* Set initial volume levels ? */
-		a = 0x64;
-		e = 0xbc;
-		for (n = 0; n < 2; n++) {
-			off = n * 18;
-			for (b = off; b < 18 + off; b++) {
-				/* This channel to all outputs ? */
-				for (c = 0; c <= 8; c++) {
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
-				}
-				/* This channel to main output (again) */
-				snd_s1810c_send_ctl_packet(dev, a, b, 0, 0, e);
-				snd_s1810c_send_ctl_packet(dev, a, b, 0, 1, e);
-			}
-			/*
-			 * I noticed on UC that DAW channels have different
-			 * initial volumes, so this makes sense.
-			 */
-			e = 0xb53bf0;
-		}
-
-		/* Connect analog outputs ? */
-		a = 0x65;
-		e = 0x01000000;
-		for (b = 1; b < 3; b++) {
-			snd_s1810c_send_ctl_packet(dev, a, b, 0, 0, e);
-			snd_s1810c_send_ctl_packet(dev, a, b, 0, 1, e);
-		}
-		snd_s1810c_send_ctl_packet(dev, a, 0, 0, 0, e);
-		snd_s1810c_send_ctl_packet(dev, a, 0, 0, 1, e);
-
-		/* Set initial volume levels for S/PDIF mappings ? */
-		a = 0x64;
-		e = 0xbc;
-		c = 3;
-		for (n = 0; n < 2; n++) {
-			off = n * 18;
-			for (b = off; b < 18 + off; b++) {
+	/* Set initial volume levels ? */
+	a = 0x64;
+	e = 0xbc;
+	for (n = 0; n < 2; n++) {
+		off = n * 18;
+		for (b = off; b < 18 + off; b++) {
+			/* This channel to all outputs ? */
+			for (c = 0; c <= 8; c++) {
 				snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
 				snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
 			}
-			e = 0xb53bf0;
-		}
-
-		/* Connect S/PDIF output ? */
-		a = 0x65;
-		e = 0x01000000;
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
-
-		/* Connect all outputs (again) ? */
-		a = 0x65;
-		e = 0x01000000;
-		for (b = 0; b < 4; b++) {
+			/* This channel to main output (again) */
 			snd_s1810c_send_ctl_packet(dev, a, b, 0, 0, e);
 			snd_s1810c_send_ctl_packet(dev, a, b, 0, 1, e);
 		}
+		/*
+		 * I noticed on UC that DAW channels have different
+		 * initial volumes, so this makes sense.
+		 */
+		e = 0xb53bf0;
+	}
 
-		/* Basic routing to get sound out of the device */
-		a = 0x64;
-		e = 0x01000000;
-		for (c = 0; c < 4; c++) {
-			for (b = 0; b < 36; b++) {
-				if ((c == 0 && b == 18) ||	/* DAW1/2 -> Main */
-					(c == 1 && b == 20) ||	/* DAW3/4 -> Line3/4 */
-					(c == 2 && b == 22) ||	/* DAW4/5 -> Line5/6 */
-					(c == 3 && b == 24)) {	/* DAW5/6 -> S/PDIF */
-					/* Left */
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0);
-					b++;
-					/* Right */
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
-				} else {
-					/* Leave the rest disconnected */
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0);
-				}
-			}
-		}
+	/* Connect analog outputs ? */
+	a = 0x65;
+	e = 0x01000000;
+	for (b = 1; b < 3; b++) {
+		snd_s1810c_send_ctl_packet(dev, a, b, 0, 0, e);
+		snd_s1810c_send_ctl_packet(dev, a, b, 0, 1, e);
+	}
+	snd_s1810c_send_ctl_packet(dev, a, 0, 0, 0, e);
+	snd_s1810c_send_ctl_packet(dev, a, 0, 0, 1, e);
 
-		/* Set initial volume levels for S/PDIF (again) ? */
-		a = 0x64;
-		e = 0xbc;
-		c = 3;
-		for (n = 0; n < 2; n++) {
-			off = n * 18;
-			for (b = off; b < 18 + off; b++) {
-				snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
-				snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
-			}
-			e = 0xb53bf0;
-		}
-
-		/* Connect S/PDIF outputs (again) ? */
-		a = 0x65;
-		e = 0x01000000;
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
-
-		/* Again ? */
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
-		snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
-		break;
-
-	case USB_ID(0x194f, 0x010d): /* 1824c */
-		/* Set all output faders to unity gain */
-		a = 0x65;
-		c = 0x00;
-		e = 0x01000000;
-
-		for (b = 0; b < 9; b++) {
+	/* Set initial volume levels for S/PDIF mappings ? */
+	a = 0x64;
+	e = 0xbc;
+	c = 3;
+	for (n = 0; n < 2; n++) {
+		off = n * 18;
+		for (b = off; b < 18 + off; b++) {
 			snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
 			snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
 		}
-
-		/* Set
-		 * Daw 1 -> Line out 1 (left), Daw 2 -> Line out 2 (right)
-		 * Daw 3 -> Line out 3, (left) Daw 4 -> Line out 4 (right)
-		 * Daw 5 -> Line out 5, (left) Daw 6 -> Line out 6 (right)
-		 * Daw 7 -> Line out 7, (left) Daw 8 -> Line out 8 (right)
-		 * Daw 9 -> SPDIF out 1, (left) Daw 10 -> SPDIF out 2 (right)
-		 * Daw 11 -> ADAT out 1, (left) Daw 12 -> ADAT out 2 (right)
-		 * Daw 13 -> ADAT out 3, (left) Daw 14 -> ADAT out 4 (right)
-		 * Daw 15 -> ADAT out 5, (left) Daw 16 -> ADAT out 6 (right)
-		 * Daw 17 -> ADAT out 7, (left) Daw 18 -> ADAT out 8 (right)
-		 * Everything else muted
-		 */
-		a = 0x64;
-		/* The first Daw channel is channel 18 */
-		left = 18;
-
-		for (c = 0; c < 9; c++) {
-			right = left + 1;
-
-			for (b = 0; b < 36; b++) {
-				if (b == left) {
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0x01000000);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0x00);
-				} else if (b == right) {
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0x00);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0x01000000);
-				} else {
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0x00);
-					snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0x00);
-				}
-			}
-			left += 2;
-		}
-		break;
+		e = 0xb53bf0;
 	}
+
+	/* Connect S/PDIF output ? */
+	a = 0x65;
+	e = 0x01000000;
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
+
+	/* Connect all outputs (again) ? */
+	a = 0x65;
+	e = 0x01000000;
+	for (b = 0; b < 4; b++) {
+		snd_s1810c_send_ctl_packet(dev, a, b, 0, 0, e);
+		snd_s1810c_send_ctl_packet(dev, a, b, 0, 1, e);
+	}
+
+	/* Basic routing to get sound out of the device */
+	a = 0x64;
+	e = 0x01000000;
+	for (c = 0; c < 4; c++) {
+		for (b = 0; b < 36; b++) {
+			if ((c == 0 && b == 18) ||	/* DAW1/2 -> Main */
+			    (c == 1 && b == 20) ||	/* DAW3/4 -> Line3/4 */
+			    (c == 2 && b == 22) ||	/* DAW4/5 -> Line5/6 */
+			    (c == 3 && b == 24)) {	/* DAW5/6 -> S/PDIF */
+				/* Left */
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0);
+				b++;
+				/* Right */
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0);
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
+			} else {
+				/* Leave the rest disconnected */
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 0, 0);
+				snd_s1810c_send_ctl_packet(dev, a, b, c, 1, 0);
+			}
+		}
+	}
+
+	/* Set initial volume levels for S/PDIF (again) ? */
+	a = 0x64;
+	e = 0xbc;
+	c = 3;
+	for (n = 0; n < 2; n++) {
+		off = n * 18;
+		for (b = off; b < 18 + off; b++) {
+			snd_s1810c_send_ctl_packet(dev, a, b, c, 0, e);
+			snd_s1810c_send_ctl_packet(dev, a, b, c, 1, e);
+		}
+		e = 0xb53bf0;
+	}
+
+	/* Connect S/PDIF outputs (again) ? */
+	a = 0x65;
+	e = 0x01000000;
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
+
+	/* Again ? */
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 0, e);
+	snd_s1810c_send_ctl_packet(dev, a, 3, 0, 1, e);
+
 	return 0;
 }
 
@@ -384,16 +338,18 @@ snd_s1810c_get_switch_state(struct usb_mixer_interface *mixer,
 	struct s1810_mixer_state *private = mixer->private_data;
 	u32 field = 0;
 	u32 ctl_idx = (u32) (kctl->private_value & 0xFF);
-	int ret;
+	int ret = 0;
 
-	guard(mutex)(&private->usb_mutex);
+	mutex_lock(&private->usb_mutex);
 	ret = snd_sc1810c_get_status_field(chip->dev, &field,
 					   ctl_idx, &private->seqnum);
 	if (ret < 0)
-		return ret;
+		goto unlock;
 
 	*state = field;
-	return ret;
+ unlock:
+	mutex_unlock(&private->usb_mutex);
+	return ret ? ret : 0;
 }
 
 /*
@@ -410,9 +366,12 @@ snd_s1810c_set_switch_state(struct usb_mixer_interface *mixer,
 	u32 pval = (u32) kctl->private_value;
 	u32 ctl_id = (pval >> 8) & 0xFF;
 	u32 ctl_val = (pval >> 16) & 0x1;
+	int ret = 0;
 
-	guard(mutex)(&private->usb_mutex);
-	return snd_s1810c_send_ctl_packet(chip->dev, 0, 0, 0, ctl_id, ctl_val);
+	mutex_lock(&private->usb_mutex);
+	ret = snd_s1810c_send_ctl_packet(chip->dev, 0, 0, 0, ctl_id, ctl_val);
+	mutex_unlock(&private->usb_mutex);
+	return ret;
 }
 
 /* Generic get/set/init functions for switch controls */
@@ -427,12 +386,12 @@ snd_s1810c_switch_get(struct snd_kcontrol *kctl,
 	u32 pval = (u32) kctl->private_value;
 	u32 ctl_idx = pval & 0xFF;
 	u32 state = 0;
-	int ret;
+	int ret = 0;
 
-	guard(mutex)(&private->data_mutex);
+	mutex_lock(&private->data_mutex);
 	ret = snd_s1810c_get_switch_state(mixer, kctl, &state);
 	if (ret < 0)
-		return ret;
+		goto unlock;
 
 	switch (ctl_idx) {
 	case SC1810C_STATE_LINE_SW:
@@ -443,7 +402,9 @@ snd_s1810c_switch_get(struct snd_kcontrol *kctl,
 		ctl_elem->value.integer.value[0] = (long)state;
 	}
 
-	return 0;
+ unlock:
+	mutex_unlock(&private->data_mutex);
+	return (ret < 0) ? ret : 0;
 }
 
 static int
@@ -459,10 +420,10 @@ snd_s1810c_switch_set(struct snd_kcontrol *kctl,
 	u32 newval = 0;
 	int ret = 0;
 
-	guard(mutex)(&private->data_mutex);
+	mutex_lock(&private->data_mutex);
 	ret = snd_s1810c_get_switch_state(mixer, kctl, &curval);
 	if (ret < 0)
-		return ret;
+		goto unlock;
 
 	switch (ctl_idx) {
 	case SC1810C_STATE_LINE_SW:
@@ -474,12 +435,14 @@ snd_s1810c_switch_set(struct snd_kcontrol *kctl,
 	}
 
 	if (curval == newval)
-		return 0;
+		goto unlock;
 
 	kctl->private_value &= ~(0x1 << 16);
 	kctl->private_value |= (unsigned int)(newval & 0x1) << 16;
 	ret = snd_s1810c_set_switch_state(mixer, kctl);
 
+ unlock:
+	mutex_unlock(&private->data_mutex);
 	return (ret < 0) ? 0 : 1;
 }
 
@@ -539,15 +502,6 @@ static const struct snd_kcontrol_new snd_s1810c_mute_sw = {
 	.private_value = (SC1810C_STATE_MUTE_SW | SC1810C_CTL_MUTE_SW << 8)
 };
 
-static const struct snd_kcontrol_new snd_s1824c_mono_sw = {
-	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.name = "Mono Main Out Switch",
-	.info = snd_ctl_boolean_mono_info,
-	.get = snd_s1810c_switch_get,
-	.put = snd_s1810c_switch_set,
-	.private_value = (SC1824C_STATE_MONO_SW | SC1824C_CTL_MONO_SW << 8)
-};
-
 static const struct snd_kcontrol_new snd_s1810c_48v_sw = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "48V Phantom Power On Mic Inputs Switch",
@@ -597,6 +551,15 @@ int snd_sc1810_init_mixer(struct usb_mixer_interface *mixer)
 	if (!list_empty(&chip->mixer_list))
 		return 0;
 
+	dev_info(&dev->dev,
+		 "Presonus Studio 1810c, device_setup: %u\n", chip->setup);
+	if (chip->setup == 1)
+		dev_info(&dev->dev, "(8out/18in @ 48kHz)\n");
+	else if (chip->setup == 2)
+		dev_info(&dev->dev, "(6out/8in @ 192kHz)\n");
+	else
+		dev_info(&dev->dev, "(8out/14in @ 96kHz)\n");
+
 	ret = snd_s1810c_init_mixer_maps(chip);
 	if (ret < 0)
 		return ret;
@@ -625,29 +588,8 @@ int snd_sc1810_init_mixer(struct usb_mixer_interface *mixer)
 	if (ret < 0)
 		return ret;
 
-	switch (chip->usb_id) {
-	case USB_ID(0x194f, 0x010c): /* Presonus Studio 1810c */
-		dev_info(&dev->dev,
-			 "Presonus Studio 1810c, device_setup: %u\n", chip->setup);
-		if (chip->setup == 1)
-			dev_info(&dev->dev, "(8out/18in @ 48kHz)\n");
-		else if (chip->setup == 2)
-			dev_info(&dev->dev, "(6out/8in @ 192kHz)\n");
-		else
-			dev_info(&dev->dev, "(8out/14in @ 96kHz)\n");
-
-		ret = snd_s1810c_switch_init(mixer, &snd_s1810c_ab_sw);
-		if (ret < 0)
-			return ret;
-
-		break;
-	case USB_ID(0x194f, 0x010d): /* Presonus Studio 1824c */
-		ret = snd_s1810c_switch_init(mixer, &snd_s1824c_mono_sw);
-		if (ret < 0)
-			return ret;
-
-		break;
-	}
-
+	ret = snd_s1810c_switch_init(mixer, &snd_s1810c_ab_sw);
+	if (ret < 0)
+		return ret;
 	return ret;
 }

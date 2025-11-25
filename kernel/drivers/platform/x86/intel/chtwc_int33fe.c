@@ -136,7 +136,7 @@ static const struct software_node altmodes_node = {
 };
 
 static const struct property_entry dp_altmode_properties[] = {
-	PROPERTY_ENTRY_U16("svid", 0xff01),
+	PROPERTY_ENTRY_U32("svid", 0xff01),
 	PROPERTY_ENTRY_U32("vdo", 0x0c0086),
 	{ }
 };
@@ -270,7 +270,7 @@ cht_int33fe_register_max17047(struct device *dev, struct cht_int33fe_data *data)
 	}
 
 	memset(&board_info, 0, sizeof(board_info));
-	strscpy(board_info.type, "max17047");
+	strscpy(board_info.type, "max17047", I2C_NAME_SIZE);
 	board_info.dev_name = "max17047";
 	board_info.fwnode = fwnode;
 	data->battery_fg = i2c_acpi_new_device(dev, 1, &board_info);
@@ -361,7 +361,7 @@ static int cht_int33fe_typec_probe(struct platform_device *pdev)
 	}
 
 	memset(&board_info, 0, sizeof(board_info));
-	strscpy(board_info.type, "typec_fusb302");
+	strscpy(board_info.type, "typec_fusb302", I2C_NAME_SIZE);
 	board_info.dev_name = "fusb302";
 	board_info.fwnode = fwnode;
 	board_info.irq = fusb302_irq;
@@ -381,7 +381,7 @@ static int cht_int33fe_typec_probe(struct platform_device *pdev)
 	memset(&board_info, 0, sizeof(board_info));
 	board_info.dev_name = "pi3usb30532";
 	board_info.fwnode = fwnode;
-	strscpy(board_info.type, "pi3usb30532");
+	strscpy(board_info.type, "pi3usb30532", I2C_NAME_SIZE);
 
 	data->pi3usb30532 = i2c_acpi_new_device(dev, 3, &board_info);
 	if (IS_ERR(data->pi3usb30532)) {
@@ -405,7 +405,7 @@ out_remove_nodes:
 	return ret;
 }
 
-static void cht_int33fe_typec_remove(struct platform_device *pdev)
+static int cht_int33fe_typec_remove(struct platform_device *pdev)
 {
 	struct cht_int33fe_data *data = platform_get_drvdata(pdev);
 
@@ -414,6 +414,8 @@ static void cht_int33fe_typec_remove(struct platform_device *pdev)
 	i2c_unregister_device(data->battery_fg);
 
 	cht_int33fe_remove_nodes(data);
+
+	return 0;
 }
 
 static const struct acpi_device_id cht_int33fe_acpi_ids[] = {

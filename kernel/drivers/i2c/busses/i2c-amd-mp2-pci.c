@@ -288,7 +288,7 @@ static void amd_mp2_clear_reg(struct amd_mp2_dev *privdata)
 static int amd_mp2_pci_init(struct amd_mp2_dev *privdata,
 			    struct pci_dev *pci_dev)
 {
-	int irq_flag = 0, rc;
+	int rc;
 
 	pci_set_drvdata(pci_dev, privdata);
 
@@ -311,24 +311,14 @@ static int amd_mp2_pci_init(struct amd_mp2_dev *privdata,
 	if (rc)
 		goto err_dma_mask;
 
-	/* request and enable interrupt */
+	/* Set up intx irq */
 	writel(0, privdata->mmio + AMD_P2C_MSG_INTEN);
-	rc = pci_alloc_irq_vectors(pci_dev, 1, 1, PCI_IRQ_ALL_TYPES);
-	if (rc < 0) {
-		dev_err(&pci_dev->dev, "Failed to allocate single IRQ err=%d\n", rc);
-		goto err_dma_mask;
-	}
-
-	privdata->dev_irq = pci_irq_vector(pci_dev, 0);
-	if (!pci_dev->msix_enabled && !pci_dev->msi_enabled)
-		irq_flag = IRQF_SHARED;
-
-	rc = devm_request_irq(&pci_dev->dev, privdata->dev_irq,
-			      amd_mp2_irq_isr, irq_flag, dev_name(&pci_dev->dev), privdata);
-	if (rc) {
-		pci_err(pci_dev, "Failure requesting irq %i: %d\n", privdata->dev_irq, rc);
-		goto err_dma_mask;
-	}
+	pci_intx(pci_dev, 1);
+	rc = devm_request_irq(&pci_dev->dev, pci_dev->irq, amd_mp2_irq_isr,
+			      IRQF_SHARED, dev_name(&pci_dev->dev), privdata);
+	if (rc)
+		pci_err(pci_dev, "Failure requesting irq %i: %d\n",
+			pci_dev->irq, rc);
 
 	return rc;
 
@@ -374,6 +364,7 @@ static void amd_mp2_pci_remove(struct pci_dev *pci_dev)
 	pm_runtime_forbid(&pci_dev->dev);
 	pm_runtime_get_noresume(&pci_dev->dev);
 
+	pci_intx(pci_dev, 0);
 	pci_clear_master(pci_dev);
 
 	amd_mp2_clear_reg(privdata);

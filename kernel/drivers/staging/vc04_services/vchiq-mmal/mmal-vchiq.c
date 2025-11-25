@@ -23,10 +23,9 @@
 #include <linux/slab.h>
 #include <linux/completion.h>
 #include <linux/vmalloc.h>
+#include <linux/raspberrypi/vchiq.h>
 #include <media/videobuf2-vmalloc.h>
 
-#include "../include/linux/raspberrypi/vchiq.h"
-#include "../interface/vchiq_arm/vchiq_arm.h"
 #include "mmal-common.h"
 #include "mmal-vchiq.h"
 #include "mmal-msg.h"
@@ -246,7 +245,7 @@ static void event_to_host_cb(struct vchiq_mmal_instance *instance,
 /* workqueue scheduled callback
  *
  * we do this because it is important we do not call any other vchiq
- * sync calls from within the message delivery thread
+ * sync calls from witin the message delivery thread
  */
 static void buffer_work_cb(struct work_struct *work)
 {
@@ -326,7 +325,7 @@ static int bulk_receive(struct vchiq_mmal_instance *instance,
 		 * committed a buffer_to_host operation to the mmal
 		 * port without the buffer to back it up (underflow
 		 * handling) and there is no obvious way to deal with
-		 * this - how is the mmal service going to react when
+		 * this - how is the mmal servie going to react when
 		 * we fail to do the xfer and reschedule a buffer when
 		 * it arrives? perhaps a starved flag to indicate a
 		 * waiting bulk receive?
@@ -549,10 +548,10 @@ static void bulk_abort_cb(struct vchiq_mmal_instance *instance,
 }
 
 /* incoming event service callback */
-static int mmal_service_callback(struct vchiq_instance *vchiq_instance,
-				 enum vchiq_reason reason, struct vchiq_header *header,
-				 unsigned int handle, void *cb_data,
-				 void __user *cb_userdata)
+static enum vchiq_status service_callback(struct vchiq_instance *vchiq_instance,
+					  enum vchiq_reason reason,
+					  struct vchiq_header *header,
+					  unsigned int handle, void *bulk_ctx)
 {
 	struct vchiq_mmal_instance *instance = vchiq_get_service_userdata(vchiq_instance, handle);
 	u32 msg_len;
@@ -561,7 +560,7 @@ static int mmal_service_callback(struct vchiq_instance *vchiq_instance,
 
 	if (!instance) {
 		pr_err("Message callback passed NULL instance\n");
-		return 0;
+		return VCHIQ_SUCCESS;
 	}
 
 	switch (reason) {
@@ -627,11 +626,11 @@ static int mmal_service_callback(struct vchiq_instance *vchiq_instance,
 		break;
 
 	case VCHIQ_BULK_RECEIVE_DONE:
-		bulk_receive_cb(instance, cb_data);
+		bulk_receive_cb(instance, bulk_ctx);
 		break;
 
 	case VCHIQ_BULK_RECEIVE_ABORTED:
-		bulk_abort_cb(instance, cb_data);
+		bulk_abort_cb(instance, bulk_ctx);
 		break;
 
 	case VCHIQ_SERVICE_CLOSED:
@@ -645,7 +644,7 @@ static int mmal_service_callback(struct vchiq_instance *vchiq_instance,
 		break;
 	}
 
-	return 0;
+	return VCHIQ_SUCCESS;
 }
 
 static int send_synchronous_mmal_msg(struct vchiq_mmal_instance *instance,
@@ -656,7 +655,7 @@ static int send_synchronous_mmal_msg(struct vchiq_mmal_instance *instance,
 {
 	struct mmal_msg_context *msg_context;
 	int ret;
-	unsigned long time_left;
+	unsigned long timeout;
 
 	/* payload size must not cause message to exceed max size */
 	if (payload_len >
@@ -694,9 +693,9 @@ static int send_synchronous_mmal_msg(struct vchiq_mmal_instance *instance,
 		return ret;
 	}
 
-	time_left = wait_for_completion_timeout(&msg_context->u.sync.cmplt,
-						SYNC_MSG_TIMEOUT * HZ);
-	if (time_left == 0) {
+	timeout = wait_for_completion_timeout(&msg_context->u.sync.cmplt,
+					      SYNC_MSG_TIMEOUT * HZ);
+	if (timeout == 0) {
 		pr_err("timed out waiting for sync completion\n");
 		ret = -ETIME;
 		/* todo: what happens if the message arrives after aborting */
@@ -864,9 +863,9 @@ static int port_info_get(struct vchiq_mmal_instance *instance,
 		goto release_msg;
 
 	if (rmsg->u.port_info_get_reply.port.is_enabled == 0)
-		port->enabled = false;
+		port->enabled = 0;
 	else
-		port->enabled = true;
+		port->enabled = 1;
 
 	/* copy the values out of the message */
 	port->handle = rmsg->u.port_info_get_reply.port_handle;
@@ -1306,7 +1305,7 @@ static int port_disable(struct vchiq_mmal_instance *instance,
 	if (!port->enabled)
 		return 0;
 
-	port->enabled = false;
+	port->enabled = 0;
 
 	ret = port_action_port(instance, port,
 			       MMAL_MSG_PORT_ACTION_TYPE_DISABLE);
@@ -1361,7 +1360,7 @@ static int port_enable(struct vchiq_mmal_instance *instance,
 	if (ret)
 		goto done;
 
-	port->enabled = true;
+	port->enabled = 1;
 
 	if (port->buffer_cb) {
 		/* send buffer headers to videocore */
@@ -1533,7 +1532,7 @@ int vchiq_mmal_port_connect_tunnel(struct vchiq_mmal_instance *instance,
 			pr_err("failed disconnecting src port\n");
 			goto release_unlock;
 		}
-		src->connected->enabled = false;
+		src->connected->enabled = 0;
 		src->connected = NULL;
 	}
 
@@ -1650,7 +1649,7 @@ int vchiq_mmal_component_init(struct vchiq_mmal_instance *instance,
 	for (idx = 0; idx < VCHIQ_MMAL_MAX_COMPONENTS; idx++) {
 		if (!instance->component[idx].in_use) {
 			component = &instance->component[idx];
-			component->in_use = true;
+			component->in_use = 1;
 			break;
 		}
 	}
@@ -1726,7 +1725,7 @@ release_component:
 	destroy_component(instance, component);
 unlock:
 	if (component)
-		component->in_use = false;
+		component->in_use = 0;
 	mutex_unlock(&instance->vchiq_mutex);
 
 	return ret;
@@ -1749,7 +1748,7 @@ int vchiq_mmal_component_finalise(struct vchiq_mmal_instance *instance,
 
 	ret = destroy_component(instance, component);
 
-	component->in_use = false;
+	component->in_use = 0;
 
 	mutex_unlock(&instance->vchiq_mutex);
 
@@ -1801,7 +1800,7 @@ int vchiq_mmal_component_disable(struct vchiq_mmal_instance *instance,
 
 	ret = disable_component(instance, component);
 	if (ret == 0)
-		component->enabled = false;
+		component->enabled = 0;
 
 	mutex_unlock(&instance->vchiq_mutex);
 
@@ -1854,7 +1853,7 @@ int vchiq_mmal_finalise(struct vchiq_mmal_instance *instance)
 }
 EXPORT_SYMBOL_GPL(vchiq_mmal_finalise);
 
-int vchiq_mmal_init(struct device *dev, struct vchiq_mmal_instance **out_instance)
+int vchiq_mmal_init(struct vchiq_mmal_instance **out_instance)
 {
 	int status;
 	int err = -ENODEV;
@@ -1864,10 +1863,9 @@ int vchiq_mmal_init(struct device *dev, struct vchiq_mmal_instance **out_instanc
 		.version		= VC_MMAL_VER,
 		.version_min		= VC_MMAL_MIN_VER,
 		.fourcc			= VCHIQ_MAKE_FOURCC('m', 'm', 'a', 'l'),
-		.callback		= mmal_service_callback,
+		.callback		= service_callback,
 		.userdata		= NULL,
 	};
-	struct vchiq_drv_mgmt *mgmt = dev_get_drvdata(dev->parent);
 
 	/* compile time checks to ensure structure size as they are
 	 * directly (de)serialised from memory.
@@ -1883,7 +1881,7 @@ int vchiq_mmal_init(struct device *dev, struct vchiq_mmal_instance **out_instanc
 	BUILD_BUG_ON(sizeof(struct mmal_port) != 64);
 
 	/* create a vchi instance */
-	status = vchiq_initialise(&mgmt->state, &vchiq_instance);
+	status = vchiq_initialise(&vchiq_instance);
 	if (status) {
 		pr_err("Failed to initialise VCHI instance (status=%d)\n",
 		       status);

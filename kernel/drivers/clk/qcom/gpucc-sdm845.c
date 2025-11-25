@@ -4,7 +4,6 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -23,6 +22,8 @@
 #define CX_GMU_CBCR_SLEEP_SHIFT		4
 #define CX_GMU_CBCR_WAKE_MASK		0xf
 #define CX_GMU_CBCR_WAKE_SHIFT		8
+#define CLK_DIS_WAIT_SHIFT		12
+#define CLK_DIS_WAIT_MASK		(0xf << CLK_DIS_WAIT_SHIFT)
 
 enum {
 	P_BI_TCXO,
@@ -120,7 +121,6 @@ static struct clk_branch gpu_cc_cxo_clk = {
 static struct gdsc gpu_cx_gdsc = {
 	.gdscr = 0x106c,
 	.gds_hw_ctrl = 0x1540,
-	.clk_dis_wait_val = 0x8,
 	.pd = {
 		.name = "gpu_cx_gdsc",
 	},
@@ -193,7 +193,11 @@ static int gpu_cc_sdm845_probe(struct platform_device *pdev)
 	value = 0xf << CX_GMU_CBCR_WAKE_SHIFT | 0xf << CX_GMU_CBCR_SLEEP_SHIFT;
 	regmap_update_bits(regmap, 0x1098, mask, value);
 
-	return qcom_cc_really_probe(&pdev->dev, &gpu_cc_sdm845_desc, regmap);
+	/* Configure clk_dis_wait for gpu_cx_gdsc */
+	regmap_update_bits(regmap, 0x106c, CLK_DIS_WAIT_MASK,
+						8 << CLK_DIS_WAIT_SHIFT);
+
+	return qcom_cc_really_probe(pdev, &gpu_cc_sdm845_desc, regmap);
 }
 
 static struct platform_driver gpu_cc_sdm845_driver = {
@@ -205,7 +209,17 @@ static struct platform_driver gpu_cc_sdm845_driver = {
 	},
 };
 
-module_platform_driver(gpu_cc_sdm845_driver);
+static int __init gpu_cc_sdm845_init(void)
+{
+	return platform_driver_register(&gpu_cc_sdm845_driver);
+}
+subsys_initcall(gpu_cc_sdm845_init);
+
+static void __exit gpu_cc_sdm845_exit(void)
+{
+	platform_driver_unregister(&gpu_cc_sdm845_driver);
+}
+module_exit(gpu_cc_sdm845_exit);
 
 MODULE_DESCRIPTION("QTI GPUCC SDM845 Driver");
 MODULE_LICENSE("GPL v2");

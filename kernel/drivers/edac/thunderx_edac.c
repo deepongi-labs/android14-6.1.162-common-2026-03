@@ -35,6 +35,12 @@ enum {
 	ERR_UNKNOWN	= 3,
 };
 
+#define MAX_SYNDROME_REGS 4
+
+struct error_syndrome {
+	u64 reg[MAX_SYNDROME_REGS];
+};
+
 struct error_descr {
 	int	type;
 	u64	mask;
@@ -475,7 +481,7 @@ static int thunderx_create_debugfs_nodes(struct dentry *parent,
 		ent = edac_debugfs_create_file(attrs[i]->name, attrs[i]->mode,
 					       parent, data, &attrs[i]->fops);
 
-		if (IS_ERR(ent))
+		if (!ent)
 			break;
 	}
 
@@ -1359,7 +1365,8 @@ static int thunderx_ocx_probe(struct pci_dev *pdev,
 	idx = edac_device_alloc_index();
 	snprintf(name, sizeof(name), "OCX%d", idx);
 	edac_dev = edac_device_alloc_ctl_info(sizeof(struct thunderx_ocx),
-					      name, 1, "CCPI", 1, 0, idx);
+					      name, 1, "CCPI", 1,
+					      0, NULL, 0, idx);
 	if (!edac_dev) {
 		dev_err(&pdev->dev, "Cannot allocate EDAC device\n");
 		return -ENOMEM;
@@ -1997,7 +2004,8 @@ static int thunderx_l2c_probe(struct pci_dev *pdev,
 	snprintf(name, sizeof(name), fmt, idx);
 
 	edac_dev = edac_device_alloc_ctl_info(sizeof(struct thunderx_l2c),
-					      name, 1, "L2C", 1, 0, idx);
+					      name, 1, "L2C", 1, 0,
+					      NULL, 0, idx);
 	if (!edac_dev) {
 		dev_err(&pdev->dev, "Cannot allocate EDAC device\n");
 		return -ENOMEM;
@@ -2105,9 +2113,6 @@ static struct pci_driver thunderx_l2c_driver = {
 static int __init thunderx_edac_init(void)
 {
 	int rc = 0;
-
-	if (ghes_get_devices())
-		return -EBUSY;
 
 	rc = pci_register_driver(&thunderx_lmc_driver);
 	if (rc)

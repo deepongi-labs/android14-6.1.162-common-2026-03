@@ -228,8 +228,7 @@ static void nft_immediate_destroy(const struct nft_ctx *ctx,
 	}
 }
 
-static int nft_immediate_dump(struct sk_buff *skb,
-			      const struct nft_expr *expr, bool reset)
+static int nft_immediate_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_immediate_expr *priv = nft_expr_priv(expr);
 
@@ -244,7 +243,8 @@ nla_put_failure:
 }
 
 static int nft_immediate_validate(const struct nft_ctx *ctx,
-				  const struct nft_expr *expr)
+				  const struct nft_expr *expr,
+				  const struct nft_data **d)
 {
 	const struct nft_immediate_expr *priv = nft_expr_priv(expr);
 	struct nft_ctx *pctx = (struct nft_ctx *)ctx;

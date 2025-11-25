@@ -11,6 +11,7 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
@@ -189,6 +190,7 @@ static void dw_mci_exynos_set_clksel_timing(struct dw_mci *host, u32 timing)
 		set_bit(DW_MMC_CARD_NO_USE_HOLD, &host->slot->flags);
 }
 
+#ifdef CONFIG_PM
 static int dw_mci_exynos_runtime_resume(struct device *dev)
 {
 	struct dw_mci *host = dev_get_drvdata(dev);
@@ -202,7 +204,9 @@ static int dw_mci_exynos_runtime_resume(struct device *dev)
 
 	return ret;
 }
+#endif /* CONFIG_PM */
 
+#ifdef CONFIG_PM_SLEEP
 /**
  * dw_mci_exynos_suspend_noirq - Exynos-specific suspend code
  * @dev: Device to suspend (this device)
@@ -262,6 +266,7 @@ static int dw_mci_exynos_resume_noirq(struct device *dev)
 
 	return 0;
 }
+#endif /* CONFIG_PM_SLEEP */
 
 static void dw_mci_exynos_config_hs400(struct dw_mci *host, u32 timing)
 {
@@ -698,18 +703,23 @@ static int dw_mci_exynos_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void dw_mci_exynos_remove(struct platform_device *pdev)
+static int dw_mci_exynos_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 
 	dw_mci_pltfm_remove(pdev);
+
+	return 0;
 }
 
 static const struct dev_pm_ops dw_mci_exynos_pmops = {
-	NOIRQ_SYSTEM_SLEEP_PM_OPS(dw_mci_exynos_suspend_noirq, dw_mci_exynos_resume_noirq)
-	RUNTIME_PM_OPS(dw_mci_runtime_suspend, dw_mci_exynos_runtime_resume, NULL)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(dw_mci_exynos_suspend_noirq,
+				      dw_mci_exynos_resume_noirq)
+	SET_RUNTIME_PM_OPS(dw_mci_runtime_suspend,
+			   dw_mci_exynos_runtime_resume,
+			   NULL)
 };
 
 static struct platform_driver dw_mci_exynos_pltfm_driver = {
@@ -719,7 +729,7 @@ static struct platform_driver dw_mci_exynos_pltfm_driver = {
 		.name		= "dwmmc_exynos",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= dw_mci_exynos_match,
-		.pm		= pm_ptr(&dw_mci_exynos_pmops),
+		.pm		= &dw_mci_exynos_pmops,
 	},
 };
 

@@ -68,6 +68,8 @@ enum {
 struct rtrs_ib_dev;
 
 struct rtrs_rdma_dev_pd_ops {
+	struct rtrs_ib_dev *(*alloc)(void);
+	void (*free)(struct rtrs_ib_dev *dev);
 	int (*init)(struct rtrs_ib_dev *dev);
 	void (*deinit)(struct rtrs_ib_dev *dev);
 };
@@ -85,7 +87,6 @@ struct rtrs_ib_dev {
 	struct kref		 ref;
 	struct list_head	 entry;
 	struct rtrs_rdma_dev_pd *pool;
-	struct ib_event_handler	 event_handler;
 };
 
 struct rtrs_con {

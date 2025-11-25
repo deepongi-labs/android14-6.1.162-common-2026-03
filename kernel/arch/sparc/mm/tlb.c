@@ -121,7 +121,6 @@ void tlb_batch_add(struct mm_struct *mm, unsigned long vaddr,
 		unsigned long paddr, pfn = pte_pfn(orig);
 		struct address_space *mapping;
 		struct page *page;
-		struct folio *folio;
 
 		if (!pfn_valid(pfn))
 			goto no_cache_flush;
@@ -131,14 +130,13 @@ void tlb_batch_add(struct mm_struct *mm, unsigned long vaddr,
 			goto no_cache_flush;
 
 		/* A real file page? */
-		folio = page_folio(page);
-		mapping = folio_flush_mapping(folio);
+		mapping = page_mapping_file(page);
 		if (!mapping)
 			goto no_cache_flush;
 
 		paddr = (unsigned long) page_address(page);
 		if ((paddr ^ vaddr) & (1 << 13))
-			flush_dcache_folio_all(mm, folio);
+			flush_dcache_page_all(mm, page);
 	}
 
 no_cache_flush:
@@ -154,8 +152,6 @@ static void tlb_batch_pmd_scan(struct mm_struct *mm, unsigned long vaddr,
 	pte_t *pte;
 
 	pte = pte_offset_map(&pmd, vaddr);
-	if (!pte)
-		return;
 	end = vaddr + HPAGE_SIZE;
 	while (vaddr < end) {
 		if (pte_val(*pte) & _PAGE_VALID) {
@@ -186,12 +182,12 @@ static void __set_pmd_acct(struct mm_struct *mm, unsigned long addr,
 		 * hugetlb_pte_count.
 		 */
 		if (pmd_val(pmd) & _PAGE_PMD_HUGE) {
-			if (is_huge_zero_pmd(pmd))
+			if (is_huge_zero_page(pmd_page(pmd)))
 				mm->context.hugetlb_pte_count++;
 			else
 				mm->context.thp_pte_count++;
 		} else {
-			if (is_huge_zero_pmd(orig))
+			if (is_huge_zero_page(pmd_page(orig)))
 				mm->context.hugetlb_pte_count--;
 			else
 				mm->context.thp_pte_count--;
@@ -263,7 +259,7 @@ pmd_t pmdp_invalidate(struct vm_area_struct *vma, unsigned long address,
 	 * Sanity check pmd before doing the actual decrement.
 	 */
 	if ((pmd_val(entry) & _PAGE_PMD_HUGE) &&
-	    !is_huge_zero_pmd(entry))
+	    !is_huge_zero_page(pmd_page(entry)))
 		(vma->vm_mm)->context.thp_pte_count--;
 
 	return old;

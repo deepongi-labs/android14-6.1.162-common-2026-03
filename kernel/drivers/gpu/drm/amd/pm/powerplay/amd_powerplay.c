@@ -80,10 +80,11 @@ static void amd_powerplay_destroy(struct amdgpu_device *adev)
 	hwmgr = NULL;
 }
 
-static int pp_early_init(struct amdgpu_ip_block *ip_block)
+static int pp_early_init(void *handle)
 {
 	int ret;
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
+
 	ret = amd_powerplay_create(adev);
 
 	if (ret != 0)
@@ -135,9 +136,9 @@ static void pp_swctf_delayed_work_handler(struct work_struct *work)
 	orderly_poweroff(true);
 }
 
-static int pp_sw_init(struct amdgpu_ip_block *ip_block)
+static int pp_sw_init(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 	int ret = 0;
 
@@ -152,22 +153,23 @@ static int pp_sw_init(struct amdgpu_ip_block *ip_block)
 	return ret;
 }
 
-static int pp_sw_fini(struct amdgpu_ip_block *ip_block)
+static int pp_sw_fini(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	hwmgr_sw_fini(hwmgr);
 
-	amdgpu_ucode_release(&adev->pm.fw);
+	release_firmware(adev->pm.fw);
+	adev->pm.fw = NULL;
 
 	return 0;
 }
 
-static int pp_hw_init(struct amdgpu_ip_block *ip_block)
+static int pp_hw_init(void *handle)
 {
 	int ret = 0;
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	ret = hwmgr_hw_init(hwmgr);
@@ -178,9 +180,10 @@ static int pp_hw_init(struct amdgpu_ip_block *ip_block)
 	return ret;
 }
 
-static int pp_hw_fini(struct amdgpu_ip_block *ip_block)
+static int pp_hw_fini(void *handle)
 {
-	struct pp_hwmgr *hwmgr = ip_block->adev->powerplay.pp_handle;
+	struct amdgpu_device *adev = handle;
+	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	cancel_delayed_work_sync(&hwmgr->swctf_delayed_work);
 
@@ -220,9 +223,9 @@ static void pp_reserve_vram_for_smu(struct amdgpu_device *adev)
 	}
 }
 
-static int pp_late_init(struct amdgpu_ip_block *ip_block)
+static int pp_late_init(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	if (hwmgr && hwmgr->pm_en)
@@ -234,9 +237,9 @@ static int pp_late_init(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static void pp_late_fini(struct amdgpu_ip_block *ip_block)
+static void pp_late_fini(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 
 	if (adev->pm.smu_prv_buffer)
 		amdgpu_bo_free_kernel(&adev->pm.smu_prv_buffer, NULL, NULL);
@@ -244,20 +247,30 @@ static void pp_late_fini(struct amdgpu_ip_block *ip_block)
 }
 
 
-static bool pp_is_idle(struct amdgpu_ip_block *ip_block)
+static bool pp_is_idle(void *handle)
 {
 	return false;
 }
 
-static int pp_set_powergating_state(struct amdgpu_ip_block *ip_block,
+static int pp_wait_for_idle(void *handle)
+{
+	return 0;
+}
+
+static int pp_sw_reset(void *handle)
+{
+	return 0;
+}
+
+static int pp_set_powergating_state(void *handle,
 				    enum amd_powergating_state state)
 {
 	return 0;
 }
 
-static int pp_suspend(struct amdgpu_ip_block *ip_block)
+static int pp_suspend(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = handle;
 	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	cancel_delayed_work_sync(&hwmgr->swctf_delayed_work);
@@ -265,14 +278,15 @@ static int pp_suspend(struct amdgpu_ip_block *ip_block)
 	return hwmgr_suspend(hwmgr);
 }
 
-static int pp_resume(struct amdgpu_ip_block *ip_block)
+static int pp_resume(void *handle)
 {
-	struct pp_hwmgr *hwmgr = ip_block->adev->powerplay.pp_handle;
+	struct amdgpu_device *adev = handle;
+	struct pp_hwmgr *hwmgr = adev->powerplay.pp_handle;
 
 	return hwmgr_resume(hwmgr);
 }
 
-static int pp_set_clockgating_state(struct amdgpu_ip_block *ip_block,
+static int pp_set_clockgating_state(void *handle,
 					  enum amd_clockgating_state state)
 {
 	return 0;
@@ -290,6 +304,8 @@ static const struct amd_ip_funcs pp_ip_funcs = {
 	.suspend = pp_suspend,
 	.resume = pp_resume,
 	.is_idle = pp_is_idle,
+	.wait_for_idle = pp_wait_for_idle,
+	.soft_reset = pp_sw_reset,
 	.set_clockgating_state = pp_set_clockgating_state,
 	.set_powergating_state = pp_set_powergating_state,
 };
@@ -602,7 +618,7 @@ static int pp_dpm_get_pp_num_states(void *handle,
 
 	memset(data, 0, sizeof(*data));
 
-	if (!hwmgr || !hwmgr->pm_en || !hwmgr->ps)
+	if (!hwmgr || !hwmgr->pm_en ||!hwmgr->ps)
 		return -EINVAL;
 
 	data->nums = hwmgr->num_ps;
@@ -634,7 +650,7 @@ static int pp_dpm_get_pp_table(void *handle, char **table)
 {
 	struct pp_hwmgr *hwmgr = handle;
 
-	if (!hwmgr || !hwmgr->pm_en || !hwmgr->soft_pp_table)
+	if (!hwmgr || !hwmgr->pm_en ||!hwmgr->soft_pp_table)
 		return -EINVAL;
 
 	*table = (char *)hwmgr->soft_pp_table;
@@ -992,7 +1008,7 @@ static int pp_get_power_limit(void *handle, uint32_t *limit,
 	struct pp_hwmgr *hwmgr = handle;
 	int ret = 0;
 
-	if (!hwmgr || !hwmgr->pm_en || !limit)
+	if (!hwmgr || !hwmgr->pm_en ||!limit)
 		return -EINVAL;
 
 	if (power_type != PP_PWR_TYPE_SUSTAINED)
@@ -1011,9 +1027,6 @@ static int pp_get_power_limit(void *handle, uint32_t *limit,
 				*limit *= (100 + hwmgr->platform_descriptor.TDPODLimit);
 				*limit /= 100;
 			}
-			break;
-		case PP_PWR_LIMIT_MIN:
-			*limit = 0;
 			break;
 		default:
 			ret = -EOPNOTSUPP;
@@ -1040,7 +1053,7 @@ static int pp_get_display_power_level(void *handle,
 {
 	struct pp_hwmgr *hwmgr = handle;
 
-	if (!hwmgr || !hwmgr->pm_en || !output)
+	if (!hwmgr || !hwmgr->pm_en ||!output)
 		return -EINVAL;
 
 	return phm_get_dal_power_level(hwmgr, output);
@@ -1113,7 +1126,7 @@ static int pp_get_clock_by_type_with_latency(void *handle,
 {
 	struct pp_hwmgr *hwmgr = handle;
 
-	if (!hwmgr || !hwmgr->pm_en || !clocks)
+	if (!hwmgr || !hwmgr->pm_en ||!clocks)
 		return -EINVAL;
 
 	return phm_get_clock_by_type_with_latency(hwmgr, type, clocks);
@@ -1125,7 +1138,7 @@ static int pp_get_clock_by_type_with_voltage(void *handle,
 {
 	struct pp_hwmgr *hwmgr = handle;
 
-	if (!hwmgr || !hwmgr->pm_en || !clocks)
+	if (!hwmgr || !hwmgr->pm_en ||!clocks)
 		return -EINVAL;
 
 	return phm_get_clock_by_type_with_voltage(hwmgr, type, clocks);
@@ -1148,7 +1161,7 @@ static int pp_display_clock_voltage_request(void *handle,
 {
 	struct pp_hwmgr *hwmgr = handle;
 
-	if (!hwmgr || !hwmgr->pm_en || !clock)
+	if (!hwmgr || !hwmgr->pm_en ||!clock)
 		return -EINVAL;
 
 	return phm_display_clock_voltage_request(hwmgr, clock);
@@ -1160,7 +1173,7 @@ static int pp_get_display_mode_validation_clocks(void *handle,
 	struct pp_hwmgr *hwmgr = handle;
 	int ret = 0;
 
-	if (!hwmgr || !hwmgr->pm_en || !clocks)
+	if (!hwmgr || !hwmgr->pm_en ||!clocks)
 		return -EINVAL;
 
 	clocks->level = PP_DAL_POWERLEVEL_7;
@@ -1232,9 +1245,7 @@ static void pp_dpm_powergate_sdma(void *handle, bool gate)
 }
 
 static int pp_set_powergating_by_smu(void *handle,
-				uint32_t block_type,
-				bool gate,
-				int inst)
+				uint32_t block_type, bool gate)
 {
 	int ret = 0;
 
@@ -1363,18 +1374,21 @@ static int pp_set_active_display_count(void *handle, uint32_t count)
 	return phm_set_active_display_count(hwmgr, count);
 }
 
-static int pp_get_asic_baco_capability(void *handle)
+static int pp_get_asic_baco_capability(void *handle, bool *cap)
 {
 	struct pp_hwmgr *hwmgr = handle;
 
+	*cap = false;
 	if (!hwmgr)
-		return false;
+		return -EINVAL;
 
 	if (!(hwmgr->not_vf && amdgpu_dpm) ||
-		!hwmgr->hwmgr_func->get_bamaco_support)
-		return false;
+		!hwmgr->hwmgr_func->get_asic_baco_capability)
+		return 0;
 
-	return hwmgr->hwmgr_func->get_bamaco_support(hwmgr);
+	hwmgr->hwmgr_func->get_asic_baco_capability(hwmgr, cap);
+
+	return 0;
 }
 
 static int pp_get_asic_baco_state(void *handle, int *state)
@@ -1553,8 +1567,17 @@ static void pp_pm_compute_clocks(void *handle)
 	struct pp_hwmgr *hwmgr = handle;
 	struct amdgpu_device *adev = hwmgr->adev;
 
-	if (!adev->dc_enabled) {
-		amdgpu_dpm_get_display_cfg(adev);
+	if (!amdgpu_device_has_dc_support(adev)) {
+		amdgpu_dpm_get_active_displays(adev);
+		adev->pm.pm_display_cfg.num_display = adev->pm.dpm.new_active_crtc_count;
+		adev->pm.pm_display_cfg.vrefresh = amdgpu_dpm_get_vrefresh(adev);
+		adev->pm.pm_display_cfg.min_vblank_time = amdgpu_dpm_get_vblank_time(adev);
+		/* we have issues with mclk switching with
+		 * refresh rates over 120 hz on the non-DC code.
+		 */
+		if (adev->pm.pm_display_cfg.vrefresh > 120)
+			adev->pm.pm_display_cfg.min_vblank_time = 0;
+
 		pp_display_configuration_change(handle,
 						&adev->pm.pm_display_cfg);
 	}

@@ -28,8 +28,6 @@
 #include <linux/i2c.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_simple_kms_helper.h>
 
 #include "cdv_device.h"
@@ -69,7 +67,7 @@ static void cdv_intel_crt_dpms(struct drm_encoder *encoder, int mode)
 }
 
 static enum drm_mode_status cdv_intel_crt_mode_valid(struct drm_connector *connector,
-				const struct drm_display_mode *mode)
+				struct drm_display_mode *mode)
 {
 	if (mode->flags & DRM_MODE_FLAG_DBLSCAN)
 		return MODE_NO_DBLESCAN;

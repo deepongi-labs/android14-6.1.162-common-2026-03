@@ -5,8 +5,6 @@
 #include "../string.h"
 #include "efi.h"
 
-#include <asm/bootparam.h>
-
 #include <linux/numa.h>
 
 /*
@@ -180,7 +178,7 @@ static unsigned long get_cmdline_acpi_rsdp(void)
 {
 	unsigned long addr = 0;
 
-#ifdef CONFIG_KEXEC_CORE
+#ifdef CONFIG_KEXEC
 	char val[MAX_ADDR_LEN] = { };
 	int ret;
 

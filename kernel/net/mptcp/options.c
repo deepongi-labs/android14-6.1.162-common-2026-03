@@ -26,7 +26,6 @@ static void mptcp_parse_option(const struct sk_buff *skb,
 {
 	u8 subtype = *ptr >> 4;
 	int expected_opsize;
-	u16 subopt;
 	u8 version;
 	u8 flags;
 	u8 i;
@@ -39,15 +38,11 @@ static void mptcp_parse_option(const struct sk_buff *skb,
 				expected_opsize = TCPOLEN_MPTCP_MPC_ACK_DATA;
 			else
 				expected_opsize = TCPOLEN_MPTCP_MPC_ACK;
-			subopt = OPTION_MPTCP_MPC_ACK;
 		} else {
-			if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_ACK) {
+			if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_ACK)
 				expected_opsize = TCPOLEN_MPTCP_MPC_SYNACK;
-				subopt = OPTION_MPTCP_MPC_SYNACK;
-			} else {
+			else
 				expected_opsize = TCPOLEN_MPTCP_MPC_SYN;
-				subopt = OPTION_MPTCP_MPC_SYN;
-			}
 		}
 
 		/* Cfr RFC 8684 Section 3.3.0:
@@ -90,7 +85,7 @@ static void mptcp_parse_option(const struct sk_buff *skb,
 
 		mp_opt->deny_join_id0 = !!(flags & MPTCP_CAP_DENY_JOIN_ID0);
 
-		mp_opt->suboptions |= subopt;
+		mp_opt->suboptions |= OPTIONS_MPTCP_MPC;
 		if (opsize >= TCPOLEN_MPTCP_MPC_SYNACK) {
 			mp_opt->sndr_key = get_unaligned_be64(ptr);
 			ptr += 8;
@@ -432,6 +427,7 @@ static void clear_3rdack_retransmission(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
 	sk_stop_timer(sk, &icsk->icsk_delack_timer);
+	icsk->icsk_ack.timeout = 0;
 	icsk->icsk_ack.ato = 0;
 	icsk->icsk_ack.pending &= ~(ICSK_ACK_SCHED | ICSK_ACK_TIMER);
 }
@@ -439,6 +435,7 @@ static void clear_3rdack_retransmission(struct sock *sk)
 static bool mptcp_established_options_mp(struct sock *sk, struct sk_buff *skb,
 					 bool snd_data_fin_enable,
 					 unsigned int *size,
+					 unsigned int remaining,
 					 struct mptcp_out_options *opts)
 {
 	struct mptcp_subflow_context *subflow = mptcp_subflow_ctx(sk);
@@ -457,7 +454,7 @@ static bool mptcp_established_options_mp(struct sock *sk, struct sk_buff *skb,
 		return false;
 
 	/* MPC/MPJ needed only on 3rd ack packet, DATA_FIN and TCP shutdown take precedence */
-	if (READ_ONCE(subflow->fully_established) || snd_data_fin_enable ||
+	if (subflow->fully_established || snd_data_fin_enable ||
 	    subflow->snd_isn != TCP_SKB_CB(skb)->seq ||
 	    sk->sk_state != TCP_ESTABLISHED)
 		return false;
@@ -552,6 +549,7 @@ static void mptcp_write_data_fin(struct mptcp_subflow_context *subflow,
 static bool mptcp_established_options_dss(struct sock *sk, struct sk_buff *skb,
 					  bool snd_data_fin_enable,
 					  unsigned int *size,
+					  unsigned int remaining,
 					  struct mptcp_out_options *opts)
 {
 	struct mptcp_subflow_context *subflow = mptcp_subflow_ctx(sk);
@@ -575,6 +573,7 @@ static bool mptcp_established_options_dss(struct sock *sk, struct sk_buff *skb,
 			opts->ext_copy = *mpext;
 		}
 
+		remaining -= map_size;
 		dss_size = map_size;
 		if (skb && snd_data_fin_enable)
 			mptcp_write_data_fin(subflow, skb, &opts->ext_copy);
@@ -692,12 +691,9 @@ static bool mptcp_established_options_add_addr(struct sock *sk, struct sk_buff *
 	opts->addr = addr;
 	opts->suboptions |= OPTION_MPTCP_ADD_ADDR;
 	if (!echo) {
-		MPTCP_INC_STATS(sock_net(sk), MPTCP_MIB_ADDADDRTX);
-		opts->ahmac = add_addr_generate_hmac(READ_ONCE(msk->local_key),
-						     READ_ONCE(msk->remote_key),
+		opts->ahmac = add_addr_generate_hmac(msk->local_key,
+						     msk->remote_key,
 						     &opts->addr);
-	} else {
-		MPTCP_INC_STATS(sock_net(sk), MPTCP_MIB_ECHOADDTX);
 	}
 	pr_debug("addr_id=%d, ahmac=%llu, echo=%d, port=%d\n",
 		 opts->addr.id, opts->ahmac, echo, ntohs(opts->addr.port));
@@ -731,7 +727,7 @@ static bool mptcp_established_options_rm_addr(struct sock *sk,
 
 	for (i = 0; i < opts->rm_list.nr; i++)
 		pr_debug("rm_list_ids[%d]=%d\n", i, opts->rm_list.ids[i]);
-	MPTCP_ADD_STATS(sock_net(sk), MPTCP_MIB_RMADDRTX, opts->rm_list.nr);
+
 	return true;
 }
 
@@ -796,7 +792,7 @@ static bool mptcp_established_options_fastclose(struct sock *sk,
 
 	*size = TCPOLEN_MPTCP_FASTCLOSE;
 	opts->suboptions |= OPTION_MPTCP_FASTCLOSE;
-	opts->rcvr_key = READ_ONCE(msk->remote_key);
+	opts->rcvr_key = msk->remote_key;
 
 	pr_debug("FASTCLOSE key=%llu\n", opts->rcvr_key);
 	MPTCP_INC_STATS(sock_net(sk), MPTCP_MIB_MPFASTCLOSETX);
@@ -856,9 +852,9 @@ bool mptcp_established_options(struct sock *sk, struct sk_buff *skb,
 	}
 
 	snd_data_fin = mptcp_data_fin_enabled(msk);
-	if (mptcp_established_options_mp(sk, skb, snd_data_fin, &opt_size, opts))
+	if (mptcp_established_options_mp(sk, skb, snd_data_fin, &opt_size, remaining, opts))
 		ret = true;
-	else if (mptcp_established_options_dss(sk, skb, snd_data_fin, &opt_size, opts)) {
+	else if (mptcp_established_options_dss(sk, skb, snd_data_fin, &opt_size, remaining, opts)) {
 		unsigned int mp_fail_size;
 
 		ret = true;
@@ -934,7 +930,7 @@ static bool check_fully_established(struct mptcp_sock *msk, struct sock *ssk,
 	/* here we can process OoO, in-window pkts, only in-sequence 4th ack
 	 * will make the subflow fully established
 	 */
-	if (likely(READ_ONCE(subflow->fully_established))) {
+	if (likely(subflow->fully_established)) {
 		/* on passive sockets, check for 3rd ack retransmission
 		 * note that msk is always set by subflow_syn_recv_sock()
 		 * for mp_join subflows
@@ -944,7 +940,7 @@ static bool check_fully_established(struct mptcp_sock *msk, struct sock *ssk,
 		    subflow->mp_join && (mp_opt->suboptions & OPTIONS_MPTCP_MPJ) &&
 		    !subflow->request_join)
 			tcp_send_ack(ssk);
-		goto check_notify;
+		goto fully_established;
 	}
 
 	/* we must process OoO packets before the first subflow is fully
@@ -955,19 +951,18 @@ static bool check_fully_established(struct mptcp_sock *msk, struct sock *ssk,
 	if (TCP_SKB_CB(skb)->seq != subflow->ssn_offset + 1) {
 		if (subflow->mp_join)
 			goto reset;
-		if (subflow->is_mptfo && mp_opt->suboptions & OPTION_MPTCP_MPC_ACK)
-			goto set_fully_established;
 		return subflow->mp_capable;
 	}
 
-	if (subflow->remote_key_valid &&
-	    (((mp_opt->suboptions & OPTION_MPTCP_DSS) && mp_opt->use_ack) ||
-	     ((mp_opt->suboptions & OPTION_MPTCP_ADD_ADDR) &&
-	      (!mp_opt->echo || subflow->mp_join)))) {
+	if (((mp_opt->suboptions & OPTION_MPTCP_DSS) && mp_opt->use_ack) ||
+	    ((mp_opt->suboptions & OPTION_MPTCP_ADD_ADDR) &&
+	     (!mp_opt->echo || subflow->mp_join))) {
 		/* subflows are fully established as soon as we get any
 		 * additional ack, including ADD_ADDR.
 		 */
-		goto set_fully_established;
+		subflow->fully_established = 1;
+		WRITE_ONCE(msk->fully_established, true);
+		goto fully_established;
 	}
 
 	/* If the first established packet does not contain MP_CAPABLE + data
@@ -978,25 +973,19 @@ static bool check_fully_established(struct mptcp_sock *msk, struct sock *ssk,
 		if (subflow->mp_join)
 			goto reset;
 		subflow->mp_capable = 0;
-		if (!mptcp_try_fallback(ssk, MPTCP_MIB_MPCAPABLEDATAFALLBACK)) {
-			MPTCP_INC_STATS(sock_net(ssk), MPTCP_MIB_FALLBACKFAILED);
-			goto reset;
-		}
+		pr_fallback(msk);
+		mptcp_do_fallback(ssk);
 		return false;
 	}
 
-	if (unlikely(!READ_ONCE(msk->pm.server_side)))
-		pr_warn_once("bogus mpc option on established client sk");
-
-set_fully_established:
 	if (mp_opt->deny_join_id0)
 		WRITE_ONCE(msk->pm.remote_deny_join_id0, true);
 
-	mptcp_data_lock((struct sock *)msk);
-	__mptcp_subflow_fully_established(msk, subflow, mp_opt);
-	mptcp_data_unlock((struct sock *)msk);
+	if (unlikely(!READ_ONCE(msk->pm.server_side)))
+		pr_warn_once("bogus mpc option on established client sk");
+	mptcp_subflow_fully_established(subflow, mp_opt);
 
-check_notify:
+fully_established:
 	/* if the subflow is not already linked into the conn_list, we can't
 	 * notify the PM: this subflow is still on the listener queue
 	 * and the PM possibly acquiring the subflow lock could race with
@@ -1010,7 +999,7 @@ check_notify:
 		clear_3rdack_retransmission(ssk);
 		mptcp_pm_subflow_established(msk);
 	} else {
-		mptcp_pm_fully_established(msk, ssk);
+		mptcp_pm_fully_established(msk, ssk, GFP_ATOMIC);
 	}
 	return true;
 
@@ -1033,12 +1022,6 @@ u64 __mptcp_expand_seq(u64 old_seq, u64 cur_seq)
 	if (unlikely(cur_seq32 > old_seq32 && after(old_seq32, cur_seq32)))
 		return cur_seq - (1LL << 32);
 	return cur_seq;
-}
-
-static void __mptcp_snd_una_update(struct mptcp_sock *msk, u64 new_snd_una)
-{
-	msk->bytes_acked += new_snd_una - msk->snd_una;
-	WRITE_ONCE(msk->snd_una, new_snd_una);
 }
 
 static void ack_update_msk(struct mptcp_sock *msk,
@@ -1065,22 +1048,21 @@ static void ack_update_msk(struct mptcp_sock *msk,
 	new_wnd_end = new_snd_una + tcp_sk(ssk)->snd_wnd;
 
 	if (after64(new_wnd_end, msk->wnd_end))
-		WRITE_ONCE(msk->wnd_end, new_wnd_end);
+		msk->wnd_end = new_wnd_end;
 
 	/* this assumes mptcp_incoming_options() is invoked after tcp_ack() */
-	if (after64(msk->wnd_end, snd_nxt))
+	if (after64(msk->wnd_end, READ_ONCE(msk->snd_nxt)))
 		__mptcp_check_push(sk, ssk);
 
 	if (after64(new_snd_una, old_snd_una)) {
-		__mptcp_snd_una_update(msk, new_snd_una);
+		msk->snd_una = new_snd_una;
 		__mptcp_data_acked(sk);
 	}
-	msk->last_ack_recv = tcp_jiffies32;
 	mptcp_data_unlock(sk);
 
 	trace_ack_update_msk(mp_opt->data_ack,
 			     old_snd_una, new_snd_una,
-			     new_wnd_end, READ_ONCE(msk->wnd_end));
+			     new_wnd_end, msk->wnd_end);
 }
 
 bool mptcp_update_rcv_data_fin(struct mptcp_sock *msk, u64 data_fin_seq, bool use_64bit)
@@ -1108,8 +1090,8 @@ static bool add_addr_hmac_valid(struct mptcp_sock *msk,
 	if (mp_opt->echo)
 		return true;
 
-	hmac = add_addr_generate_hmac(READ_ONCE(msk->remote_key),
-				      READ_ONCE(msk->local_key),
+	hmac = add_addr_generate_hmac(msk->remote_key,
+				      msk->local_key,
 				      &mp_opt->addr);
 
 	pr_debug("msk=%p, ahmac=%llu, mp_opt->ahmac=%llu\n",
@@ -1118,9 +1100,7 @@ static bool add_addr_hmac_valid(struct mptcp_sock *msk,
 	return hmac == mp_opt->ahmac;
 }
 
-/* Return false in case of error (or subflow has been reset),
- * else return true.
- */
+/* Return false if a subflow has been reset, else return true */
 bool mptcp_incoming_options(struct sock *sk, struct sk_buff *skb)
 {
 	struct mptcp_subflow_context *subflow = mptcp_subflow_ctx(sk);
@@ -1137,12 +1117,6 @@ bool mptcp_incoming_options(struct sock *sk, struct sk_buff *skb)
 		mptcp_data_lock(subflow->conn);
 		if (sk_stream_memory_free(sk))
 			__mptcp_check_push(subflow->conn, sk);
-
-		/* on fallback we just need to ignore the msk-level snd_una, as
-		 * this is really plain TCP
-		 */
-		__mptcp_snd_una_update(msk, READ_ONCE(msk->snd_nxt));
-
 		__mptcp_data_acked(subflow->conn);
 		mptcp_data_unlock(subflow->conn);
 		return true;
@@ -1158,7 +1132,7 @@ bool mptcp_incoming_options(struct sock *sk, struct sk_buff *skb)
 
 	if (unlikely(mp_opt.suboptions != OPTION_MPTCP_DSS)) {
 		if ((mp_opt.suboptions & OPTION_MPTCP_FASTCLOSE) &&
-		    READ_ONCE(msk->local_key) == mp_opt.rcvr_key) {
+		    msk->local_key == mp_opt.rcvr_key) {
 			WRITE_ONCE(msk->rcv_fastclose, true);
 			mptcp_schedule_work((struct sock *)msk);
 			MPTCP_INC_STATS(sock_net(sk), MPTCP_MIB_MPFASTCLOSERX);
@@ -1224,7 +1198,7 @@ bool mptcp_incoming_options(struct sock *sk, struct sk_buff *skb)
 
 	mpext = skb_ext_add(skb, SKB_EXT_MPTCP);
 	if (!mpext)
-		return false;
+		return true;
 
 	memset(mpext, 0, sizeof(*mpext));
 
@@ -1621,7 +1595,8 @@ mp_rst:
 				      TCPOLEN_MPTCP_PRIO,
 				      opts->backup, TCPOPT_NOP);
 
-		MPTCP_INC_STATS(sock_net(ssk), MPTCP_MIB_MPPRIOTX);
+		MPTCP_INC_STATS(sock_net((const struct sock *)tp),
+				MPTCP_MIB_MPPRIOTX);
 	}
 
 mp_capable_done:

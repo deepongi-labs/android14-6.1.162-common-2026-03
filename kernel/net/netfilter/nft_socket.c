@@ -162,9 +162,9 @@ out_put_sk:
 }
 
 static const struct nla_policy nft_socket_policy[NFTA_SOCKET_MAX + 1] = {
-	[NFTA_SOCKET_KEY]		= NLA_POLICY_MAX(NLA_BE32, 255),
+	[NFTA_SOCKET_KEY]		= { .type = NLA_U32 },
 	[NFTA_SOCKET_DREG]		= { .type = NLA_U32 },
-	[NFTA_SOCKET_LEVEL]		= NLA_POLICY_MAX(NLA_BE32, 255),
+	[NFTA_SOCKET_LEVEL]		= { .type = NLA_U32 },
 };
 
 static int nft_socket_init(const struct nft_ctx *ctx,
@@ -217,7 +217,7 @@ static int nft_socket_init(const struct nft_ctx *ctx,
 
 		level += err;
 		/* Implies a giant cgroup tree */
-		if (level > 255)
+		if (WARN_ON_ONCE(level > 255))
 			return -EOPNOTSUPP;
 
 		priv->level = level;
@@ -235,7 +235,7 @@ static int nft_socket_init(const struct nft_ctx *ctx,
 }
 
 static int nft_socket_dump(struct sk_buff *skb,
-			   const struct nft_expr *expr, bool reset)
+			   const struct nft_expr *expr)
 {
 	const struct nft_socket *priv = nft_expr_priv(expr);
 
@@ -275,7 +275,8 @@ static bool nft_socket_reduce(struct nft_regs_track *track,
 }
 
 static int nft_socket_validate(const struct nft_ctx *ctx,
-			       const struct nft_expr *expr)
+			       const struct nft_expr *expr,
+			       const struct nft_data **data)
 {
 	if (ctx->family != NFPROTO_IPV4 &&
 	    ctx->family != NFPROTO_IPV6 &&

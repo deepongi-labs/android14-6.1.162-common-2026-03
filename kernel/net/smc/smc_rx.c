@@ -13,10 +13,8 @@
 #include <linux/net.h>
 #include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
-#include <linux/splice.h>
 
 #include <net/sock.h>
-#include <trace/events/sock.h>
 
 #include "smc.h"
 #include "smc_core.h"
@@ -33,8 +31,6 @@ static void smc_rx_wake_up(struct sock *sk)
 {
 	struct socket_wq *wq;
 
-	trace_sk_data_ready(sk);
-
 	/* derived from sock_def_readable() */
 	/* called already in smc_listen_work() */
 	rcu_read_lock();
@@ -42,10 +38,10 @@ static void smc_rx_wake_up(struct sock *sk)
 	if (skwq_has_sleeper(wq))
 		wake_up_interruptible_sync_poll(&wq->wait, EPOLLIN | EPOLLPRI |
 						EPOLLRDNORM | EPOLLRDBAND);
-	sk_wake_async_rcu(sk, SOCK_WAKE_WAITD, POLL_IN);
+	sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_IN);
 	if ((sk->sk_shutdown == SHUTDOWN_MASK) ||
 	    (sk->sk_state == SMC_CLOSED))
-		sk_wake_async_rcu(sk, SOCK_WAKE_WAITD, POLL_HUP);
+		sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_HUP);
 	rcu_read_unlock();
 }
 
@@ -197,7 +193,7 @@ static int smc_rx_splice(struct pipe_inode_info *pipe, char *src, size_t len,
 			partial[i].offset = offset;
 			partial[i].len = size;
 			partial[i].private = (unsigned long)priv[i];
-			buf += size;
+			buf += size / sizeof(*buf);
 			left -= size;
 			offset = 0;
 		}

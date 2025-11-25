@@ -21,7 +21,6 @@
 #include <scsi/scsi.h>
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_dbg.h>
-#include <scsi/scsi_devinfo.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
@@ -38,7 +37,7 @@ struct uas_dev_info {
 	struct usb_anchor cmd_urbs;
 	struct usb_anchor sense_urbs;
 	struct usb_anchor data_urbs;
-	u64 flags;
+	unsigned long flags;
 	int qdepth, resetting;
 	unsigned cmd_pipe, status_pipe, data_in_pipe, data_out_pipe;
 	unsigned use_streams:1;
@@ -817,30 +816,31 @@ static int uas_target_alloc(struct scsi_target *starget)
 	return 0;
 }
 
-static int uas_sdev_init(struct scsi_device *sdev)
+static int uas_slave_alloc(struct scsi_device *sdev)
 {
 	struct uas_dev_info *devinfo =
 		(struct uas_dev_info *)sdev->host->hostdata;
 
-	/*
-	 * Some USB storage devices reset if the IO advice hints grouping mode
-	 * page is queried. Hence skip that mode page.
-	 */
-	sdev->sdev_bflags |= BLIST_SKIP_IO_HINTS;
-
 	sdev->hostdata = devinfo;
+
+	/*
+	 * The protocol has no requirements on alignment in the strict sense.
+	 * Controllers may or may not have alignment restrictions.
+	 * As this is not exported, we use an extremely conservative guess.
+	 */
+	blk_queue_update_dma_alignment(sdev->request_queue, (512 - 1));
+
+	if (devinfo->flags & US_FL_MAX_SECTORS_64)
+		blk_queue_max_hw_sectors(sdev->request_queue, 64);
+	else if (devinfo->flags & US_FL_MAX_SECTORS_240)
+		blk_queue_max_hw_sectors(sdev->request_queue, 240);
+
 	return 0;
 }
 
-static int uas_sdev_configure(struct scsi_device *sdev,
-			      struct queue_limits *lim)
+static int uas_slave_configure(struct scsi_device *sdev)
 {
 	struct uas_dev_info *devinfo = sdev->hostdata;
-
-	if (devinfo->flags & US_FL_MAX_SECTORS_64)
-		lim->max_hw_sectors = 64;
-	else if (devinfo->flags & US_FL_MAX_SECTORS_240)
-		lim->max_hw_sectors = 240;
 
 	if (devinfo->flags & US_FL_NO_REPORT_OPCODES)
 		sdev->no_report_opcodes = 1;
@@ -878,13 +878,6 @@ static int uas_sdev_configure(struct scsi_device *sdev,
 		sdev->guess_capacity = 1;
 
 	/*
-	 * Some devices report generic values until the media has been
-	 * accessed. Force a READ(10) prior to querying device
-	 * characteristics.
-	 */
-	sdev->read_before_ms = 1;
-
-	/*
 	 * Some devices don't like MODE SENSE with page=0x3f,
 	 * which is the command used for checking if a device
 	 * is write-protected.  Now that we tell the sd driver
@@ -900,23 +893,17 @@ static int uas_sdev_configure(struct scsi_device *sdev,
 	return 0;
 }
 
-static const struct scsi_host_template uas_host_template = {
+static struct scsi_host_template uas_host_template = {
 	.module = THIS_MODULE,
 	.name = "uas",
 	.queuecommand = uas_queuecommand,
 	.target_alloc = uas_target_alloc,
-	.sdev_init = uas_sdev_init,
-	.sdev_configure = uas_sdev_configure,
+	.slave_alloc = uas_slave_alloc,
+	.slave_configure = uas_slave_configure,
 	.eh_abort_handler = uas_eh_abort_handler,
 	.eh_device_reset_handler = uas_eh_device_reset_handler,
 	.this_id = -1,
 	.skip_settle_delay = 1,
-	/*
-	 * The protocol has no requirements on alignment in the strict sense.
-	 * Controllers may or may not have alignment restrictions.
-	 * As this is not exported, we use an extremely conservative guess.
-	 */
-	.dma_alignment = 511,
 	.dma_boundary = PAGE_SIZE - 1,
 	.cmd_size = sizeof(struct uas_cmd_info),
 };
@@ -927,7 +914,7 @@ static const struct scsi_host_template uas_host_template = {
 { USB_DEVICE_VER(id_vendor, id_product, bcdDeviceMin, bcdDeviceMax), \
 	.driver_info = (flags) }
 
-static const struct usb_device_id uas_usb_ids[] = {
+static struct usb_device_id uas_usb_ids[] = {
 #	include "unusual_uas.h"
 	{ USB_INTERFACE_INFO(USB_CLASS_MASS_STORAGE, USB_SC_SCSI, USB_PR_BULK) },
 	{ USB_INTERFACE_INFO(USB_CLASS_MASS_STORAGE, USB_SC_SCSI, USB_PR_UAS) },
@@ -1000,7 +987,7 @@ static int uas_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	struct Scsi_Host *shost = NULL;
 	struct uas_dev_info *devinfo;
 	struct usb_device *udev = interface_to_usbdev(intf);
-	u64 dev_flags;
+	unsigned long dev_flags;
 
 	if (!uas_use_uas_driver(intf, id, &dev_flags))
 		return -ENODEV;
@@ -1233,8 +1220,9 @@ static void uas_disconnect(struct usb_interface *intf)
  * hang on reboot when the device is still in uas mode. Note the reset is
  * necessary as some devices won't revert to usb-storage mode without it.
  */
-static void uas_shutdown(struct usb_interface *intf)
+static void uas_shutdown(struct device *dev)
 {
+	struct usb_interface *intf = to_usb_interface(dev);
 	struct usb_device *udev = interface_to_usbdev(intf);
 	struct Scsi_Host *shost = usb_get_intfdata(intf);
 	struct uas_dev_info *devinfo = (struct uas_dev_info *)shost->hostdata;
@@ -1257,7 +1245,7 @@ static struct usb_driver uas_driver = {
 	.suspend = uas_suspend,
 	.resume = uas_resume,
 	.reset_resume = uas_reset_resume,
-	.shutdown = uas_shutdown,
+	.drvwrap.driver.shutdown = uas_shutdown,
 	.id_table = uas_usb_ids,
 };
 
@@ -1287,8 +1275,7 @@ static void __exit uas_exit(void)
 module_init(uas_init);
 module_exit(uas_exit);
 
-MODULE_DESCRIPTION("USB Attached SCSI driver");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("USB_STORAGE");
+MODULE_IMPORT_NS(USB_STORAGE);
 MODULE_AUTHOR(
 	"Hans de Goede <hdegoede@redhat.com>, Matthew Wilcox and Sarah Sharp");

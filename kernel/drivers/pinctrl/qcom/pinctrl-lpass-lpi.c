@@ -4,24 +4,16 @@
  * Copyright (c) 2020 Linaro Ltd.
  */
 
-#include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/gpio/driver.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
-#include <linux/seq_file.h>
-
+#include <linux/of_device.h>
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinmux.h>
-
 #include "../pinctrl-utils.h"
-
 #include "pinctrl-lpass-lpi.h"
 
-#define MAX_NR_GPIO		32
-#define GPIO_FUNC		0
 #define MAX_LPI_NUM_CLKS	2
 
 struct lpi_pinctrl {
@@ -34,34 +26,19 @@ struct lpi_pinctrl {
 	struct clk_bulk_data clks[MAX_LPI_NUM_CLKS];
 	/* Protects from concurrent register updates */
 	struct mutex lock;
-	DECLARE_BITMAP(ever_gpio, MAX_NR_GPIO);
 	const struct lpi_pinctrl_variant_data *data;
 };
 
 static int lpi_gpio_read(struct lpi_pinctrl *state, unsigned int pin,
 			 unsigned int addr)
 {
-	u32 pin_offset;
-
-	if (state->data->flags & LPI_FLAG_USE_PREDEFINED_PIN_OFFSET)
-		pin_offset = state->data->groups[pin].pin_offset;
-	else
-		pin_offset = LPI_TLMM_REG_OFFSET * pin;
-
-	return ioread32(state->tlmm_base + pin_offset + addr);
+	return ioread32(state->tlmm_base + LPI_TLMM_REG_OFFSET * pin + addr);
 }
 
 static int lpi_gpio_write(struct lpi_pinctrl *state, unsigned int pin,
 			  unsigned int addr, unsigned int val)
 {
-	u32 pin_offset;
-
-	if (state->data->flags & LPI_FLAG_USE_PREDEFINED_PIN_OFFSET)
-		pin_offset = state->data->groups[pin].pin_offset;
-	else
-		pin_offset = LPI_TLMM_REG_OFFSET * pin;
-
-	iowrite32(val, state->tlmm_base + pin_offset + addr);
+	iowrite32(val, state->tlmm_base + LPI_TLMM_REG_OFFSET * pin + addr);
 
 	return 0;
 }
@@ -103,10 +80,10 @@ static int lpi_gpio_get_function_groups(struct pinctrl_dev *pctldev,
 }
 
 static int lpi_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned int function,
-			    unsigned int group)
+			    unsigned int group_num)
 {
 	struct lpi_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
-	const struct lpi_pingroup *g = &pctrl->data->groups[group];
+	const struct lpi_pingroup *g = &pctrl->data->groups[group_num];
 	u32 val;
 	int i, pin = g->pin;
 
@@ -120,28 +97,6 @@ static int lpi_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned int function,
 
 	mutex_lock(&pctrl->lock);
 	val = lpi_gpio_read(pctrl, pin, LPI_GPIO_CFG_REG);
-
-	/*
-	 * If this is the first time muxing to GPIO and the direction is
-	 * output, make sure that we're not going to be glitching the pin
-	 * by reading the current state of the pin and setting it as the
-	 * output.
-	 */
-	if (i == GPIO_FUNC && (val & LPI_GPIO_OE_MASK) &&
-	    !test_and_set_bit(group, pctrl->ever_gpio)) {
-		u32 io_val = lpi_gpio_read(pctrl, group, LPI_GPIO_VALUE_REG);
-
-		if (io_val & LPI_GPIO_VALUE_IN_MASK) {
-			if (!(io_val & LPI_GPIO_VALUE_OUT_MASK))
-				lpi_gpio_write(pctrl, group, LPI_GPIO_VALUE_REG,
-					       io_val | LPI_GPIO_VALUE_OUT_MASK);
-		} else {
-			if (io_val & LPI_GPIO_VALUE_OUT_MASK)
-				lpi_gpio_write(pctrl, group, LPI_GPIO_VALUE_REG,
-					       io_val & ~LPI_GPIO_VALUE_OUT_MASK);
-		}
-	}
-
 	u32p_replace_bits(&val, i, LPI_GPIO_FUNCTION_MASK);
 	lpi_gpio_write(pctrl, pin, LPI_GPIO_CFG_REG, val);
 	mutex_unlock(&pctrl->lock);
@@ -188,7 +143,7 @@ static int lpi_config_get(struct pinctrl_dev *pctldev,
 			arg = 1;
 		break;
 	case PIN_CONFIG_INPUT_ENABLE:
-	case PIN_CONFIG_LEVEL:
+	case PIN_CONFIG_OUTPUT:
 		if (is_out)
 			arg = 1;
 		break;
@@ -200,41 +155,6 @@ static int lpi_config_get(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static int lpi_config_set_slew_rate(struct lpi_pinctrl *pctrl,
-				    const struct lpi_pingroup *g,
-				    unsigned int group, unsigned int slew)
-{
-	unsigned long sval;
-	void __iomem *reg;
-	int slew_offset;
-
-	if (slew > LPI_SLEW_RATE_MAX) {
-		dev_err(pctrl->dev, "invalid slew rate %u for pin: %d\n",
-			slew, group);
-		return -EINVAL;
-	}
-
-	slew_offset = g->slew_offset;
-	if (slew_offset == LPI_NO_SLEW)
-		return 0;
-
-	if (pctrl->data->flags & LPI_FLAG_SLEW_RATE_SAME_REG)
-		reg = pctrl->tlmm_base + LPI_TLMM_REG_OFFSET * group + LPI_GPIO_CFG_REG;
-	else
-		reg = pctrl->slew_base + LPI_SLEW_RATE_CTL_REG;
-
-	mutex_lock(&pctrl->lock);
-
-	sval = ioread32(reg);
-	sval &= ~(LPI_SLEW_RATE_MASK << slew_offset);
-	sval |= slew << slew_offset;
-	iowrite32(sval, reg);
-
-	mutex_unlock(&pctrl->lock);
-
-	return 0;
-}
-
 static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
 			  unsigned long *configs, unsigned int nconfs)
 {
@@ -242,7 +162,8 @@ static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
 	unsigned int param, arg, pullup = LPI_GPIO_BIAS_DISABLE, strength = 2;
 	bool value, output_enabled = false;
 	const struct lpi_pingroup *g;
-	int i, ret;
+	unsigned long sval;
+	int i, slew_offset;
 	u32 val;
 
 	g = &pctrl->data->groups[group];
@@ -266,7 +187,7 @@ static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
 		case PIN_CONFIG_INPUT_ENABLE:
 			output_enabled = false;
 			break;
-		case PIN_CONFIG_LEVEL:
+		case PIN_CONFIG_OUTPUT:
 			output_enabled = true;
 			value = arg;
 			break;
@@ -274,9 +195,24 @@ static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
 			strength = arg;
 			break;
 		case PIN_CONFIG_SLEW_RATE:
-			ret = lpi_config_set_slew_rate(pctrl, g, group, arg);
-			if (ret)
-				return ret;
+			if (arg > LPI_SLEW_RATE_MAX) {
+				dev_err(pctldev->dev, "invalid slew rate %u for pin: %d\n",
+					arg, group);
+				return -EINVAL;
+			}
+
+			slew_offset = g->slew_offset;
+			if (slew_offset == LPI_NO_SLEW)
+				break;
+
+			mutex_lock(&pctrl->lock);
+
+			sval = ioread32(pctrl->slew_base + LPI_SLEW_RATE_CTL_REG);
+			sval &= ~(LPI_SLEW_RATE_MASK << slew_offset);
+			sval |= arg << slew_offset;
+			iowrite32(sval, pctrl->slew_base + LPI_SLEW_RATE_CTL_REG);
+
+			mutex_unlock(&pctrl->lock);
 			break;
 		default:
 			return -EINVAL;
@@ -328,7 +264,7 @@ static int lpi_gpio_direction_output(struct gpio_chip *chip,
 	struct lpi_pinctrl *state = gpiochip_get_data(chip);
 	unsigned long config;
 
-	config = pinconf_to_config_packed(PIN_CONFIG_LEVEL, val);
+	config = pinconf_to_config_packed(PIN_CONFIG_OUTPUT, val);
 
 	return lpi_config_set(state->ctrl, pin, &config, 1);
 }
@@ -341,17 +277,18 @@ static int lpi_gpio_get(struct gpio_chip *chip, unsigned int pin)
 		LPI_GPIO_VALUE_IN_MASK;
 }
 
-static int lpi_gpio_set(struct gpio_chip *chip, unsigned int pin, int value)
+static void lpi_gpio_set(struct gpio_chip *chip, unsigned int pin, int value)
 {
 	struct lpi_pinctrl *state = gpiochip_get_data(chip);
 	unsigned long config;
 
-	config = pinconf_to_config_packed(PIN_CONFIG_LEVEL, value);
+	config = pinconf_to_config_packed(PIN_CONFIG_OUTPUT, value);
 
-	return lpi_config_set(state->ctrl, pin, &config, 1);
+	lpi_config_set(state->ctrl, pin, &config, 1);
 }
 
 #ifdef CONFIG_DEBUG_FS
+#include <linux/seq_file.h>
 
 static unsigned int lpi_regval_to_drive(u32 val)
 {
@@ -457,9 +394,6 @@ int lpi_pinctrl_probe(struct platform_device *pdev)
 	if (!data)
 		return -EINVAL;
 
-	if (WARN_ON(data->npins > MAX_NR_GPIO))
-		return -EINVAL;
-
 	pctrl->data = data;
 	pctrl->dev = &pdev->dev;
 
@@ -471,14 +405,16 @@ int lpi_pinctrl_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(pctrl->tlmm_base),
 				     "TLMM resource not provided\n");
 
-	if (!(data->flags & LPI_FLAG_SLEW_RATE_SAME_REG)) {
-		pctrl->slew_base = devm_platform_ioremap_resource(pdev, 1);
-		if (IS_ERR(pctrl->slew_base))
-			return dev_err_probe(dev, PTR_ERR(pctrl->slew_base),
-					     "Slew resource not provided\n");
-	}
+	pctrl->slew_base = devm_platform_ioremap_resource(pdev, 1);
+	if (IS_ERR(pctrl->slew_base))
+		return dev_err_probe(dev, PTR_ERR(pctrl->slew_base),
+				     "Slew resource not provided\n");
 
-	ret = devm_clk_bulk_get_optional(dev, MAX_LPI_NUM_CLKS, pctrl->clks);
+	if (of_property_read_bool(dev->of_node, "qcom,adsp-bypass-mode"))
+		ret = devm_clk_bulk_get_optional(dev, MAX_LPI_NUM_CLKS, pctrl->clks);
+	else
+		ret = devm_clk_bulk_get(dev, MAX_LPI_NUM_CLKS, pctrl->clks);
+
 	if (ret)
 		return ret;
 
@@ -498,6 +434,7 @@ int lpi_pinctrl_probe(struct platform_device *pdev)
 	pctrl->chip.base = -1;
 	pctrl->chip.ngpio = data->npins;
 	pctrl->chip.label = dev_name(dev);
+	pctrl->chip.of_gpio_n_cells = 2;
 	pctrl->chip.can_sleep = false;
 
 	mutex_init(&pctrl->lock);
@@ -529,7 +466,7 @@ err_pinctrl:
 }
 EXPORT_SYMBOL_GPL(lpi_pinctrl_probe);
 
-void lpi_pinctrl_remove(struct platform_device *pdev)
+int lpi_pinctrl_remove(struct platform_device *pdev)
 {
 	struct lpi_pinctrl *pctrl = platform_get_drvdata(pdev);
 	int i;
@@ -539,6 +476,8 @@ void lpi_pinctrl_remove(struct platform_device *pdev)
 
 	for (i = 0; i < pctrl->data->npins; i++)
 		pinctrl_generic_remove_group(pctrl->ctrl, i);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(lpi_pinctrl_remove);
 

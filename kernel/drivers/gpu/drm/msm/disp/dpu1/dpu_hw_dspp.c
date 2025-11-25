@@ -2,8 +2,6 @@
 /* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  */
 
-#include <drm/drm_managed.h>
-
 #include "dpu_hwio.h"
 #include "dpu_hw_catalog.h"
 #include "dpu_hw_lm.h"
@@ -31,14 +29,14 @@ static void dpu_setup_dspp_pcc(struct dpu_hw_dspp *ctx,
 	u32 base;
 
 	if (!ctx) {
-		DRM_ERROR("invalid ctx %p\n", ctx);
+		DRM_ERROR("invalid ctx %pK\n", ctx);
 		return;
 	}
 
 	base = ctx->cap->sblk->pcc.base;
 
 	if (!base) {
-		DRM_ERROR("invalid ctx %p pcc base 0x%x\n", ctx, base);
+		DRM_ERROR("invalid ctx %pK pcc base 0x%x\n", ctx, base);
 		return;
 	}
 
@@ -63,35 +61,65 @@ static void dpu_setup_dspp_pcc(struct dpu_hw_dspp *ctx,
 	DPU_REG_WRITE(&ctx->hw, base, PCC_EN);
 }
 
-/**
- * dpu_hw_dspp_init() - Initializes the DSPP hw driver object.
- * should be called once before accessing every DSPP.
- * @dev:  Corresponding device for devres management
- * @cfg:  DSPP catalog entry for which driver object is required
- * @addr: Mapped register io address of MDP
- * Return: pointer to structure or ERR_PTR
- */
-struct dpu_hw_dspp *dpu_hw_dspp_init(struct drm_device *dev,
-				     const struct dpu_dspp_cfg *cfg,
-				     void __iomem *addr)
+static void _setup_dspp_ops(struct dpu_hw_dspp *c,
+		unsigned long features)
 {
-	struct dpu_hw_dspp *c;
+	if (test_bit(DPU_DSPP_PCC, &features))
+		c->ops.setup_pcc = dpu_setup_dspp_pcc;
+}
 
-	if (!addr)
+static const struct dpu_dspp_cfg *_dspp_offset(enum dpu_dspp dspp,
+		const struct dpu_mdss_cfg *m,
+		void __iomem *addr,
+		struct dpu_hw_blk_reg_map *b)
+{
+	int i;
+
+	if (!m || !addr || !b)
 		return ERR_PTR(-EINVAL);
 
-	c = drmm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
+	for (i = 0; i < m->dspp_count; i++) {
+		if (dspp == m->dspp[i].id) {
+			b->blk_addr = addr + m->dspp[i].base;
+			b->log_mask = DPU_DBG_MASK_DSPP;
+			return &m->dspp[i];
+		}
+	}
+
+	return ERR_PTR(-EINVAL);
+}
+
+struct dpu_hw_dspp *dpu_hw_dspp_init(enum dpu_dspp idx,
+			void __iomem *addr,
+			const struct dpu_mdss_cfg *m)
+{
+	struct dpu_hw_dspp *c;
+	const struct dpu_dspp_cfg *cfg;
+
+	if (!addr || !m)
+		return ERR_PTR(-EINVAL);
+
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
 		return ERR_PTR(-ENOMEM);
 
-	c->hw.blk_addr = addr + cfg->base;
-	c->hw.log_mask = DPU_DBG_MASK_DSPP;
+	cfg = _dspp_offset(idx, m, addr, &c->hw);
+	if (IS_ERR_OR_NULL(cfg)) {
+		kfree(c);
+		return ERR_PTR(-EINVAL);
+	}
 
 	/* Assign ops */
-	c->idx = cfg->id;
+	c->idx = idx;
 	c->cap = cfg;
-	if (c->cap->sblk->pcc.base)
-		c->ops.setup_pcc = dpu_setup_dspp_pcc;
+	_setup_dspp_ops(c, c->cap->features);
 
 	return c;
 }
+
+void dpu_hw_dspp_destroy(struct dpu_hw_dspp *dspp)
+{
+	kfree(dspp);
+}
+
+

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 Red Hat. All rights reserved.
  *
@@ -590,7 +589,7 @@ static int h_init(struct smq_hash_table *ht, struct entry_space *es, unsigned in
 	nr_buckets = roundup_pow_of_two(max(nr_entries / 4u, 16u));
 	ht->hash_bits = __ffs(nr_buckets);
 
-	ht->buckets = vmalloc_array(nr_buckets, sizeof(*ht->buckets));
+	ht->buckets = vmalloc(array_size(nr_buckets, sizeof(*ht->buckets)));
 	if (!ht->buckets)
 		return -ENOMEM;
 
@@ -624,7 +623,6 @@ static void __h_insert(struct smq_hash_table *ht, unsigned int bucket, struct en
 static void h_insert(struct smq_hash_table *ht, struct entry *e)
 {
 	unsigned int h = hash_64(from_oblock(e->oblock), ht->hash_bits);
-
 	__h_insert(ht, h, e);
 }
 
@@ -1640,7 +1638,6 @@ static void smq_tick(struct dm_cache_policy *p, bool can_block)
 static void smq_allow_migrations(struct dm_cache_policy *p, bool allow)
 {
 	struct smq_policy *mq = to_smq_policy(p);
-
 	mq->migrations_allowed = allow;
 }
 
@@ -1947,7 +1944,7 @@ static void __exit smq_exit(void)
 module_init(smq_init);
 module_exit(smq_exit);
 
-MODULE_AUTHOR("Joe Thornber <dm-devel@lists.linux.dev>");
+MODULE_AUTHOR("Joe Thornber <dm-devel@redhat.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("smq cache policy");
 

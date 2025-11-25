@@ -3,7 +3,6 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/delay.h>
@@ -112,18 +111,16 @@ static void clk_spmi_pmic_div_disable(struct clk_hw *hw)
 	spin_unlock_irqrestore(&clkdiv->lock, flags);
 }
 
-static int clk_spmi_pmic_div_determine_rate(struct clk_hw *hw,
-					    struct clk_rate_request *req)
+static long clk_spmi_pmic_div_round_rate(struct clk_hw *hw, unsigned long rate,
+					 unsigned long *parent_rate)
 {
 	unsigned int div, div_factor;
 
-	div = DIV_ROUND_UP(req->best_parent_rate, req->rate);
+	div = DIV_ROUND_UP(*parent_rate, rate);
 	div_factor = div_to_div_factor(div);
 	div = div_factor_to_div(div_factor);
 
-	req->rate = req->best_parent_rate / div;
-
-	return 0;
+	return *parent_rate / div;
 }
 
 static unsigned long
@@ -143,26 +140,30 @@ static int clk_spmi_pmic_div_set_rate(struct clk_hw *hw, unsigned long rate,
 {
 	struct clkdiv *clkdiv = to_clkdiv(hw);
 	unsigned int div_factor = div_to_div_factor(parent_rate / rate);
+	unsigned long flags;
 	bool enabled;
 	int ret;
 
-	guard(spinlock_irqsave)(&clkdiv->lock);
-
+	spin_lock_irqsave(&clkdiv->lock, flags);
 	enabled = is_spmi_pmic_clkdiv_enabled(clkdiv);
 	if (enabled) {
 		ret = spmi_pmic_clkdiv_set_enable_state(clkdiv, false);
 		if (ret)
-			return ret;
+			goto unlock;
 	}
 
 	ret = regmap_update_bits(clkdiv->regmap, clkdiv->base + REG_DIV_CTL1,
 				 DIV_CTL1_DIV_FACTOR_MASK, div_factor);
 	if (ret)
-		return ret;
+		goto unlock;
 
 	if (enabled)
 		ret = __spmi_pmic_clkdiv_set_enable_state(clkdiv, true,
 							  div_factor);
+
+unlock:
+	spin_unlock_irqrestore(&clkdiv->lock, flags);
+
 	return ret;
 }
 
@@ -171,12 +172,12 @@ static const struct clk_ops clk_spmi_pmic_div_ops = {
 	.disable = clk_spmi_pmic_div_disable,
 	.set_rate = clk_spmi_pmic_div_set_rate,
 	.recalc_rate = clk_spmi_pmic_div_recalc_rate,
-	.determine_rate = clk_spmi_pmic_div_determine_rate,
+	.round_rate = clk_spmi_pmic_div_round_rate,
 };
 
 struct spmi_pmic_div_clk_cc {
 	int		nclks;
-	struct clkdiv	clks[] __counted_by(nclks);
+	struct clkdiv	clks[];
 };
 
 static struct clk_hw *
@@ -203,7 +204,7 @@ static int spmi_pmic_clkdiv_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	struct device *dev = &pdev->dev;
 	struct device_node *of_node = dev->of_node;
-	struct clk_parent_data parent_data = { .index = 0, };
+	const char *parent_name;
 	int nclks, i, ret, cxo_hz;
 	char name[20];
 	u32 start;
@@ -245,8 +246,14 @@ static int spmi_pmic_clkdiv_probe(struct platform_device *pdev)
 	cxo_hz = clk_get_rate(cxo);
 	clk_put(cxo);
 
+	parent_name = of_clk_get_parent_name(of_node, 0);
+	if (!parent_name) {
+		dev_err(dev, "missing parent clock\n");
+		return -ENODEV;
+	}
+
 	init.name = name;
-	init.parent_data = &parent_data;
+	init.parent_names = &parent_name;
 	init.num_parents = 1;
 	init.ops = &clk_spmi_pmic_div_ops;
 

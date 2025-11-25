@@ -595,13 +595,6 @@ static void ipc_imem_run_state_worker(struct work_struct *instance)
 	while (ctrl_chl_idx < IPC_MEM_MAX_CHANNELS) {
 		if (!ipc_chnl_cfg_get(&chnl_cfg_port, ctrl_chl_idx)) {
 			ipc_imem->ipc_port[ctrl_chl_idx] = NULL;
-
-			if (ipc_imem->pcie->pci->device == INTEL_CP_DEVICE_7560_ID &&
-			    chnl_cfg_port.wwan_port_type == WWAN_PORT_XMMRPC) {
-				ctrl_chl_idx++;
-				continue;
-			}
-
 			if (ipc_imem->pcie->pci->device == INTEL_CP_DEVICE_7360_ID &&
 			    chnl_cfg_port.wwan_port_type == WWAN_PORT_MBIM) {
 				ctrl_chl_idx++;
@@ -1381,20 +1374,24 @@ struct iosm_imem *ipc_imem_init(struct iosm_pcie *pcie, unsigned int device_id,
 	/* The phase is set to power off. */
 	ipc_imem->phase = IPC_P_OFF;
 
-	hrtimer_setup(&ipc_imem->startup_timer, ipc_imem_startup_timer_cb, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&ipc_imem->startup_timer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL);
+	ipc_imem->startup_timer.function = ipc_imem_startup_timer_cb;
 
-	hrtimer_setup(&ipc_imem->tdupdate_timer, ipc_imem_td_update_timer_cb, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&ipc_imem->tdupdate_timer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL);
+	ipc_imem->tdupdate_timer.function = ipc_imem_td_update_timer_cb;
 
-	hrtimer_setup(&ipc_imem->fast_update_timer, ipc_imem_fast_update_timer_cb, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&ipc_imem->fast_update_timer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL);
+	ipc_imem->fast_update_timer.function = ipc_imem_fast_update_timer_cb;
 
-	hrtimer_setup(&ipc_imem->td_alloc_timer, ipc_imem_td_alloc_timer_cb, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&ipc_imem->td_alloc_timer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL);
+	ipc_imem->td_alloc_timer.function = ipc_imem_td_alloc_timer_cb;
 
-	hrtimer_setup(&ipc_imem->adb_timer, ipc_imem_adb_timer_cb, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&ipc_imem->adb_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	ipc_imem->adb_timer.function = ipc_imem_adb_timer_cb;
 
 	if (ipc_imem_config(ipc_imem)) {
 		dev_err(ipc_imem->dev, "failed to initialize the imem");

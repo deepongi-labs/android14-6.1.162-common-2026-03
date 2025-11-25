@@ -18,7 +18,7 @@
 #include <linux/uaccess.h>
 #include <linux/fileattr.h>
 
-int ext2_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
+int ext2_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 {
 	struct ext2_inode_info *ei = EXT2_I(d_inode(dentry));
 
@@ -27,8 +27,8 @@ int ext2_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
 	return 0;
 }
 
-int ext2_fileattr_set(struct mnt_idmap *idmap,
-		      struct dentry *dentry, struct file_kattr *fa)
+int ext2_fileattr_set(struct user_namespace *mnt_userns,
+		      struct dentry *dentry, struct fileattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	struct ext2_inode_info *ei = EXT2_I(inode);
@@ -44,7 +44,7 @@ int ext2_fileattr_set(struct mnt_idmap *idmap,
 		(fa->flags & EXT2_FL_USER_MODIFIABLE);
 
 	ext2_set_inode_flags(inode);
-	inode_set_ctime_current(inode);
+	inode->i_ctime = current_time(inode);
 	mark_inode_dirty(inode);
 
 	return 0;
@@ -66,7 +66,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case EXT2_IOC_SETVERSION: {
 		__u32 generation;
 
-		if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
+		if (!inode_owner_or_capable(&init_user_ns, inode))
 			return -EPERM;
 		ret = mnt_want_write_file(filp);
 		if (ret)
@@ -77,7 +77,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 
 		inode_lock(inode);
-		inode_set_ctime_current(inode);
+		inode->i_ctime = current_time(inode);
 		inode->i_generation = generation;
 		inode_unlock(inode);
 
@@ -99,7 +99,7 @@ setversion_out:
 		if (!test_opt(inode->i_sb, RESERVATION) ||!S_ISREG(inode->i_mode))
 			return -ENOTTY;
 
-		if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
+		if (!inode_owner_or_capable(&init_user_ns, inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))

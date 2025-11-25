@@ -208,7 +208,8 @@ static void parport_attach(struct parport *port)
 
 	calibrate_port(&device);
 
-	hrtimer_setup(&device.timer, hrtimer_event, CLOCK_REALTIME, HRTIMER_MODE_ABS);
+	hrtimer_init(&device.timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
+	device.timer.function = hrtimer_event;
 	hrtimer_start(&device.timer, next_intr_time(&device), HRTIMER_MODE_ABS);
 
 	return;
@@ -231,6 +232,7 @@ static struct parport_driver pps_gen_parport_driver = {
 	.name = KBUILD_MODNAME,
 	.match_port = parport_attach,
 	.detach = parport_detach,
+	.devmodel = true,
 };
 module_parport_driver(pps_gen_parport_driver);
 

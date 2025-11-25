@@ -267,10 +267,10 @@ static int tipc_aead_encrypt(struct tipc_aead *aead, struct sk_buff *skb,
 			     struct tipc_bearer *b,
 			     struct tipc_media_addr *dst,
 			     struct tipc_node *__dnode);
-static void tipc_aead_encrypt_done(void *data, int err);
+static void tipc_aead_encrypt_done(struct crypto_async_request *base, int err);
 static int tipc_aead_decrypt(struct net *net, struct tipc_aead *aead,
 			     struct sk_buff *skb, struct tipc_bearer *b);
-static void tipc_aead_decrypt_done(void *data, int err);
+static void tipc_aead_decrypt_done(struct crypto_async_request *base, int err);
 static inline int tipc_ehdr_size(struct tipc_ehdr *ehdr);
 static int tipc_ehdr_build(struct net *net, struct tipc_aead *aead,
 			   u8 tx_key, struct sk_buff *skb,
@@ -838,9 +838,9 @@ exit:
 	return rc;
 }
 
-static void tipc_aead_encrypt_done(void *data, int err)
+static void tipc_aead_encrypt_done(struct crypto_async_request *base, int err)
 {
-	struct sk_buff *skb = data;
+	struct sk_buff *skb = base->data;
 	struct tipc_crypto_tx_ctx *tx_ctx = TIPC_SKB_CB(skb)->crypto_ctx;
 	struct tipc_bearer *b = tx_ctx->bearer;
 	struct tipc_aead *aead = tx_ctx->aead;
@@ -963,9 +963,9 @@ exit:
 	return rc;
 }
 
-static void tipc_aead_decrypt_done(void *data, int err)
+static void tipc_aead_decrypt_done(struct crypto_async_request *base, int err)
 {
-	struct sk_buff *skb = data;
+	struct sk_buff *skb = base->data;
 	struct tipc_crypto_rx_ctx *rx_ctx = TIPC_SKB_CB(skb)->crypto_ctx;
 	struct tipc_bearer *b = rx_ctx->bearer;
 	struct tipc_aead *aead = rx_ctx->aead;
@@ -1797,7 +1797,7 @@ exit:
  * @b: bearer where the message has been received
  *
  * If the decryption is successful, the decrypted skb is returned directly or
- * as the callback, the encryption header and auth tag will be trimmed out
+ * as the callback, the encryption header and auth tag will be trimed out
  * before forwarding to tipc_rcv() via the tipc_crypto_rcv_complete().
  * Otherwise, the skb will be freed!
  * Note: RX key(s) can be re-aligned, or in case of no key suitable, TX

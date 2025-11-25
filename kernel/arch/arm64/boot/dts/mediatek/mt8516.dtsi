@@ -165,7 +165,7 @@
 	};
 
 	pmu {
-		compatible = "arm,cortex-a35-pmu";
+		compatible = "arm,armv8-pmuv3";
 		interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_LOW>,
 			     <GIC_SPI 5 IRQ_TYPE_LEVEL_LOW>,
 			     <GIC_SPI 6 IRQ_TYPE_LEVEL_LOW>,
@@ -202,7 +202,7 @@
 			#clock-cells = <1>;
 		};
 
-		watchdog@10007000 {
+		toprgu: toprgu@10007000 {
 			compatible = "mediatek,mt8516-wdt",
 				     "mediatek,mt6589-wdt";
 			reg = <0 0x10007000 0 0x1000>;
@@ -220,17 +220,6 @@
 			clock-names = "clk13m", "bus";
 		};
 
-		keypad: keypad@10002000 {
-			compatible = "mediatek,mt8516-keypad",
-				     "mediatek,mt6779-keypad";
-			reg = <0 0x10002000 0 0x1000>;
-			wakeup-source;
-			interrupts = <GIC_SPI 149 IRQ_TYPE_EDGE_FALLING>;
-			clocks = <&clk26m>;
-			clock-names = "kpd";
-			status = "disabled";
-		};
-
 		syscfg_pctl: syscfg-pctl@10005000 {
 			compatible = "syscon";
 			reg = <0 0x10005000 0 0x1000>;
@@ -240,6 +229,7 @@
 			compatible = "mediatek,mt8516-pinctrl";
 			reg = <0 0x1000b000 0 0x1000>;
 			mediatek,pctl-regmap = <&syscfg_pctl>;
+			pins-are-numbered;
 			gpio-controller;
 			#gpio-cells = <2>;
 			interrupt-controller;

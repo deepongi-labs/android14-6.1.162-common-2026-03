@@ -1522,19 +1522,29 @@ static int mvpp22_rss_context_create(struct mvpp2_port *port, u32 *rss_ctx)
 	return 0;
 }
 
-int mvpp22_port_rss_ctx_create(struct mvpp2_port *port, u32 port_ctx)
+int mvpp22_port_rss_ctx_create(struct mvpp2_port *port, u32 *port_ctx)
 {
 	u32 rss_ctx;
-	int ret;
+	int ret, i;
 
 	ret = mvpp22_rss_context_create(port, &rss_ctx);
 	if (ret)
 		return ret;
 
-	if (WARN_ON_ONCE(port->rss_ctx[port_ctx] >= 0))
+	/* Find the first available context number in the port, starting from 1.
+	 * Context 0 on each port is reserved for the default context.
+	 */
+	for (i = 1; i < MVPP22_N_RSS_TABLES; i++) {
+		if (port->rss_ctx[i] < 0)
+			break;
+	}
+
+	if (i == MVPP22_N_RSS_TABLES)
 		return -EINVAL;
 
-	port->rss_ctx[port_ctx] = rss_ctx;
+	port->rss_ctx[i] = rss_ctx;
+	*port_ctx = i;
+
 	return 0;
 }
 
@@ -1618,8 +1628,7 @@ int mvpp22_port_rss_ctx_indir_get(struct mvpp2_port *port, u32 port_ctx,
 	return 0;
 }
 
-int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port,
-			   const struct ethtool_rxfh_fields *info)
+int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port, struct ethtool_rxnfc *info)
 {
 	u16 hash_opts = 0;
 	u32 flow_type;
@@ -1657,8 +1666,7 @@ int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port,
 	return mvpp2_port_rss_hash_opts_set(port, flow_type, hash_opts);
 }
 
-int mvpp2_ethtool_rxfh_get(struct mvpp2_port *port,
-			   struct ethtool_rxfh_fields *info)
+int mvpp2_ethtool_rxfh_get(struct mvpp2_port *port, struct ethtool_rxnfc *info)
 {
 	unsigned long hash_opts;
 	u32 flow_type;

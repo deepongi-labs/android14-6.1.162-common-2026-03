@@ -8,15 +8,13 @@
  */
 
 #include <crypto/internal/aead.h>
-#include <linux/cryptouser.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
-#include <linux/string.h>
-#include <linux/string_choices.h>
+#include <linux/cryptouser.h>
 #include <net/netlink.h>
 
 #include "internal.h"
@@ -84,25 +82,36 @@ EXPORT_SYMBOL_GPL(crypto_aead_setauthsize);
 int crypto_aead_encrypt(struct aead_request *req)
 {
 	struct crypto_aead *aead = crypto_aead_reqtfm(req);
+	struct crypto_alg *alg = aead->base.__crt_alg;
+	unsigned int cryptlen = req->cryptlen;
+	int ret;
 
+	crypto_stats_get(alg);
 	if (crypto_aead_get_flags(aead) & CRYPTO_TFM_NEED_KEY)
-		return -ENOKEY;
-
-	return crypto_aead_alg(aead)->encrypt(req);
+		ret = -ENOKEY;
+	else
+		ret = crypto_aead_alg(aead)->encrypt(req);
+	crypto_stats_aead_encrypt(cryptlen, alg, ret);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(crypto_aead_encrypt);
 
 int crypto_aead_decrypt(struct aead_request *req)
 {
 	struct crypto_aead *aead = crypto_aead_reqtfm(req);
+	struct crypto_alg *alg = aead->base.__crt_alg;
+	unsigned int cryptlen = req->cryptlen;
+	int ret;
 
+	crypto_stats_get(alg);
 	if (crypto_aead_get_flags(aead) & CRYPTO_TFM_NEED_KEY)
-		return -ENOKEY;
-
-	if (req->cryptlen < crypto_aead_authsize(aead))
-		return -EINVAL;
-
-	return crypto_aead_alg(aead)->decrypt(req);
+		ret = -ENOKEY;
+	else if (req->cryptlen < crypto_aead_authsize(aead))
+		ret = -EINVAL;
+	else
+		ret = crypto_aead_alg(aead)->decrypt(req);
+	crypto_stats_aead_decrypt(cryptlen, alg, ret);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(crypto_aead_decrypt);
 
@@ -132,8 +141,8 @@ static int crypto_aead_init_tfm(struct crypto_tfm *tfm)
 	return 0;
 }
 
-static int __maybe_unused crypto_aead_report(
-	struct sk_buff *skb, struct crypto_alg *alg)
+#ifdef CONFIG_NET
+static int crypto_aead_report(struct sk_buff *skb, struct crypto_alg *alg)
 {
 	struct crypto_report_aead raead;
 	struct aead_alg *aead = container_of(alg, struct aead_alg, base);
@@ -149,6 +158,12 @@ static int __maybe_unused crypto_aead_report(
 
 	return nla_put(skb, CRYPTOCFGA_REPORT_AEAD, sizeof(raead), &raead);
 }
+#else
+static int crypto_aead_report(struct sk_buff *skb, struct crypto_alg *alg)
+{
+	return -ENOSYS;
+}
+#endif
 
 static void crypto_aead_show(struct seq_file *m, struct crypto_alg *alg)
 	__maybe_unused;
@@ -157,8 +172,8 @@ static void crypto_aead_show(struct seq_file *m, struct crypto_alg *alg)
 	struct aead_alg *aead = container_of(alg, struct aead_alg, base);
 
 	seq_printf(m, "type         : aead\n");
-	seq_printf(m, "async        : %s\n",
-		   str_yes_no(alg->cra_flags & CRYPTO_ALG_ASYNC));
+	seq_printf(m, "async        : %s\n", alg->cra_flags & CRYPTO_ALG_ASYNC ?
+					     "yes" : "no");
 	seq_printf(m, "blocksize    : %u\n", alg->cra_blocksize);
 	seq_printf(m, "ivsize       : %u\n", aead->ivsize);
 	seq_printf(m, "maxauthsize  : %u\n", aead->maxauthsize);
@@ -179,14 +194,11 @@ static const struct crypto_type crypto_aead_type = {
 #ifdef CONFIG_PROC_FS
 	.show = crypto_aead_show,
 #endif
-#if IS_ENABLED(CONFIG_CRYPTO_USER)
 	.report = crypto_aead_report,
-#endif
 	.maskclear = ~CRYPTO_ALG_TYPE_MASK,
 	.maskset = CRYPTO_ALG_TYPE_MASK,
 	.type = CRYPTO_ALG_TYPE_AEAD,
 	.tfmsize = offsetof(struct crypto_aead, base),
-	.algsize = offsetof(struct aead_alg, base),
 };
 
 int crypto_grab_aead(struct crypto_aead_spawn *spawn,
@@ -203,12 +215,6 @@ struct crypto_aead *crypto_alloc_aead(const char *alg_name, u32 type, u32 mask)
 	return crypto_alloc_tfm(alg_name, &crypto_aead_type, type, mask);
 }
 EXPORT_SYMBOL_GPL(crypto_alloc_aead);
-
-int crypto_has_aead(const char *alg_name, u32 type, u32 mask)
-{
-	return crypto_type_has_alg(alg_name, &crypto_aead_type, type, mask);
-}
-EXPORT_SYMBOL_GPL(crypto_has_aead);
 
 static int aead_prepare_alg(struct aead_alg *alg)
 {

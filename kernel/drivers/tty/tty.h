@@ -41,20 +41,15 @@ enum {
 };
 
 /* Values for tty->flow_change */
-enum tty_flow_change {
-	TTY_FLOW_NO_CHANGE,
-	TTY_THROTTLE_SAFE,
-	TTY_UNTHROTTLE_SAFE,
-};
+#define TTY_THROTTLE_SAFE	1
+#define TTY_UNTHROTTLE_SAFE	2
 
-static inline void __tty_set_flow_change(struct tty_struct *tty,
-					 enum tty_flow_change val)
+static inline void __tty_set_flow_change(struct tty_struct *tty, int val)
 {
 	tty->flow_change = val;
 }
 
-static inline void tty_set_flow_change(struct tty_struct *tty,
-				       enum tty_flow_change val)
+static inline void tty_set_flow_change(struct tty_struct *tty, int val)
 {
 	tty->flow_change = val;
 	smp_mb();
@@ -100,19 +95,18 @@ void tty_ldisc_release(struct tty_struct *tty);
 int __must_check tty_ldisc_init(struct tty_struct *tty);
 void tty_ldisc_deinit(struct tty_struct *tty);
 
-extern int tty_ldisc_autoload;
+void tty_sysctl_init(void);
 
 /* tty_audit.c */
 #ifdef CONFIG_AUDIT
-void tty_audit_add_data(const struct tty_struct *tty, const void *data,
-			size_t size);
-void tty_audit_tiocsti(const struct tty_struct *tty, u8 ch);
+void tty_audit_add_data(struct tty_struct *tty, const void *data, size_t size);
+void tty_audit_tiocsti(struct tty_struct *tty, char ch);
 #else
-static inline void tty_audit_add_data(const struct tty_struct *tty,
-				      const void *data, size_t size)
+static inline void tty_audit_add_data(struct tty_struct *tty, const void *data,
+				      size_t size)
 {
 }
-static inline void tty_audit_tiocsti(const struct tty_struct *tty, u8 ch)
+static inline void tty_audit_tiocsti(struct tty_struct *tty, char ch)
 {
 }
 #endif
@@ -120,6 +114,6 @@ static inline void tty_audit_tiocsti(const struct tty_struct *tty, u8 ch)
 ssize_t redirected_tty_write(struct kiocb *, struct iov_iter *);
 
 int tty_insert_flip_string_and_push_buffer(struct tty_port *port,
-					   const u8 *chars, size_t cnt);
+		const unsigned char *chars, size_t cnt);
 
 #endif

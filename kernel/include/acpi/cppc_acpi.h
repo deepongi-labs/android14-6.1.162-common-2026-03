@@ -32,15 +32,6 @@
 #define	CMD_READ 0
 #define	CMD_WRITE 1
 
-#define CPPC_AUTO_ACT_WINDOW_SIG_BIT_SIZE	(7)
-#define CPPC_AUTO_ACT_WINDOW_EXP_BIT_SIZE	(3)
-#define CPPC_AUTO_ACT_WINDOW_MAX_SIG	((1 << CPPC_AUTO_ACT_WINDOW_SIG_BIT_SIZE) - 1)
-#define CPPC_AUTO_ACT_WINDOW_MAX_EXP	((1 << CPPC_AUTO_ACT_WINDOW_EXP_BIT_SIZE) - 1)
-/* CPPC_AUTO_ACT_WINDOW_MAX_SIG is 127, so 128 and 129 will decay to 127 when writing */
-#define CPPC_AUTO_ACT_WINDOW_SIG_CARRY_THRESH 129
-
-#define CPPC_ENERGY_PERF_MAX	(0xFF)
-
 /* Each register has the folowing format. */
 struct cpc_reg {
 	u8 descriptor;
@@ -119,15 +110,12 @@ struct cppc_perf_caps {
 	u32 lowest_nonlinear_perf;
 	u32 lowest_freq;
 	u32 nominal_freq;
-	u32 energy_perf;
-	bool auto_sel;
 };
 
 struct cppc_perf_ctrls {
 	u32 max_perf;
 	u32 min_perf;
 	u32 desired_perf;
-	u32 energy_perf;
 };
 
 struct cppc_perf_fb_ctrs {
@@ -139,6 +127,7 @@ struct cppc_perf_fb_ctrs {
 
 /* Per CPU container for runtime CPPC management. */
 struct cppc_cpudata {
+	struct list_head node;
 	struct cppc_perf_caps perf_caps;
 	struct cppc_perf_ctrls perf_ctrls;
 	struct cppc_perf_fb_ctrs perf_fb_ctrs;
@@ -149,7 +138,6 @@ struct cppc_cpudata {
 #ifdef CONFIG_ACPI_CPPC_LIB
 extern int cppc_get_desired_perf(int cpunum, u64 *desired_perf);
 extern int cppc_get_nominal_perf(int cpunum, u64 *nominal_perf);
-extern int cppc_get_highest_perf(int cpunum, u64 *highest_perf);
 extern int cppc_get_perf_ctrs(int cpu, struct cppc_perf_fb_ctrs *perf_fb_ctrs);
 extern int cppc_set_perf(int cpu, struct cppc_perf_ctrls *perf_ctrls);
 extern int cppc_set_enable(int cpu, bool enable);
@@ -160,49 +148,35 @@ extern unsigned int cppc_khz_to_perf(struct cppc_perf_caps *caps, unsigned int f
 extern bool acpi_cpc_valid(void);
 extern bool cppc_allow_fast_switch(void);
 extern int acpi_get_psd_map(unsigned int cpu, struct cppc_cpudata *cpu_data);
-extern int cppc_get_transition_latency(int cpu);
+extern unsigned int cppc_get_transition_latency(int cpu);
 extern bool cpc_ffh_supported(void);
 extern bool cpc_supported_by_cpu(void);
 extern int cpc_read_ffh(int cpunum, struct cpc_reg *reg, u64 *val);
 extern int cpc_write_ffh(int cpunum, struct cpc_reg *reg, u64 val);
-extern int cppc_get_epp_perf(int cpunum, u64 *epp_perf);
-extern int cppc_set_epp_perf(int cpu, struct cppc_perf_ctrls *perf_ctrls, bool enable);
-extern int cppc_set_epp(int cpu, u64 epp_val);
-extern int cppc_get_auto_act_window(int cpu, u64 *auto_act_window);
-extern int cppc_set_auto_act_window(int cpu, u64 auto_act_window);
-extern int cppc_get_auto_sel(int cpu, bool *enable);
-extern int cppc_set_auto_sel(int cpu, bool enable);
-extern int amd_get_highest_perf(unsigned int cpu, u32 *highest_perf);
-extern int amd_get_boost_ratio_numerator(unsigned int cpu, u64 *numerator);
-extern int amd_detect_prefcore(bool *detected);
 #else /* !CONFIG_ACPI_CPPC_LIB */
 static inline int cppc_get_desired_perf(int cpunum, u64 *desired_perf)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cppc_get_nominal_perf(int cpunum, u64 *nominal_perf)
 {
-	return -EOPNOTSUPP;
-}
-static inline int cppc_get_highest_perf(int cpunum, u64 *highest_perf)
-{
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cppc_get_perf_ctrs(int cpu, struct cppc_perf_fb_ctrs *perf_fb_ctrs)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cppc_set_perf(int cpu, struct cppc_perf_ctrls *perf_ctrls)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cppc_set_enable(int cpu, bool enable)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cppc_get_perf_caps(int cpu, struct cppc_perf_caps *caps)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline bool cppc_perf_ctrs_in_pcc(void)
 {
@@ -216,9 +190,9 @@ static inline bool cppc_allow_fast_switch(void)
 {
 	return false;
 }
-static inline int cppc_get_transition_latency(int cpu)
+static inline unsigned int cppc_get_transition_latency(int cpu)
 {
-	return -ENODATA;
+	return CPUFREQ_ETERNAL;
 }
 static inline bool cpc_ffh_supported(void)
 {
@@ -226,51 +200,11 @@ static inline bool cpc_ffh_supported(void)
 }
 static inline int cpc_read_ffh(int cpunum, struct cpc_reg *reg, u64 *val)
 {
-	return -EOPNOTSUPP;
+	return -ENOTSUPP;
 }
 static inline int cpc_write_ffh(int cpunum, struct cpc_reg *reg, u64 val)
 {
-	return -EOPNOTSUPP;
-}
-static inline int cppc_set_epp_perf(int cpu, struct cppc_perf_ctrls *perf_ctrls, bool enable)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_get_epp_perf(int cpunum, u64 *epp_perf)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_set_epp(int cpu, u64 epp_val)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_get_auto_act_window(int cpu, u64 *auto_act_window)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_set_auto_act_window(int cpu, u64 auto_act_window)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_get_auto_sel(int cpu, bool *enable)
-{
-	return -EOPNOTSUPP;
-}
-static inline int cppc_set_auto_sel(int cpu, bool enable)
-{
-	return -EOPNOTSUPP;
-}
-static inline int amd_get_highest_perf(unsigned int cpu, u32 *highest_perf)
-{
-	return -ENODEV;
-}
-static inline int amd_get_boost_ratio_numerator(unsigned int cpu, u64 *numerator)
-{
-	return -EOPNOTSUPP;
-}
-static inline int amd_detect_prefcore(bool *detected)
-{
-	return -ENODEV;
+	return -ENOTSUPP;
 }
 #endif /* !CONFIG_ACPI_CPPC_LIB */
 

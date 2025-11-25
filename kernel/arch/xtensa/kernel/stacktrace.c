@@ -239,6 +239,8 @@ EXPORT_SYMBOL_GPL(save_stack_trace);
 
 #endif
 
+#ifdef CONFIG_FRAME_POINTER
+
 struct return_addr_data {
 	unsigned long addr;
 	unsigned skip;
@@ -271,3 +273,5 @@ unsigned long return_address(unsigned level)
 	return r.addr;
 }
 EXPORT_SYMBOL(return_address);
+
+#endif

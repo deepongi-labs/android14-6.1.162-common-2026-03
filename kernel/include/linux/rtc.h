@@ -16,6 +16,7 @@
 #include <linux/types.h>
 #include <linux/interrupt.h>
 #include <linux/nvmem-provider.h>
+#include <linux/android_kabi.h>
 #include <uapi/linux/rtc.h>
 
 extern int rtc_month_days(unsigned int month, unsigned int year);
@@ -42,7 +43,7 @@ static inline time64_t rtc_tm_sub(struct rtc_time *lhs, struct rtc_time *rhs)
 #include <linux/timerqueue.h>
 #include <linux/workqueue.h>
 
-extern const struct class rtc_class;
+extern struct class *rtc_class;
 
 /*
  * For these RTC methods the device parameter is the physical device
@@ -68,6 +69,8 @@ struct rtc_class_ops {
 	int (*set_offset)(struct device *, long offset);
 	int (*param_get)(struct device *, struct rtc_param *param);
 	int (*param_set)(struct device *, struct rtc_param *param);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct rtc_device;
@@ -146,7 +149,6 @@ struct rtc_device {
 
 	time64_t range_min;
 	timeu64_t range_max;
-	timeu64_t alarm_offset_max;
 	time64_t start_secs;
 	time64_t offset_secs;
 	bool set_start_time;
@@ -161,6 +163,8 @@ struct rtc_device {
 	unsigned int uie_task_active:1;
 	unsigned int uie_timer_active:1;
 #endif
+
+	ANDROID_KABI_RESERVE(1);
 };
 #define to_rtc_device(d) container_of(d, struct rtc_device, dev)
 
@@ -170,7 +174,6 @@ struct rtc_device {
 /* useful timestamps */
 #define RTC_TIMESTAMP_BEGIN_0000	-62167219200ULL /* 0000-01-01 00:00:00 */
 #define RTC_TIMESTAMP_BEGIN_1900	-2208988800LL /* 1900-01-01 00:00:00 */
-#define RTC_TIMESTAMP_EPOCH_GPS		315964800LL /* 1980-01-06 00:00:00 */
 #define RTC_TIMESTAMP_BEGIN_2000	946684800LL /* 2000-01-01 00:00:00 */
 #define RTC_TIMESTAMP_END_2063		2966371199LL /* 2063-12-31 23:59:59 */
 #define RTC_TIMESTAMP_END_2079		3471292799LL /* 2079-12-31 23:59:59 */
@@ -224,23 +227,6 @@ void rtc_timer_do_work(struct work_struct *work);
 static inline bool is_leap_year(unsigned int year)
 {
 	return (!(year % 4) && (year % 100)) || !(year % 400);
-}
-
-/**
- * rtc_bound_alarmtime() - Return alarm time bound by rtc limit
- * @rtc: Pointer to rtc device structure
- * @requested: Requested alarm timeout
- *
- * Return: Alarm timeout bound by maximum alarm time supported by rtc.
- */
-static inline ktime_t rtc_bound_alarmtime(struct rtc_device *rtc,
-					  ktime_t requested)
-{
-	if (rtc->alarm_offset_max &&
-	    rtc->alarm_offset_max * MSEC_PER_SEC < ktime_to_ms(requested))
-		return ms_to_ktime(rtc->alarm_offset_max * MSEC_PER_SEC);
-
-	return requested;
 }
 
 #define devm_rtc_register_device(device) \

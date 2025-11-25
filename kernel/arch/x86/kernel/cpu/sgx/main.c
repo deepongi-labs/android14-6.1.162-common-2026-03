@@ -13,8 +13,6 @@
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
-#include <linux/vmalloc.h>
-#include <asm/msr.h>
 #include <asm/sgx.h>
 #include "driver.h"
 #include "encl.h"
@@ -167,17 +165,17 @@ static int __sgx_encl_ewb(struct sgx_epc_page *epc_page, void *va_slot,
 	pginfo.addr = 0;
 	pginfo.secs = 0;
 
-	pginfo.contents = (unsigned long)kmap_local_page(backing->contents);
-	pginfo.metadata = (unsigned long)kmap_local_page(backing->pcmd) +
+	pginfo.contents = (unsigned long)kmap_atomic(backing->contents);
+	pginfo.metadata = (unsigned long)kmap_atomic(backing->pcmd) +
 			  backing->pcmd_offset;
 
 	ret = __ewb(&pginfo, sgx_get_epc_virt_addr(epc_page), va_slot);
 	set_page_dirty(backing->pcmd);
 	set_page_dirty(backing->contents);
 
-	kunmap_local((void *)(unsigned long)(pginfo.metadata -
+	kunmap_atomic((void *)(unsigned long)(pginfo.metadata -
 					      backing->pcmd_offset));
-	kunmap_local((void *)(unsigned long)pginfo.contents);
+	kunmap_atomic((void *)(unsigned long)pginfo.contents);
 
 	return ret;
 }
@@ -631,7 +629,7 @@ static bool __init sgx_setup_epc_section(u64 phys_addr, u64 size,
 	if (!section->virt_addr)
 		return false;
 
-	section->pages = vmalloc_array(nr_pages, sizeof(struct sgx_epc_page));
+	section->pages = vmalloc(nr_pages * sizeof(struct sgx_epc_page));
 	if (!section->pages) {
 		memunmap(section->virt_addr);
 		return false;
@@ -736,7 +734,7 @@ out:
 	return 0;
 }
 
-/*
+/**
  * A section metric is concatenated in a way that @low bits 12-31 define the
  * bits 12-31 of the metric and @high bits 0-19 define the bits 32-51 of the
  * metric.
@@ -851,13 +849,6 @@ static bool __init sgx_page_cache_init(void)
 		return false;
 	}
 
-	for_each_online_node(nid) {
-		if (!node_isset(nid, sgx_numa_mask) &&
-		    node_state(nid, N_MEMORY) && node_state(nid, N_CPU))
-			pr_info("node%d has both CPUs and memory but doesn't have an EPC section\n",
-				nid);
-	}
-
 	return true;
 }
 
@@ -874,7 +865,7 @@ void sgx_update_lepubkeyhash(u64 *lepubkeyhash)
 	WARN_ON_ONCE(preemptible());
 
 	for (i = 0; i < 4; i++)
-		wrmsrq(MSR_IA32_SGXLEPUBKEYHASH0 + i, lepubkeyhash[i]);
+		wrmsrl(MSR_IA32_SGXLEPUBKEYHASH0 + i, lepubkeyhash[i]);
 }
 
 const struct file_operations sgx_provision_fops = {
@@ -904,15 +895,20 @@ static struct miscdevice sgx_dev_provision = {
 int sgx_set_attribute(unsigned long *allowed_attributes,
 		      unsigned int attribute_fd)
 {
-	CLASS(fd, f)(attribute_fd);
+	struct file *file;
 
-	if (fd_empty(f))
+	file = fget(attribute_fd);
+	if (!file)
 		return -EINVAL;
 
-	if (fd_file(f)->f_op != &sgx_provision_fops)
+	if (file->f_op != &sgx_provision_fops) {
+		fput(file);
 		return -EINVAL;
+	}
 
 	*allowed_attributes |= SGX_ATTR_PROVISIONKEY;
+
+	fput(file);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sgx_set_attribute);

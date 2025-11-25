@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 /*
  * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/ieee80211.h>
@@ -308,10 +307,10 @@ static u8 *ath11k_dp_rxdesc_mpdu_start_addr2(struct ath11k_base *ab,
 
 static void ath11k_dp_service_mon_ring(struct timer_list *t)
 {
-	struct ath11k_base *ab = timer_container_of(ab, t, mon_reap_timer);
+	struct ath11k_base *ab = from_timer(ab, t, mon_reap_timer);
 	int i;
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++)
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++)
 		ath11k_dp_rx_process_mon_rings(ab, i, NULL, DP_MON_SERVICE_BUDGET);
 
 	mod_timer(&ab->mon_reap_timer, jiffies +
@@ -324,7 +323,7 @@ static int ath11k_dp_purge_mon_ring(struct ath11k_base *ab)
 	unsigned long timeout = jiffies + msecs_to_jiffies(DP_MON_PURGE_TIMEOUT_MS);
 
 	do {
-		for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++)
+		for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++)
 			reaped += ath11k_dp_rx_process_mon_rings(ab, i,
 								 NULL,
 								 DP_MON_SERVICE_BUDGET);
@@ -436,6 +435,7 @@ fail_free_skb:
 static int ath11k_dp_rxdma_buf_ring_free(struct ath11k *ar,
 					 struct dp_rxdma_ring *rx_ring)
 {
+	struct ath11k_pdev_dp *dp = &ar->dp;
 	struct sk_buff *skb;
 	int buf_id;
 
@@ -447,6 +447,28 @@ static int ath11k_dp_rxdma_buf_ring_free(struct ath11k *ar,
 		 */
 		dma_unmap_single(ar->ab->dev, ATH11K_SKB_RXCB(skb)->paddr,
 				 skb->len + skb_tailroom(skb), DMA_FROM_DEVICE);
+		dev_kfree_skb_any(skb);
+	}
+
+	idr_destroy(&rx_ring->bufs_idr);
+	spin_unlock_bh(&rx_ring->idr_lock);
+
+	/* if rxdma1_enable is false, mon_status_refill_ring
+	 * isn't setup, so don't clean.
+	 */
+	if (!ar->ab->hw_params.rxdma1_enable)
+		return 0;
+
+	rx_ring = &dp->rx_mon_status_refill_ring[0];
+
+	spin_lock_bh(&rx_ring->idr_lock);
+	idr_for_each_entry(&rx_ring->bufs_idr, skb, buf_id) {
+		idr_remove(&rx_ring->bufs_idr, buf_id);
+		/* XXX: Understand where internal driver does this dma_unmap
+		 * of rxdma_buffer.
+		 */
+		dma_unmap_single(ar->ab->dev, ATH11K_SKB_RXCB(skb)->paddr,
+				 skb->len + skb_tailroom(skb), DMA_BIDIRECTIONAL);
 		dev_kfree_skb_any(skb);
 	}
 
@@ -468,7 +490,7 @@ static int ath11k_dp_rxdma_pdev_buf_free(struct ath11k *ar)
 	rx_ring = &dp->rxdma_mon_buf_ring;
 	ath11k_dp_rxdma_buf_ring_free(ar, rx_ring);
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		rx_ring = &dp->rx_mon_status_refill_ring[i];
 		ath11k_dp_rxdma_buf_ring_free(ar, rx_ring);
 	}
@@ -506,7 +528,7 @@ static int ath11k_dp_rxdma_pdev_buf_setup(struct ath11k *ar)
 		ath11k_dp_rxdma_ring_buf_setup(ar, rx_ring, HAL_RXDMA_MONITOR_BUF);
 	}
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		rx_ring = &dp->rx_mon_status_refill_ring[i];
 		ath11k_dp_rxdma_ring_buf_setup(ar, rx_ring, HAL_RXDMA_MONITOR_STATUS);
 	}
@@ -522,7 +544,7 @@ static void ath11k_dp_rx_pdev_srng_free(struct ath11k *ar)
 
 	ath11k_dp_srng_cleanup(ab, &dp->rx_refill_buf_ring.refill_buf_ring);
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		if (ab->hw_params.rx_mac_buf_ring)
 			ath11k_dp_srng_cleanup(ab, &dp->rx_mac_buf_ring[i]);
 
@@ -585,7 +607,7 @@ static int ath11k_dp_rx_pdev_srng_alloc(struct ath11k *ar)
 	}
 
 	if (ar->ab->hw_params.rx_mac_buf_ring) {
-		for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+		for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 			ret = ath11k_dp_srng_setup(ar->ab,
 						   &dp->rx_mac_buf_ring[i],
 						   HAL_RXDMA_BUF, 1,
@@ -598,7 +620,7 @@ static int ath11k_dp_rx_pdev_srng_alloc(struct ath11k *ar)
 		}
 	}
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		ret = ath11k_dp_srng_setup(ar->ab, &dp->rxdma_err_dst_ring[i],
 					   HAL_RXDMA_DST, 0, dp->mac_id + i,
 					   DP_RXDMA_ERR_DST_RING_SIZE);
@@ -608,7 +630,7 @@ static int ath11k_dp_rx_pdev_srng_alloc(struct ath11k *ar)
 		}
 	}
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		srng = &dp->rx_mon_status_refill_ring[i].refill_buf_ring;
 		ret = ath11k_dp_srng_setup(ar->ab,
 					   srng,
@@ -669,18 +691,13 @@ void ath11k_dp_reo_cmd_list_cleanup(struct ath11k_base *ab)
 	struct ath11k_dp *dp = &ab->dp;
 	struct dp_reo_cmd *cmd, *tmp;
 	struct dp_reo_cache_flush_elem *cmd_cache, *tmp_cache;
-	struct dp_rx_tid *rx_tid;
 
 	spin_lock_bh(&dp->reo_cmd_lock);
 	list_for_each_entry_safe(cmd, tmp, &dp->reo_cmd_list, list) {
 		list_del(&cmd->list);
-		rx_tid = &cmd->data;
-		if (rx_tid->vaddr_unaligned) {
-			dma_free_noncoherent(ab->dev, rx_tid->unaligned_size,
-					     rx_tid->vaddr_unaligned,
-					     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-			rx_tid->vaddr_unaligned = NULL;
-		}
+		dma_unmap_single(ab->dev, cmd->data.paddr,
+				 cmd->data.size, DMA_BIDIRECTIONAL);
+		kfree(cmd->data.vaddr);
 		kfree(cmd);
 	}
 
@@ -688,13 +705,9 @@ void ath11k_dp_reo_cmd_list_cleanup(struct ath11k_base *ab)
 				 &dp->reo_cmd_cache_flush_list, list) {
 		list_del(&cmd_cache->list);
 		dp->reo_cmd_cache_flush_count--;
-		rx_tid = &cmd_cache->data;
-		if (rx_tid->vaddr_unaligned) {
-			dma_free_noncoherent(ab->dev, rx_tid->unaligned_size,
-					     rx_tid->vaddr_unaligned,
-					     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-			rx_tid->vaddr_unaligned = NULL;
-		}
+		dma_unmap_single(ab->dev, cmd_cache->data.paddr,
+				 cmd_cache->data.size, DMA_BIDIRECTIONAL);
+		kfree(cmd_cache->data.vaddr);
 		kfree(cmd_cache);
 	}
 	spin_unlock_bh(&dp->reo_cmd_lock);
@@ -708,18 +721,16 @@ static void ath11k_dp_reo_cmd_free(struct ath11k_dp *dp, void *ctx,
 	if (status != HAL_REO_CMD_SUCCESS)
 		ath11k_warn(dp->ab, "failed to flush rx tid hw desc, tid %d status %d\n",
 			    rx_tid->tid, status);
-	if (rx_tid->vaddr_unaligned) {
-		dma_free_noncoherent(dp->ab->dev, rx_tid->unaligned_size,
-				     rx_tid->vaddr_unaligned,
-				     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-		rx_tid->vaddr_unaligned = NULL;
-	}
+
+	dma_unmap_single(dp->ab->dev, rx_tid->paddr, rx_tid->size,
+			 DMA_BIDIRECTIONAL);
+	kfree(rx_tid->vaddr);
 }
 
 static void ath11k_dp_reo_cache_flush(struct ath11k_base *ab,
 				      struct dp_rx_tid *rx_tid)
 {
-	struct ath11k_hal_reo_cmd cmd = {};
+	struct ath11k_hal_reo_cmd cmd = {0};
 	unsigned long tot_desc_sz, desc_sz;
 	int ret;
 
@@ -749,10 +760,9 @@ static void ath11k_dp_reo_cache_flush(struct ath11k_base *ab,
 	if (ret) {
 		ath11k_err(ab, "failed to send HAL_REO_CMD_FLUSH_CACHE cmd, tid %d (%d)\n",
 			   rx_tid->tid, ret);
-		dma_free_noncoherent(ab->dev, rx_tid->unaligned_size,
-				     rx_tid->vaddr_unaligned,
-				     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-		rx_tid->vaddr_unaligned = NULL;
+		dma_unmap_single(ab->dev, rx_tid->paddr, rx_tid->size,
+				 DMA_BIDIRECTIONAL);
+		kfree(rx_tid->vaddr);
 	}
 }
 
@@ -802,23 +812,20 @@ static void ath11k_dp_rx_tid_del_func(struct ath11k_dp *dp, void *ctx,
 
 	return;
 free_desc:
-	dma_free_noncoherent(ab->dev, rx_tid->unaligned_size,
-			     rx_tid->vaddr_unaligned,
-			     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-	rx_tid->vaddr_unaligned = NULL;
+	dma_unmap_single(ab->dev, rx_tid->paddr, rx_tid->size,
+			 DMA_BIDIRECTIONAL);
+	kfree(rx_tid->vaddr);
 }
 
 void ath11k_peer_rx_tid_delete(struct ath11k *ar,
 			       struct ath11k_peer *peer, u8 tid)
 {
-	struct ath11k_hal_reo_cmd cmd = {};
+	struct ath11k_hal_reo_cmd cmd = {0};
 	struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
 	int ret;
 
 	if (!rx_tid->active)
 		return;
-
-	rx_tid->active = false;
 
 	cmd.flag = HAL_REO_CMD_FLG_NEED_STATUS;
 	cmd.addr_lo = lower_32_bits(rx_tid->paddr);
@@ -831,16 +838,12 @@ void ath11k_peer_rx_tid_delete(struct ath11k *ar,
 		if (ret != -ESHUTDOWN)
 			ath11k_err(ar->ab, "failed to send HAL_REO_CMD_UPDATE_RX_QUEUE cmd, tid %d (%d)\n",
 				   tid, ret);
-		dma_free_noncoherent(ar->ab->dev, rx_tid->unaligned_size,
-				     rx_tid->vaddr_unaligned,
-				     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-		rx_tid->vaddr_unaligned = NULL;
+		dma_unmap_single(ar->ab->dev, rx_tid->paddr, rx_tid->size,
+				 DMA_BIDIRECTIONAL);
+		kfree(rx_tid->vaddr);
 	}
 
-	rx_tid->paddr = 0;
-	rx_tid->paddr_unaligned = 0;
-	rx_tid->size = 0;
-	rx_tid->unaligned_size = 0;
+	rx_tid->active = false;
 }
 
 static int ath11k_dp_rx_link_desc_return(struct ath11k_base *ab,
@@ -906,7 +909,7 @@ void ath11k_peer_frags_flush(struct ath11k *ar, struct ath11k_peer *peer)
 		rx_tid = &peer->rx_tid[i];
 
 		spin_unlock_bh(&ar->ab->base_lock);
-		timer_delete_sync(&rx_tid->frag_timer);
+		del_timer_sync(&rx_tid->frag_timer);
 		spin_lock_bh(&ar->ab->base_lock);
 
 		ath11k_dp_rx_frags_cleanup(rx_tid, true);
@@ -927,7 +930,7 @@ void ath11k_peer_rx_tid_cleanup(struct ath11k *ar, struct ath11k_peer *peer)
 		ath11k_dp_rx_frags_cleanup(rx_tid, true);
 
 		spin_unlock_bh(&ar->ab->base_lock);
-		timer_delete_sync(&rx_tid->frag_timer);
+		del_timer_sync(&rx_tid->frag_timer);
 		spin_lock_bh(&ar->ab->base_lock);
 	}
 }
@@ -938,7 +941,7 @@ static int ath11k_peer_rx_tid_reo_update(struct ath11k *ar,
 					 u32 ba_win_sz, u16 ssn,
 					 bool update_ssn)
 {
-	struct ath11k_hal_reo_cmd cmd = {};
+	struct ath11k_hal_reo_cmd cmd = {0};
 	int ret;
 
 	cmd.addr_lo = lower_32_bits(rx_tid->paddr);
@@ -984,9 +987,9 @@ static void ath11k_dp_rx_tid_mem_free(struct ath11k_base *ab,
 	if (!rx_tid->active)
 		goto unlock_exit;
 
-	dma_free_noncoherent(ab->dev, rx_tid->unaligned_size, rx_tid->vaddr_unaligned,
-			     rx_tid->paddr_unaligned, DMA_BIDIRECTIONAL);
-	rx_tid->vaddr_unaligned = NULL;
+	dma_unmap_single(ab->dev, rx_tid->paddr, rx_tid->size,
+			 DMA_BIDIRECTIONAL);
+	kfree(rx_tid->vaddr);
 
 	rx_tid->active = false;
 
@@ -1001,8 +1004,9 @@ int ath11k_peer_rx_tid_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id,
 	struct ath11k_base *ab = ar->ab;
 	struct ath11k_peer *peer;
 	struct dp_rx_tid *rx_tid;
-	u32 hw_desc_sz, *vaddr;
-	void *vaddr_unaligned;
+	u32 hw_desc_sz;
+	u32 *addr_aligned;
+	void *vaddr;
 	dma_addr_t paddr;
 	int ret;
 
@@ -1010,8 +1014,7 @@ int ath11k_peer_rx_tid_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id,
 
 	peer = ath11k_peer_find(ab, vdev_id, peer_mac);
 	if (!peer) {
-		ath11k_warn(ab, "failed to find the peer %pM to set up rx tid\n",
-			    peer_mac);
+		ath11k_warn(ab, "failed to find the peer to set up rx tid\n");
 		spin_unlock_bh(&ab->base_lock);
 		return -ENOENT;
 	}
@@ -1024,8 +1027,7 @@ int ath11k_peer_rx_tid_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id,
 						    ba_win_sz, ssn, true);
 		spin_unlock_bh(&ab->base_lock);
 		if (ret) {
-			ath11k_warn(ab, "failed to update reo for peer %pM rx tid %d\n: %d",
-				    peer_mac, tid, ret);
+			ath11k_warn(ab, "failed to update reo for rx tid %d\n", tid);
 			return ret;
 		}
 
@@ -1033,8 +1035,8 @@ int ath11k_peer_rx_tid_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id,
 							     peer_mac, paddr,
 							     tid, 1, ba_win_sz);
 		if (ret)
-			ath11k_warn(ab, "failed to send wmi rx reorder queue for peer %pM tid %d: %d\n",
-				    peer_mac, tid, ret);
+			ath11k_warn(ab, "failed to send wmi command to update rx reorder queue, tid :%d (%d)\n",
+				    tid, ret);
 		return ret;
 	}
 
@@ -1050,39 +1052,45 @@ int ath11k_peer_rx_tid_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id,
 	else
 		hw_desc_sz = ath11k_hal_reo_qdesc_size(DP_BA_WIN_SZ_MAX, tid);
 
-	rx_tid->unaligned_size = hw_desc_sz + HAL_LINK_DESC_ALIGN - 1;
-	vaddr_unaligned = dma_alloc_noncoherent(ab->dev, rx_tid->unaligned_size, &paddr,
-						DMA_BIDIRECTIONAL, GFP_ATOMIC);
-	if (!vaddr_unaligned) {
+	vaddr = kzalloc(hw_desc_sz + HAL_LINK_DESC_ALIGN - 1, GFP_ATOMIC);
+	if (!vaddr) {
 		spin_unlock_bh(&ab->base_lock);
 		return -ENOMEM;
 	}
 
-	rx_tid->vaddr_unaligned = vaddr_unaligned;
-	vaddr = PTR_ALIGN(vaddr_unaligned, HAL_LINK_DESC_ALIGN);
-	rx_tid->paddr_unaligned = paddr;
-	rx_tid->paddr = rx_tid->paddr_unaligned + ((unsigned long)vaddr -
-			(unsigned long)rx_tid->vaddr_unaligned);
-	ath11k_hal_reo_qdesc_setup(vaddr, tid, ba_win_sz, ssn, pn_type);
+	addr_aligned = PTR_ALIGN(vaddr, HAL_LINK_DESC_ALIGN);
+
+	ath11k_hal_reo_qdesc_setup(addr_aligned, tid, ba_win_sz,
+				   ssn, pn_type);
+
+	paddr = dma_map_single(ab->dev, addr_aligned, hw_desc_sz,
+			       DMA_BIDIRECTIONAL);
+
+	ret = dma_mapping_error(ab->dev, paddr);
+	if (ret) {
+		spin_unlock_bh(&ab->base_lock);
+		goto err_mem_free;
+	}
+
+	rx_tid->vaddr = vaddr;
+	rx_tid->paddr = paddr;
 	rx_tid->size = hw_desc_sz;
 	rx_tid->active = true;
 
-	/* After dma_alloc_noncoherent, vaddr is being modified for reo qdesc setup.
-	 * Since these changes are not reflected in the device, driver now needs to
-	 * explicitly call dma_sync_single_for_device.
-	 */
-	dma_sync_single_for_device(ab->dev, rx_tid->paddr,
-				   rx_tid->size,
-				   DMA_TO_DEVICE);
 	spin_unlock_bh(&ab->base_lock);
 
-	ret = ath11k_wmi_peer_rx_reorder_queue_setup(ar, vdev_id, peer_mac, rx_tid->paddr,
-						     tid, 1, ba_win_sz);
+	ret = ath11k_wmi_peer_rx_reorder_queue_setup(ar, vdev_id, peer_mac,
+						     paddr, tid, 1, ba_win_sz);
 	if (ret) {
-		ath11k_warn(ar->ab, "failed to setup rx reorder queue for peer %pM tid %d: %d\n",
-			    peer_mac, tid, ret);
+		ath11k_warn(ar->ab, "failed to setup rx reorder queue, tid :%d (%d)\n",
+			    tid, ret);
 		ath11k_dp_rx_tid_mem_free(ab, peer_mac, vdev_id, tid);
 	}
+
+	return ret;
+
+err_mem_free:
+	kfree(vaddr);
 
 	return ret;
 }
@@ -1091,7 +1099,7 @@ int ath11k_dp_rx_ampdu_start(struct ath11k *ar,
 			     struct ieee80211_ampdu_params *params)
 {
 	struct ath11k_base *ab = ar->ab;
-	struct ath11k_sta *arsta = ath11k_sta_to_arsta(params->sta);
+	struct ath11k_sta *arsta = (void *)params->sta->drv_priv;
 	int vdev_id = arsta->arvif->vdev_id;
 	int ret;
 
@@ -1109,7 +1117,7 @@ int ath11k_dp_rx_ampdu_stop(struct ath11k *ar,
 {
 	struct ath11k_base *ab = ar->ab;
 	struct ath11k_peer *peer;
-	struct ath11k_sta *arsta = ath11k_sta_to_arsta(params->sta);
+	struct ath11k_sta *arsta = (void *)params->sta->drv_priv;
 	int vdev_id = arsta->arvif->vdev_id;
 	dma_addr_t paddr;
 	bool active;
@@ -1157,7 +1165,7 @@ int ath11k_dp_peer_rx_pn_replay_config(struct ath11k_vif *arvif,
 {
 	struct ath11k *ar = arvif->ar;
 	struct ath11k_base *ab = ar->ab;
-	struct ath11k_hal_reo_cmd cmd = {};
+	struct ath11k_hal_reo_cmd cmd = {0};
 	struct ath11k_peer *peer;
 	struct dp_rx_tid *rx_tid;
 	u8 tid;
@@ -1248,7 +1256,7 @@ static int ath11k_htt_tlv_ppdu_stats_parse(struct ath11k_base *ab,
 	int cur_user;
 	u16 peer_id;
 
-	ppdu_info = data;
+	ppdu_info = (struct htt_ppdu_stats_info *)data;
 
 	switch (tag) {
 	case HTT_PPDU_STATS_TAG_COMMON:
@@ -1380,6 +1388,9 @@ ath11k_update_per_peer_tx_stats(struct ath11k *ar,
 	u8 tid = HTT_PPDU_STATS_NON_QOS_TID;
 	bool is_ampdu = false;
 
+	if (!usr_stats)
+		return;
+
 	if (!(usr_stats->tlv_flags & BIT(HTT_PPDU_STATS_TAG_USR_RATE)))
 		return;
 
@@ -1448,7 +1459,7 @@ ath11k_update_per_peer_tx_stats(struct ath11k *ar,
 	}
 
 	sta = peer->sta;
-	arsta = ath11k_sta_to_arsta(sta);
+	arsta = (struct ath11k_sta *)sta->drv_priv;
 
 	memset(&arsta->txrate, 0, sizeof(arsta->txrate));
 
@@ -1524,12 +1535,13 @@ struct htt_ppdu_stats_info *ath11k_dp_htt_get_ppdu_desc(struct ath11k *ar,
 {
 	struct htt_ppdu_stats_info *ppdu_info;
 
-	lockdep_assert_held(&ar->data_lock);
-
+	spin_lock_bh(&ar->data_lock);
 	if (!list_empty(&ar->ppdu_stats_info)) {
 		list_for_each_entry(ppdu_info, &ar->ppdu_stats_info, list) {
-			if (ppdu_info->ppdu_id == ppdu_id)
+			if (ppdu_info->ppdu_id == ppdu_id) {
+				spin_unlock_bh(&ar->data_lock);
 				return ppdu_info;
+			}
 		}
 
 		if (ar->ppdu_stat_list_depth > HTT_PPDU_DESC_MAX_DEPTH) {
@@ -1541,13 +1553,16 @@ struct htt_ppdu_stats_info *ath11k_dp_htt_get_ppdu_desc(struct ath11k *ar,
 			kfree(ppdu_info);
 		}
 	}
+	spin_unlock_bh(&ar->data_lock);
 
 	ppdu_info = kzalloc(sizeof(*ppdu_info), GFP_ATOMIC);
 	if (!ppdu_info)
 		return NULL;
 
+	spin_lock_bh(&ar->data_lock);
 	list_add_tail(&ppdu_info->list, &ar->ppdu_stats_info);
 	ar->ppdu_stat_list_depth++;
+	spin_unlock_bh(&ar->data_lock);
 
 	return ppdu_info;
 }
@@ -1571,17 +1586,16 @@ static int ath11k_htt_pull_ppdu_stats(struct ath11k_base *ab,
 	ar = ath11k_mac_get_ar_by_pdev_id(ab, pdev_id);
 	if (!ar) {
 		ret = -EINVAL;
-		goto out;
+		goto exit;
 	}
 
 	if (ath11k_debugfs_is_pktlog_lite_mode_enabled(ar))
 		trace_ath11k_htt_ppdu_stats(ar, skb->data, len);
 
-	spin_lock_bh(&ar->data_lock);
 	ppdu_info = ath11k_dp_htt_get_ppdu_desc(ar, ppdu_id);
 	if (!ppdu_info) {
 		ret = -EINVAL;
-		goto out_unlock_data;
+		goto exit;
 	}
 
 	ppdu_info->ppdu_id = ppdu_id;
@@ -1590,13 +1604,10 @@ static int ath11k_htt_pull_ppdu_stats(struct ath11k_base *ab,
 				     (void *)ppdu_info);
 	if (ret) {
 		ath11k_warn(ab, "Failed to parse tlv %d\n", ret);
-		goto out_unlock_data;
+		goto exit;
 	}
 
-out_unlock_data:
-	spin_unlock_bh(&ar->data_lock);
-
-out:
+exit:
 	rcu_read_unlock();
 
 	return ret;
@@ -1646,7 +1657,7 @@ static void ath11k_htt_backpressure_event_handler(struct ath11k_base *ab,
 
 	backpressure_time = *data;
 
-	ath11k_dbg(ab, ATH11K_DBG_DP_HTT, "backpressure event, pdev %d, ring type %d,ring id %d, hp %d tp %d, backpressure time %d\n",
+	ath11k_dbg(ab, ATH11K_DBG_DP_HTT, "htt backpressure event, pdev %d, ring type %d,ring id %d, hp %d tp %d, backpressure time %d\n",
 		   pdev_id, ring_type, ring_id, hp, tp, backpressure_time);
 
 	if (ring_type == HTT_BACKPRESSURE_UMAC_RING_TYPE) {
@@ -2402,7 +2413,7 @@ static void ath11k_dp_rx_h_ppdu(struct ath11k *ar, struct hal_rx_desc *rx_desc,
 		rx_status->freq = center_freq;
 	} else if (channel_num >= 1 && channel_num <= 14) {
 		rx_status->band = NL80211_BAND_2GHZ;
-	} else if (channel_num >= 36 && channel_num <= 177) {
+	} else if (channel_num >= 36 && channel_num <= 173) {
 		rx_status->band = NL80211_BAND_5GHZ;
 	} else {
 		spin_lock_bh(&ar->data_lock);
@@ -2460,7 +2471,7 @@ static void ath11k_dp_rx_deliver_msdu(struct ath11k *ar, struct napi_struct *nap
 	spin_unlock_bh(&ar->ab->base_lock);
 
 	ath11k_dbg(ar->ab, ATH11K_DBG_DATA,
-		   "rx skb %p len %u peer %pM %d %s sn %u %s%s%s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u flag 0x%x fcs-err %i mic-err %i amsdu-more %i\n",
+		   "rx skb %pK len %u peer %pM %d %s sn %u %s%s%s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u flag 0x%x fcs-err %i mic-err %i amsdu-more %i\n",
 		   msdu,
 		   msdu->len,
 		   peer ? peer->addr : NULL,
@@ -2591,7 +2602,7 @@ static void ath11k_dp_rx_process_received_packets(struct ath11k_base *ab,
 {
 	struct sk_buff *msdu;
 	struct ath11k *ar;
-	struct ieee80211_rx_status rx_status = {};
+	struct ieee80211_rx_status rx_status = {0};
 	int ret;
 
 	if (skb_queue_empty(msdu_list))
@@ -2626,7 +2637,7 @@ int ath11k_dp_process_rx(struct ath11k_base *ab, int ring_id,
 {
 	struct ath11k_dp *dp = &ab->dp;
 	struct dp_rxdma_ring *rx_ring;
-	int num_buffs_reaped[MAX_RADIOS] = {};
+	int num_buffs_reaped[MAX_RADIOS] = {0};
 	struct sk_buff_head msdu_list[MAX_RADIOS];
 	struct ath11k_skb_rxcb *rxcb;
 	int total_msdu_reaped = 0;
@@ -2637,7 +2648,7 @@ int ath11k_dp_process_rx(struct ath11k_base *ab, int ring_id,
 	struct ath11k *ar;
 	struct hal_reo_dest_ring *desc;
 	enum hal_reo_dest_ring_push_reason push_reason;
-	u32 cookie;
+	u32 cookie, info0, rx_msdu_info0, rx_mpdu_info0;
 	int i;
 
 	for (i = 0; i < MAX_RADIOS; i++)
@@ -2650,11 +2661,14 @@ int ath11k_dp_process_rx(struct ath11k_base *ab, int ring_id,
 try_again:
 	ath11k_hal_srng_access_begin(ab, srng);
 
+	/* Make sure descriptor is read after the head pointer. */
+	dma_rmb();
+
 	while (likely(desc =
 	      (struct hal_reo_dest_ring *)ath11k_hal_srng_dst_get_next_entry(ab,
 									     srng))) {
 		cookie = FIELD_GET(BUFFER_ADDR_INFO1_SW_COOKIE,
-				   desc->buf_addr_info.info1);
+				   READ_ONCE(desc->buf_addr_info.info1));
 		buf_id = FIELD_GET(DP_RXDMA_BUF_COOKIE_BUF_ID,
 				   cookie);
 		mac_id = FIELD_GET(DP_RXDMA_BUF_COOKIE_PDEV_ID, cookie);
@@ -2683,8 +2697,9 @@ try_again:
 
 		num_buffs_reaped[mac_id]++;
 
+		info0 = READ_ONCE(desc->info0);
 		push_reason = FIELD_GET(HAL_REO_DEST_RING_INFO0_PUSH_REASON,
-					desc->info0);
+					info0);
 		if (unlikely(push_reason !=
 			     HAL_REO_DEST_RING_PUSH_REASON_ROUTING_INSTRUCTION)) {
 			dev_kfree_skb_any(msdu);
@@ -2692,18 +2707,21 @@ try_again:
 			continue;
 		}
 
-		rxcb->is_first_msdu = !!(desc->rx_msdu_info.info0 &
+		rx_msdu_info0 = READ_ONCE(desc->rx_msdu_info.info0);
+		rx_mpdu_info0 = READ_ONCE(desc->rx_mpdu_info.info0);
+
+		rxcb->is_first_msdu = !!(rx_msdu_info0 &
 					 RX_MSDU_DESC_INFO0_FIRST_MSDU_IN_MPDU);
-		rxcb->is_last_msdu = !!(desc->rx_msdu_info.info0 &
+		rxcb->is_last_msdu = !!(rx_msdu_info0 &
 					RX_MSDU_DESC_INFO0_LAST_MSDU_IN_MPDU);
-		rxcb->is_continuation = !!(desc->rx_msdu_info.info0 &
+		rxcb->is_continuation = !!(rx_msdu_info0 &
 					   RX_MSDU_DESC_INFO0_MSDU_CONTINUATION);
 		rxcb->peer_id = FIELD_GET(RX_MPDU_DESC_META_DATA_PEER_ID,
-					  desc->rx_mpdu_info.meta_data);
+					  READ_ONCE(desc->rx_mpdu_info.meta_data));
 		rxcb->seq_no = FIELD_GET(RX_MPDU_DESC_INFO0_SEQ_NUM,
-					 desc->rx_mpdu_info.info0);
+					 rx_mpdu_info0);
 		rxcb->tid = FIELD_GET(HAL_REO_DEST_RING_INFO0_RX_QUEUE_NUM,
-				      desc->info0);
+				      info0);
 
 		rxcb->mac_id = mac_id;
 		__skb_queue_tail(&msdu_list[mac_id], msdu);
@@ -2821,6 +2839,8 @@ static void ath11k_dp_rx_update_peer_stats(struct ath11k_sta *arsta,
 	rx_stats->num_mpdu_fcs_err += ppdu_info->num_mpdu_fcs_err;
 	rx_stats->dcm_count += ppdu_info->dcm;
 	rx_stats->ru_alloc_cnt[ppdu_info->ru_alloc] += num_msdu;
+
+	arsta->rssi_comb = ppdu_info->rssi_comb;
 
 	BUILD_BUG_ON(ARRAY_SIZE(arsta->chain_signal) >
 			     ARRAY_SIZE(ppdu_info->rssi_chain_pri20));
@@ -2978,52 +2998,11 @@ ath11k_dp_rx_mon_update_status_buf_state(struct ath11k_mon_data *pmon,
 	}
 }
 
-static enum dp_mon_status_buf_state
-ath11k_dp_rx_mon_buf_done(struct ath11k_base *ab, struct hal_srng *srng,
-			  struct dp_rxdma_ring *rx_ring)
-{
-	struct ath11k_skb_rxcb *rxcb;
-	struct hal_tlv_hdr *tlv;
-	struct sk_buff *skb;
-	void *status_desc;
-	dma_addr_t paddr;
-	u32 cookie;
-	int buf_id;
-	u8 rbm;
-
-	status_desc = ath11k_hal_srng_src_next_peek(ab, srng);
-	if (!status_desc)
-		return DP_MON_STATUS_NO_DMA;
-
-	ath11k_hal_rx_buf_addr_info_get(status_desc, &paddr, &cookie, &rbm);
-
-	buf_id = FIELD_GET(DP_RXDMA_BUF_COOKIE_BUF_ID, cookie);
-
-	spin_lock_bh(&rx_ring->idr_lock);
-	skb = idr_find(&rx_ring->bufs_idr, buf_id);
-	spin_unlock_bh(&rx_ring->idr_lock);
-
-	if (!skb)
-		return DP_MON_STATUS_NO_DMA;
-
-	rxcb = ATH11K_SKB_RXCB(skb);
-	dma_sync_single_for_cpu(ab->dev, rxcb->paddr,
-				skb->len + skb_tailroom(skb),
-				DMA_FROM_DEVICE);
-
-	tlv = (struct hal_tlv_hdr *)skb->data;
-	if (FIELD_GET(HAL_TLV_HDR_TAG, tlv->tl) != HAL_RX_STATUS_BUFFER_DONE)
-		return DP_MON_STATUS_NO_DMA;
-
-	return DP_MON_STATUS_REPLINISH;
-}
-
 static int ath11k_dp_rx_reap_mon_status_ring(struct ath11k_base *ab, int mac_id,
 					     int *budget, struct sk_buff_head *skb_list)
 {
 	struct ath11k *ar;
 	const struct ath11k_hw_hal_params *hal_params;
-	enum dp_mon_status_buf_state reap_status;
 	struct ath11k_pdev_dp *dp;
 	struct dp_rxdma_ring *rx_ring;
 	struct ath11k_mon_data *pmon;
@@ -3065,74 +3044,39 @@ static int ath11k_dp_rx_reap_mon_status_ring(struct ath11k_base *ab, int mac_id,
 
 			spin_lock_bh(&rx_ring->idr_lock);
 			skb = idr_find(&rx_ring->bufs_idr, buf_id);
-			spin_unlock_bh(&rx_ring->idr_lock);
-
 			if (!skb) {
 				ath11k_warn(ab, "rx monitor status with invalid buf_id %d\n",
 					    buf_id);
-				pmon->buf_state = DP_MON_STATUS_REPLINISH;
-				goto move_next;
-			}
-
-			rxcb = ATH11K_SKB_RXCB(skb);
-
-			dma_sync_single_for_cpu(ab->dev, rxcb->paddr,
-						skb->len + skb_tailroom(skb),
-						DMA_FROM_DEVICE);
-
-			tlv = (struct hal_tlv_hdr *)skb->data;
-			if (FIELD_GET(HAL_TLV_HDR_TAG, tlv->tl) !=
-					HAL_RX_STATUS_BUFFER_DONE) {
-				ath11k_warn(ab, "mon status DONE not set %lx, buf_id %d\n",
-					    FIELD_GET(HAL_TLV_HDR_TAG,
-						      tlv->tl), buf_id);
-				/* RxDMA status done bit might not be set even
-				 * though tp is moved by HW.
-				 */
-
-				/* If done status is missing:
-				 * 1. As per MAC team's suggestion,
-				 *    when HP + 1 entry is peeked and if DMA
-				 *    is not done and if HP + 2 entry's DMA done
-				 *    is set. skip HP + 1 entry and
-				 *    start processing in next interrupt.
-				 * 2. If HP + 2 entry's DMA done is not set,
-				 *    poll onto HP + 1 entry DMA done to be set.
-				 *    Check status for same buffer for next time
-				 *    dp_rx_mon_status_srng_process
-				 */
-
-				reap_status = ath11k_dp_rx_mon_buf_done(ab, srng,
-									rx_ring);
-				if (reap_status == DP_MON_STATUS_NO_DMA)
-					continue;
-
-				spin_lock_bh(&rx_ring->idr_lock);
-				idr_remove(&rx_ring->bufs_idr, buf_id);
 				spin_unlock_bh(&rx_ring->idr_lock);
-
-				dma_unmap_single(ab->dev, rxcb->paddr,
-						 skb->len + skb_tailroom(skb),
-						 DMA_FROM_DEVICE);
-
-				dev_kfree_skb_any(skb);
 				pmon->buf_state = DP_MON_STATUS_REPLINISH;
 				goto move_next;
 			}
 
-			spin_lock_bh(&rx_ring->idr_lock);
 			idr_remove(&rx_ring->bufs_idr, buf_id);
 			spin_unlock_bh(&rx_ring->idr_lock);
-			if (ab->hw_params.full_monitor_mode) {
-				ath11k_dp_rx_mon_update_status_buf_state(pmon, tlv);
-				if (paddr == pmon->mon_status_paddr)
-					pmon->buf_state = DP_MON_STATUS_MATCH;
-			}
+
+			rxcb = ATH11K_SKB_RXCB(skb);
 
 			dma_unmap_single(ab->dev, rxcb->paddr,
 					 skb->len + skb_tailroom(skb),
 					 DMA_FROM_DEVICE);
 
+			tlv = (struct hal_tlv_hdr *)skb->data;
+			if (FIELD_GET(HAL_TLV_HDR_TAG, tlv->tl) !=
+					HAL_RX_STATUS_BUFFER_DONE) {
+				ath11k_warn(ab, "mon status DONE not set %lx\n",
+					    FIELD_GET(HAL_TLV_HDR_TAG,
+						      tlv->tl));
+				dev_kfree_skb_any(skb);
+				pmon->buf_state = DP_MON_STATUS_NO_DMA;
+				goto move_next;
+			}
+
+			if (ab->hw_params.full_monitor_mode) {
+				ath11k_dp_rx_mon_update_status_buf_state(pmon, tlv);
+				if (paddr == pmon->mon_status_paddr)
+					pmon->buf_state = DP_MON_STATUS_MATCH;
+			}
 			__skb_queue_tail(skb_list, skb);
 		} else {
 			pmon->buf_state = DP_MON_STATUS_REPLINISH;
@@ -3167,8 +3111,7 @@ move_next:
 
 static void ath11k_dp_rx_frag_timer(struct timer_list *timer)
 {
-	struct dp_rx_tid *rx_tid = timer_container_of(rx_tid, timer,
-						      frag_timer);
+	struct dp_rx_tid *rx_tid = from_timer(rx_tid, timer, frag_timer);
 
 	spin_lock_bh(&rx_tid->ab->base_lock);
 	if (rx_tid->last_frag_no &&
@@ -3189,11 +3132,8 @@ int ath11k_peer_rx_frag_setup(struct ath11k *ar, const u8 *peer_mac, int vdev_id
 	int i;
 
 	tfm = crypto_alloc_shash("michael_mic", 0, 0);
-	if (IS_ERR(tfm)) {
-		ath11k_warn(ab, "failed to allocate michael_mic shash: %ld\n",
-			    PTR_ERR(tfm));
+	if (IS_ERR(tfm))
 		return PTR_ERR(tfm);
-	}
 
 	spin_lock_bh(&ab->base_lock);
 
@@ -3224,7 +3164,7 @@ static int ath11k_dp_rx_h_michael_mic(struct crypto_shash *tfm, u8 *key,
 				      size_t data_len, u8 *mic)
 {
 	SHASH_DESC_ON_STACK(desc, tfm);
-	u8 mic_hdr[16] = {};
+	u8 mic_hdr[16] = {0};
 	u8 tid = 0;
 	int ret;
 
@@ -3480,7 +3420,7 @@ static int ath11k_dp_rx_h_defrag_reo_reinject(struct ath11k *ar, struct dp_rx_ti
 	ath11k_hal_rx_buf_addr_info_set(msdu0, paddr, cookie,
 					ab->hw_params.hal_params->rx_buf_rbm);
 
-	/* Fill mpdu details into reo entrance ring */
+	/* Fill mpdu details into reo entrace ring */
 	srng = &ab->hal.srng_list[ab->dp.reo_reinject_ring.ring_id];
 
 	spin_lock_bh(&srng->lock);
@@ -3681,7 +3621,7 @@ static int ath11k_dp_rx_frag_h_mpdu(struct ath11k *ar,
 		goto out_unlock;
 	}
 
-	if (!rx_tid->rx_frag_bitmap || (frag_no > __fls(rx_tid->rx_frag_bitmap)))
+	if (frag_no > __fls(rx_tid->rx_frag_bitmap))
 		__skb_queue_tail(&rx_tid->rx_frags, msdu);
 	else
 		ath11k_dp_rx_h_sort_frags(ar, &rx_tid->rx_frags, msdu);
@@ -3711,7 +3651,7 @@ static int ath11k_dp_rx_frag_h_mpdu(struct ath11k *ar,
 	}
 
 	spin_unlock_bh(&ab->base_lock);
-	timer_delete_sync(&rx_tid->frag_timer);
+	del_timer_sync(&rx_tid->frag_timer);
 	spin_lock_bh(&ab->base_lock);
 
 	peer = ath11k_peer_find_by_id(ab, peer_id);
@@ -3818,7 +3758,7 @@ int ath11k_dp_process_rx_err(struct ath11k_base *ab, struct napi_struct *napi,
 	struct dp_link_desc_bank *link_desc_banks;
 	enum hal_rx_buf_return_buf_manager rbm;
 	int tot_n_bufs_reaped, quota, ret, i;
-	int n_bufs_reaped[MAX_RADIOS] = {};
+	int n_bufs_reaped[MAX_RADIOS] = {0};
 	struct dp_rxdma_ring *rx_ring;
 	struct dp_srng *reo_except;
 	u32 desc_bank, num_msdus;
@@ -4099,7 +4039,7 @@ static void ath11k_dp_rx_wbm_err(struct ath11k *ar,
 				 struct sk_buff_head *msdu_list)
 {
 	struct ath11k_skb_rxcb *rxcb = ATH11K_SKB_RXCB(msdu);
-	struct ieee80211_rx_status rxs = {};
+	struct ieee80211_rx_status rxs = {0};
 	bool drop = true;
 
 	switch (rxcb->err_rel_src) {
@@ -4135,7 +4075,7 @@ int ath11k_dp_rx_process_wbm_err(struct ath11k_base *ab,
 	struct ath11k_skb_rxcb *rxcb;
 	u32 *rx_desc;
 	int buf_id, mac_id;
-	int num_buffs_reaped[MAX_RADIOS] = {};
+	int num_buffs_reaped[MAX_RADIOS] = {0};
 	int total_num_buffs_reaped = 0;
 	int ret, i;
 
@@ -4445,7 +4385,7 @@ int ath11k_dp_rx_pdev_alloc(struct ath11k_base *ab, int mac_id)
 	}
 
 	if (ab->hw_params.rx_mac_buf_ring) {
-		for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+		for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 			ring_id = dp->rx_mac_buf_ring[i].ring_id;
 			ret = ath11k_dp_tx_htt_srng_setup(ab, ring_id,
 							  mac_id + i, HAL_RXDMA_BUF);
@@ -4457,7 +4397,7 @@ int ath11k_dp_rx_pdev_alloc(struct ath11k_base *ab, int mac_id)
 		}
 	}
 
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		ring_id = dp->rxdma_err_dst_ring[i].ring_id;
 		ret = ath11k_dp_tx_htt_srng_setup(ab, ring_id,
 						  mac_id + i, HAL_RXDMA_DST);
@@ -4497,7 +4437,7 @@ int ath11k_dp_rx_pdev_alloc(struct ath11k_base *ab, int mac_id)
 	}
 
 config_refill_ring:
-	for (i = 0; i < ab->hw_params.num_rxdma_per_pdev; i++) {
+	for (i = 0; i < ab->hw_params.num_rxmda_per_pdev; i++) {
 		ring_id = dp->rx_mon_status_refill_ring[i].refill_buf_ring.ring_id;
 		ret = ath11k_dp_tx_htt_srng_setup(ab, ring_id, mac_id + i,
 						  HAL_RXDMA_MONITOR_STATUS);
@@ -4547,7 +4487,8 @@ int ath11k_dp_rx_monitor_link_desc_return(struct ath11k *ar,
 	src_srng_desc = ath11k_hal_srng_src_get_next_entry(ar->ab, hal_srng);
 
 	if (src_srng_desc) {
-		struct ath11k_buffer_addr *src_desc = src_srng_desc;
+		struct ath11k_buffer_addr *src_desc =
+				(struct ath11k_buffer_addr *)src_srng_desc;
 
 		*src_desc = *((struct ath11k_buffer_addr *)p_last_buf_addr_info);
 	} else {
@@ -4566,7 +4507,8 @@ void ath11k_dp_rx_mon_next_link_desc_get(void *rx_msdu_link_desc,
 					 u8 *rbm,
 					 void **pp_buf_addr_info)
 {
-	struct hal_rx_msdu_link *msdu_link = rx_msdu_link_desc;
+	struct hal_rx_msdu_link *msdu_link =
+			(struct hal_rx_msdu_link *)rx_msdu_link_desc;
 	struct ath11k_buffer_addr *buf_addr_info;
 
 	buf_addr_info = (struct ath11k_buffer_addr *)&msdu_link->buf_addr_info;
@@ -4607,7 +4549,7 @@ static void ath11k_hal_rx_msdu_list_get(struct ath11k *ar,
 	u32 first = FIELD_PREP(RX_MSDU_DESC_INFO0_FIRST_MSDU_IN_MPDU, 1);
 	u8  tmp  = 0;
 
-	msdu_link = msdu_link_desc;
+	msdu_link = (struct hal_rx_msdu_link *)msdu_link_desc;
 	msdu_details = &msdu_link->msdu_link[0];
 
 	for (i = 0; i < HAL_RX_NUM_MSDU_DESC; i++) {
@@ -4615,6 +4557,7 @@ static void ath11k_hal_rx_msdu_list_get(struct ath11k *ar,
 			      msdu_details[i].buf_addr_info.info0) == 0) {
 			msdu_desc_info = &msdu_details[i - 1].rx_msdu_info;
 			msdu_desc_info->info0 |= last;
+			;
 			break;
 		}
 		msdu_desc_info = &msdu_details[i].rx_msdu_info;
@@ -4680,12 +4623,11 @@ static void ath11k_dp_mon_get_buf_len(struct hal_rx_msdu_desc_info *info,
 	}
 }
 
-/* clang stack usage explodes if this is inlined */
-static noinline_for_stack
-u32 ath11k_dp_rx_mon_mpdu_pop(struct ath11k *ar, int mac_id,
-			      void *ring_entry, struct sk_buff **head_msdu,
-			      struct sk_buff **tail_msdu, u32 *npackets,
-			      u32 *ppdu_id)
+static u32
+ath11k_dp_rx_mon_mpdu_pop(struct ath11k *ar, int mac_id,
+			  void *ring_entry, struct sk_buff **head_msdu,
+			  struct sk_buff **tail_msdu, u32 *npackets,
+			  u32 *ppdu_id)
 {
 	struct ath11k_pdev_dp *dp = &ar->dp;
 	struct ath11k_mon_data *pmon = (struct ath11k_mon_data *)&dp->mon_data;
@@ -4704,7 +4646,8 @@ u32 ath11k_dp_rx_mon_mpdu_pop(struct ath11k *ar, int mac_id,
 	bool is_frag, is_first_msdu;
 	bool drop_mpdu = false;
 	struct ath11k_skb_rxcb *rxcb;
-	struct hal_reo_entrance_ring *ent_desc = ring_entry;
+	struct hal_reo_entrance_ring *ent_desc =
+			(struct hal_reo_entrance_ring *)ring_entry;
 	int buf_id;
 	u32 rx_link_buf_info[2];
 	u8 rbm;
@@ -4772,7 +4715,7 @@ u32 ath11k_dp_rx_mon_mpdu_pop(struct ath11k *ar, int mac_id,
 			if (!msdu) {
 				ath11k_dbg(ar->ab, ATH11K_DBG_DATA,
 					   "msdu_pop: invalid buf_id %d\n", buf_id);
-				goto next_msdu;
+				break;
 			}
 			rxcb = ATH11K_SKB_RXCB(msdu);
 			if (!rxcb->unmapped) {
@@ -4963,7 +4906,7 @@ ath11k_dp_rx_mon_merg_msdus(struct ath11k *ar,
 			goto err_merge_fail;
 
 		ath11k_dbg(ab, ATH11K_DBG_DATA,
-			   "mpdu_buf %p mpdu_buf->len %u",
+			   "mpdu_buf %pK mpdu_buf->len %u",
 			   prev_buf, prev_buf->len);
 	} else {
 		ath11k_dbg(ab, ATH11K_DBG_DATA,
@@ -5137,7 +5080,7 @@ static void ath11k_dp_rx_mon_dest_process(struct ath11k *ar, int mac_id,
 	struct ath11k_mon_data *pmon = (struct ath11k_mon_data *)&dp->mon_data;
 	const struct ath11k_hw_hal_params *hal_params;
 	void *ring_entry;
-	struct hal_srng *mon_dst_srng;
+	void *mon_dst_srng;
 	u32 ppdu_id;
 	u32 rx_bufs_used;
 	u32 ring_id;
@@ -5152,9 +5095,15 @@ static void ath11k_dp_rx_mon_dest_process(struct ath11k *ar, int mac_id,
 
 	mon_dst_srng = &ar->ab->hal.srng_list[ring_id];
 
+	if (!mon_dst_srng) {
+		ath11k_warn(ar->ab,
+			    "HAL Monitor Destination Ring Init Failed -- %pK",
+			    mon_dst_srng);
+		return;
+	}
+
 	spin_lock_bh(&pmon->mon_lock);
 
-	spin_lock_bh(&mon_dst_srng->lock);
 	ath11k_hal_srng_access_begin(ar->ab, mon_dst_srng);
 
 	ppdu_id = pmon->mon_ppdu_info.ppdu_id;
@@ -5213,7 +5162,6 @@ static void ath11k_dp_rx_mon_dest_process(struct ath11k *ar, int mac_id,
 								mon_dst_srng);
 	}
 	ath11k_hal_srng_access_end(ar->ab, mon_dst_srng);
-	spin_unlock_bh(&mon_dst_srng->lock);
 
 	spin_unlock_bh(&pmon->mon_lock);
 
@@ -5308,7 +5256,7 @@ int ath11k_dp_rx_process_mon_status(struct ath11k_base *ab, int mac_id,
 			goto next_skb;
 		}
 
-		arsta = ath11k_sta_to_arsta(peer->sta);
+		arsta = (struct ath11k_sta *)peer->sta->drv_priv;
 		ath11k_dp_rx_update_peer_stats(arsta, ppdu_info);
 
 		if (ath11k_debugfs_is_pktlog_peer_valid(ar, peer->addr))
@@ -5401,7 +5349,7 @@ ath11k_dp_rx_full_mon_mpdu_pop(struct ath11k *ar,
 					   "full mon msdu_pop: invalid buf_id %d\n",
 					    buf_id);
 				spin_unlock_bh(&rx_ring->idr_lock);
-				goto next_msdu;
+				break;
 			}
 			idr_remove(&rx_ring->bufs_idr, buf_id);
 			spin_unlock_bh(&rx_ring->idr_lock);
@@ -5603,7 +5551,7 @@ static int ath11k_dp_full_mon_process_rx(struct ath11k_base *ab, int mac_id,
 	struct hal_sw_mon_ring_entries *sw_mon_entries;
 	struct ath11k_pdev_mon_stats *rx_mon_stats;
 	struct sk_buff *head_msdu, *tail_msdu;
-	struct hal_srng *mon_dst_srng;
+	void *mon_dst_srng = &ar->ab->hal.srng_list[dp->rxdma_mon_dst_ring.ring_id];
 	void *ring_entry;
 	u32 rx_bufs_used = 0, mpdu_rx_bufs_used;
 	int quota = 0, ret;
@@ -5618,9 +5566,6 @@ static int ath11k_dp_full_mon_process_rx(struct ath11k_base *ab, int mac_id,
 		spin_unlock_bh(&pmon->mon_lock);
 		goto reap_status_ring;
 	}
-
-	mon_dst_srng = &ar->ab->hal.srng_list[dp->rxdma_mon_dst_ring.ring_id];
-	spin_lock_bh(&mon_dst_srng->lock);
 
 	ath11k_hal_srng_access_begin(ar->ab, mon_dst_srng);
 	while ((ring_entry = ath11k_hal_srng_dst_peek(ar->ab, mon_dst_srng))) {
@@ -5665,7 +5610,6 @@ next_entry:
 	}
 
 	ath11k_hal_srng_access_end(ar->ab, mon_dst_srng);
-	spin_unlock_bh(&mon_dst_srng->lock);
 	spin_unlock_bh(&pmon->mon_lock);
 
 	if (rx_bufs_used) {
@@ -5701,6 +5645,8 @@ static int ath11k_dp_rx_pdev_mon_status_attach(struct ath11k *ar)
 {
 	struct ath11k_pdev_dp *dp = &ar->dp;
 	struct ath11k_mon_data *pmon = (struct ath11k_mon_data *)&dp->mon_data;
+
+	skb_queue_head_init(&pmon->rx_status_q);
 
 	pmon->mon_ppdu_status = DP_PPDU_STATUS_START;
 
@@ -5781,7 +5727,7 @@ int ath11k_dp_rx_pktlog_stop(struct ath11k_base *ab, bool stop_timer)
 	int ret;
 
 	if (stop_timer)
-		timer_delete_sync(&ab->mon_reap_timer);
+		del_timer_sync(&ab->mon_reap_timer);
 
 	/* reap all the monitor related rings */
 	ret = ath11k_dp_purge_mon_ring(ab);

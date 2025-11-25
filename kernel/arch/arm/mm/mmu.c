@@ -21,13 +21,12 @@
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
-#include <asm/tcm.h>
 #include <asm/tlb.h>
 #include <asm/highmem.h>
 #include <asm/system_info.h>
 #include <asm/traps.h>
 #include <asm/procinfo.h>
-#include <asm/page.h>
+#include <asm/memory.h>
 #include <asm/pgalloc.h>
 #include <asm/kasan_def.h>
 
@@ -38,6 +37,7 @@
 
 #include "fault.h"
 #include "mm.h"
+#include "tcm.h"
 
 extern unsigned long __atags_pointer;
 
@@ -726,18 +726,22 @@ EXPORT_SYMBOL(phys_mem_access_prot);
 
 static void __init *early_alloc(unsigned long sz)
 {
-	return memblock_alloc_or_panic(sz, sz);
+	void *ptr = memblock_alloc(sz, sz);
 
+	if (!ptr)
+		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
+		      __func__, sz, sz);
+
+	return ptr;
 }
 
 static void *__init late_alloc(unsigned long sz)
 {
-	void *ptdesc = pagetable_alloc(GFP_PGTABLE_KERNEL & ~__GFP_HIGHMEM,
-			get_order(sz));
+	void *ptr = (void *)__get_free_pages(GFP_PGTABLE_KERNEL, get_order(sz));
 
-	if (!ptdesc || !pagetable_pte_ctor(NULL, ptdesc))
+	if (!ptr || !pgtable_pte_page_ctor(virt_to_page(ptr)))
 		BUG();
-	return ptdesc_address(ptdesc);
+	return ptr;
 }
 
 static pte_t * __init arm_pte_alloc(pmd_t *pmd, unsigned long addr,
@@ -1022,7 +1026,10 @@ void __init iotable_init(struct map_desc *io_desc, int nr)
 	if (!nr)
 		return;
 
-	svm = memblock_alloc_or_panic(sizeof(*svm) * nr, __alignof__(*svm));
+	svm = memblock_alloc(sizeof(*svm) * nr, __alignof__(*svm));
+	if (!svm)
+		panic("%s: Failed to allocate %zu bytes align=0x%zx\n",
+		      __func__, sizeof(*svm) * nr, __alignof__(*svm));
 
 	for (md = io_desc; nr; md++, nr--) {
 		create_mapping(md);
@@ -1044,7 +1051,10 @@ void __init vm_reserve_area_early(unsigned long addr, unsigned long size,
 	struct vm_struct *vm;
 	struct static_vm *svm;
 
-	svm = memblock_alloc_or_panic(sizeof(*svm), __alignof__(*svm));
+	svm = memblock_alloc(sizeof(*svm), __alignof__(*svm));
+	if (!svm)
+		panic("%s: Failed to allocate %zu bytes align=0x%zx\n",
+		      __func__, sizeof(*svm), __alignof__(*svm));
 
 	vm = &svm->vm;
 	vm->addr = (void *)addr;
@@ -1630,7 +1640,7 @@ static void __init early_paging_init(const struct machine_desc *mdesc)
 {
 	pgtables_remap *lpae_pgtables_remap;
 	unsigned long pa_pgd;
-	u32 cr, ttbcr, tmp;
+	unsigned int cr, ttbcr;
 	long long offset;
 
 	if (!mdesc->pv_fixup)
@@ -1679,10 +1689,9 @@ static void __init early_paging_init(const struct machine_desc *mdesc)
 	 */
 	cr = get_cr();
 	set_cr(cr & ~(CR_I | CR_C));
-	ttbcr = cpu_get_ttbcr();
-	/* Disable all kind of caching of the translation table */
-	tmp = ttbcr & ~(TTBCR_ORGN0_MASK | TTBCR_IRGN0_MASK);
-	cpu_set_ttbcr(tmp);
+	asm("mrc p15, 0, %0, c2, c0, 2" : "=r" (ttbcr));
+	asm volatile("mcr p15, 0, %0, c2, c0, 2"
+		: : "r" (ttbcr & ~(3 << 8 | 3 << 10)));
 	flush_cache_all();
 
 	/*
@@ -1694,7 +1703,7 @@ static void __init early_paging_init(const struct machine_desc *mdesc)
 	lpae_pgtables_remap(offset, pa_pgd);
 
 	/* Re-enable the caches and cacheable TLB walks */
-	cpu_set_ttbcr(ttbcr);
+	asm volatile("mcr p15, 0, %0, c2, c0, 2" : : "r" (ttbcr));
 	set_cr(cr);
 }
 
@@ -1787,7 +1796,7 @@ void __init paging_init(const struct machine_desc *mdesc)
 	bootmem_init();
 
 	empty_zero_page = virt_to_page(zero_page);
-	__flush_dcache_folio(NULL, page_folio(empty_zero_page));
+	__flush_dcache_page(NULL, empty_zero_page);
 }
 
 void __init early_mm_init(const struct machine_desc *mdesc)
@@ -1796,8 +1805,8 @@ void __init early_mm_init(const struct machine_desc *mdesc)
 	early_paging_init(mdesc);
 }
 
-void set_ptes(struct mm_struct *mm, unsigned long addr,
-			      pte_t *ptep, pte_t pteval, unsigned int nr)
+void set_pte_at(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep, pte_t pteval)
 {
 	unsigned long ext = 0;
 
@@ -1807,11 +1816,5 @@ void set_ptes(struct mm_struct *mm, unsigned long addr,
 		ext |= PTE_EXT_NG;
 	}
 
-	for (;;) {
-		set_pte_ext(ptep, pteval, ext);
-		if (--nr == 0)
-			break;
-		ptep++;
-		pteval = pte_next_pfn(pteval);
-	}
+	set_pte_ext(ptep, pteval, ext);
 }

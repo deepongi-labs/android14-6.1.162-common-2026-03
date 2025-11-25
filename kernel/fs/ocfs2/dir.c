@@ -798,14 +798,6 @@ static int ocfs2_dx_dir_lookup_rec(struct inode *inode,
 		}
 	}
 
-	if (le16_to_cpu(el->l_next_free_rec) == 0) {
-		ret = ocfs2_error(inode->i_sb,
-				  "Inode %lu has empty extent list at depth %u\n",
-				  inode->i_ino,
-				  le16_to_cpu(el->l_tree_depth));
-		goto out;
-	}
-
 	found = 0;
 	for (i = le16_to_cpu(el->l_next_free_rec) - 1; i >= 0; i--) {
 		rec = &el->l_recs[i];
@@ -1620,6 +1612,9 @@ int __ocfs2_add_entry(handle_t *handle,
 	struct buffer_head *insert_bh = lookup->dl_leaf_bh;
 	char *data_start = insert_bh->b_data;
 
+	if (!namelen)
+		return -EINVAL;
+
 	if (ocfs2_dir_indexed(dir)) {
 		struct buffer_head *bh;
 
@@ -1683,8 +1678,7 @@ int __ocfs2_add_entry(handle_t *handle,
 				offset, ocfs2_dir_trailer_blk_off(dir->i_sb));
 
 		if (ocfs2_dirent_would_fit(de, rec_len)) {
-			inode_set_mtime_to_ts(dir,
-					      inode_set_ctime_current(dir));
+			dir->i_mtime = dir->i_ctime = current_time(dir);
 			retval = ocfs2_mark_inode_dirty(handle, dir, parent_fe_bh);
 			if (retval < 0) {
 				mlog_errno(retval);
@@ -1953,7 +1947,6 @@ int ocfs2_readdir(struct file *file, struct dir_context *ctx)
 {
 	int error = 0;
 	struct inode *inode = file_inode(file);
-	struct ocfs2_file_private *fp = file->private_data;
 	int lock_level = 0;
 
 	trace_ocfs2_readdir((unsigned long long)OCFS2_I(inode)->ip_blkno);
@@ -1974,7 +1967,7 @@ int ocfs2_readdir(struct file *file, struct dir_context *ctx)
 		goto bail_nolock;
 	}
 
-	error = ocfs2_dir_foreach_blk(inode, &fp->cookie, ctx, false);
+	error = ocfs2_dir_foreach_blk(inode, &file->f_version, ctx, false);
 
 	ocfs2_inode_unlock(inode, lock_level);
 	if (error)
@@ -2995,11 +2988,11 @@ static int ocfs2_expand_inline_dir(struct inode *dir, struct buffer_head *di_bh,
 	ocfs2_dinode_new_extent_list(dir, di);
 
 	i_size_write(dir, sb->s_blocksize);
-	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+	dir->i_mtime = dir->i_ctime = current_time(dir);
 
 	di->i_size = cpu_to_le64(sb->s_blocksize);
-	di->i_ctime = di->i_mtime = cpu_to_le64(inode_get_ctime_sec(dir));
-	di->i_ctime_nsec = di->i_mtime_nsec = cpu_to_le32(inode_get_ctime_nsec(dir));
+	di->i_ctime = di->i_mtime = cpu_to_le64(dir->i_ctime.tv_sec);
+	di->i_ctime_nsec = di->i_mtime_nsec = cpu_to_le32(dir->i_ctime.tv_nsec);
 	ocfs2_update_inode_fsync_trans(handle, dir, 1);
 
 	/*
@@ -3537,6 +3530,16 @@ static int dx_leaf_sort_cmp(const void *a, const void *b)
 	return 0;
 }
 
+static void dx_leaf_sort_swap(void *a, void *b, int size)
+{
+	struct ocfs2_dx_entry *entry1 = a;
+	struct ocfs2_dx_entry *entry2 = b;
+
+	BUG_ON(size != sizeof(*entry1));
+
+	swap(*entry1, *entry2);
+}
+
 static int ocfs2_dx_leaf_same_major(struct ocfs2_dx_leaf *dx_leaf)
 {
 	struct ocfs2_dx_entry_list *dl_list = &dx_leaf->dl_list;
@@ -3797,7 +3800,7 @@ static int ocfs2_dx_dir_rebalance(struct ocfs2_super *osb, struct inode *dir,
 	 */
 	sort(dx_leaf->dl_list.de_entries, num_used,
 	     sizeof(struct ocfs2_dx_entry), dx_leaf_sort_cmp,
-	     NULL);
+	     dx_leaf_sort_swap);
 
 	ocfs2_journal_dirty(handle, dx_leaf_bh);
 
@@ -4269,6 +4272,12 @@ int ocfs2_prepare_dir_for_insert(struct ocfs2_super *osb,
 
 	trace_ocfs2_prepare_dir_for_insert(
 		(unsigned long long)OCFS2_I(dir)->ip_blkno, namelen);
+
+	if (!namelen) {
+		ret = -EINVAL;
+		mlog_errno(ret);
+		goto out;
+	}
 
 	/*
 	 * Do this up front to reduce confusion.

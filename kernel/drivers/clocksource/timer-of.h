@@ -11,6 +11,7 @@
 struct of_timer_irq {
 	int irq;
 	int index;
+	int percpu;
 	const char *name;
 	unsigned long flags;
 	irq_handler_t handler;
@@ -65,9 +66,9 @@ static inline unsigned long timer_of_period(struct timer_of *to)
 	return to->of_clk.period;
 }
 
-extern int __init timer_of_init(struct device_node *np,
-				struct timer_of *to);
+extern int timer_of_init(struct device_node *np,
+			 struct timer_of *to);
 
-extern void __init timer_of_cleanup(struct timer_of *to);
+extern void timer_of_cleanup(struct timer_of *to);
 
 #endif

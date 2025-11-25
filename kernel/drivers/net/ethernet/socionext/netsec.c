@@ -15,7 +15,7 @@
 #include <linux/bpf_trace.h>
 
 #include <net/tcp.h>
-#include <net/page_pool/helpers.h>
+#include <net/page_pool.h>
 #include <net/ip6_checksum.h>
 
 #define NETSEC_REG_SOFT_RST			0x104
@@ -780,7 +780,7 @@ static void netsec_finalize_xdp_rx(struct netsec_priv *priv, u32 xdp_res,
 				   u16 pkts)
 {
 	if (xdp_res & NETSEC_XDP_REDIR)
-		xdp_do_flush();
+		xdp_do_flush_map();
 
 	if (xdp_res & NETSEC_XDP_TX)
 		netsec_xdp_ring_tx_db(priv, pkts);
@@ -970,7 +970,7 @@ static int netsec_process_rx(struct netsec_priv *priv, int budget)
 		struct netsec_de *de = dring->vaddr + (DESC_SZ * idx);
 		struct netsec_desc *desc = &dring->desc[idx];
 		struct page *page = virt_to_page(desc->addr);
-		u32 metasize, xdp_result = NETSEC_XDP_PASS;
+		u32 xdp_result = NETSEC_XDP_PASS;
 		struct sk_buff *skb = NULL;
 		u16 pkt_len, desc_len;
 		dma_addr_t dma_handle;
@@ -1019,7 +1019,7 @@ static int netsec_process_rx(struct netsec_priv *priv, int budget)
 		prefetch(desc->addr);
 
 		xdp_prepare_buff(&xdp, desc->addr, NETSEC_RXBUF_HEADROOM,
-				 pkt_len, true);
+				 pkt_len, false);
 
 		if (xdp_prog) {
 			xdp_result = netsec_run_xdp(priv, xdp_prog, &xdp);
@@ -1048,9 +1048,6 @@ static int netsec_process_rx(struct netsec_priv *priv, int budget)
 
 		skb_reserve(skb, xdp.data - xdp.data_hard_start);
 		skb_put(skb, xdp.data_end - xdp.data);
-		metasize = xdp.data - xdp.data_meta;
-		if (metasize)
-			skb_metadata_set(skb, metasize);
 		skb->protocol = eth_type_trans(skb, priv->ndev);
 
 		if (priv->rx_cksum_offload_flag &&
@@ -1305,8 +1302,6 @@ static int netsec_setup_rx_dring(struct netsec_priv *priv)
 		.dma_dir = xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE,
 		.offset = NETSEC_RXBUF_HEADROOM,
 		.max_len = NETSEC_RX_BUF_SIZE,
-		.napi = &priv->napi,
-		.netdev = priv->ndev,
 	};
 	int i, err;
 
@@ -2120,9 +2115,6 @@ static int netsec_probe(struct platform_device *pdev)
 				NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	ndev->hw_features = ndev->features;
 
-	ndev->xdp_features = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
-			     NETDEV_XDP_ACT_NDO_XMIT;
-
 	priv->rx_cksum_offload_flag = true;
 
 	ret = netsec_register_mdio(priv, phy_addr);
@@ -2155,7 +2147,7 @@ free_ndev:
 	return ret;
 }
 
-static void netsec_remove(struct platform_device *pdev)
+static int netsec_remove(struct platform_device *pdev)
 {
 	struct netsec_priv *priv = platform_get_drvdata(pdev);
 
@@ -2167,6 +2159,8 @@ static void netsec_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 	free_netdev(priv->ndev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -2214,7 +2208,7 @@ MODULE_DEVICE_TABLE(acpi, netsec_acpi_ids);
 
 static struct platform_driver netsec_driver = {
 	.probe	= netsec_probe,
-	.remove = netsec_remove,
+	.remove	= netsec_remove,
 	.driver = {
 		.name = "netsec",
 		.pm = &netsec_pm_ops,

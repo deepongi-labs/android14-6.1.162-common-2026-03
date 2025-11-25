@@ -14,10 +14,9 @@
 
 #include <video/mipi_display.h>
 
-#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_managed.h>
@@ -60,11 +59,9 @@ static int waveshare_command(struct mipi_dbi *mipi, u8 *cmd, u8 *par,
 	 * before being transferred as 8-bit on the big endian SPI bus.
 	 */
 	buf[0] = cpu_to_be16(*cmd);
-	spi_bus_lock(spi->controller);
 	gpiod_set_value_cansleep(mipi->dc, 0);
 	speed_hz = mipi_dbi_spi_cmd_max_speed(spi, 2);
 	ret = mipi_dbi_spi_transfer(spi, speed_hz, 8, buf, 2);
-	spi_bus_unlock(spi->controller);
 	if (ret || !num)
 		goto free;
 
@@ -82,11 +79,9 @@ static int waveshare_command(struct mipi_dbi *mipi, u8 *cmd, u8 *par,
 	if (*cmd == MIPI_DCS_WRITE_MEMORY_START && !mipi->swap_bytes)
 		bpw = 16;
 
-	spi_bus_lock(spi->controller);
 	gpiod_set_value_cansleep(mipi->dc, 1);
 	speed_hz = mipi_dbi_spi_cmd_max_speed(spi, num);
 	ret = mipi_dbi_spi_transfer(spi, speed_hz, bpw, data, num);
-	spi_bus_unlock(spi->controller);
  free:
 	kfree(buf);
 
@@ -160,7 +155,10 @@ static void waveshare_enable(struct drm_simple_display_pipe *pipe,
 }
 
 static const struct drm_simple_display_pipe_funcs waveshare_pipe_funcs = {
-	DRM_MIPI_DBI_SIMPLE_DISPLAY_PIPE_FUNCS(waveshare_enable),
+	.mode_valid = mipi_dbi_pipe_mode_valid,
+	.enable = waveshare_enable,
+	.disable = mipi_dbi_pipe_disable,
+	.update = mipi_dbi_pipe_update,
 };
 
 static const struct drm_display_mode waveshare_mode = {
@@ -173,10 +171,10 @@ static const struct drm_driver ili9486_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops			= &ili9486_fops,
 	DRM_GEM_DMA_DRIVER_OPS_VMAP,
-	DRM_FBDEV_DMA_DRIVER_OPS,
 	.debugfs_init		= mipi_dbi_debugfs_init,
 	.name			= "ili9486",
 	.desc			= "Ilitek ILI9486",
+	.date			= "20200118",
 	.major			= 1,
 	.minor			= 0,
 };
@@ -190,8 +188,6 @@ MODULE_DEVICE_TABLE(of, ili9486_of_match);
 
 static const struct spi_device_id ili9486_id[] = {
 	{ "ili9486", 0 },
-	{ "rpi-lcd-35", 0 },
-	{ "piscreen", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, ili9486_id);
@@ -248,7 +244,7 @@ static int ili9486_probe(struct spi_device *spi)
 
 	spi_set_drvdata(spi, drm);
 
-	drm_client_setup(drm, NULL);
+	drm_fbdev_generic_setup(drm, 0);
 
 	return 0;
 }

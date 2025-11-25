@@ -49,7 +49,6 @@
 
 struct cifs_sb_info {
 	struct rb_root tlink_tree;
-	struct list_head tcon_sb_link;
 	spinlock_t tlink_tree_lock;
 	struct tcon_link *master_tlink;
 	struct nls_table *local_nls;
@@ -62,6 +61,8 @@ struct cifs_sb_info {
 	/* only used when CIFS_MOUNT_USE_PREFIX_PATH is set */
 	char *prepath;
 
+	/* randomly generated 128-bit number for indexing dfs mount groups in referral cache */
+	uuid_t dfs_mount_id;
 	/*
 	 * Indicate whether serverino option was turned off later
 	 * (cifs_autodisable_serverino) in order to match new mounts.

@@ -11,7 +11,7 @@
  *     parameter to reflect time remaining.
  *
  *  24 January 2000
- *     Changed sys_poll()/do_poll() to use PAGE_SIZE chunk-based allocation
+ *     Changed sys_poll()/do_poll() to use PAGE_SIZE chunk-based allocation 
  *     of fds to overcome nfds < 16390 descriptors limit (Tigran Aivazian).
  */
 
@@ -192,7 +192,7 @@ static int __pollwake(wait_queue_entry_t *wait, unsigned mode, int sync, void *k
 	 * and is paired with smp_store_mb() in poll_schedule_timeout.
 	 */
 	smp_wmb();
-	WRITE_ONCE(pwq->triggered, 1);
+	pwq->triggered = 1;
 
 	/*
 	 * Perform the default wake up operation using a dummy
@@ -237,7 +237,7 @@ static int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 	int rc = -EINTR;
 
 	set_current_state(state);
-	if (!READ_ONCE(pwq->triggered))
+	if (!pwq->triggered)
 		rc = schedule_hrtimeout_range(expires, slack, HRTIMER_MODE_ABS);
 	__set_current_state(TASK_RUNNING);
 
@@ -462,22 +462,15 @@ get_max:
 			 EPOLLNVAL)
 #define POLLEX_SET (EPOLLPRI | EPOLLNVAL)
 
-static inline __poll_t select_poll_one(int fd, poll_table *wait, unsigned long in,
+static inline void wait_key_set(poll_table *wait, unsigned long in,
 				unsigned long out, unsigned long bit,
 				__poll_t ll_flag)
 {
-	CLASS(fd, f)(fd);
-
-	if (fd_empty(f))
-		return EPOLLNVAL;
-
 	wait->_key = POLLEX_SET | ll_flag;
 	if (in & bit)
 		wait->_key |= POLLIN_SET;
 	if (out & bit)
 		wait->_key |= POLLOUT_SET;
-
-	return vfs_poll(fd_file(f), wait);
 }
 
 static noinline_for_stack int do_select(int n, fd_set_bits *fds, struct timespec64 *end_time)
@@ -529,12 +522,20 @@ static noinline_for_stack int do_select(int n, fd_set_bits *fds, struct timespec
 			}
 
 			for (j = 0; j < BITS_PER_LONG; ++j, ++i, bit <<= 1) {
+				struct fd f;
 				if (i >= n)
 					break;
 				if (!(bit & all_bits))
 					continue;
-				mask = select_poll_one(i, wait, in, out, bit,
-						       busy_flag);
+				mask = EPOLLNVAL;
+				f = fdget(i);
+				if (f.file) {
+					wait_key_set(wait, in, out, bit,
+						     busy_flag);
+					mask = vfs_poll(f.file, wait);
+
+					fdput(f);
+				}
 				if ((mask & POLLIN_SET) && (in & bit)) {
 					res_in |= bit;
 					retval++;
@@ -630,7 +631,7 @@ int core_sys_select(int n, fd_set __user *inp, fd_set __user *outp,
 	long stack_fds[SELECT_STACK_ALLOC/sizeof(long)];
 
 	ret = -EINVAL;
-	if (unlikely(n < 0))
+	if (n < 0)
 		goto out_nofds;
 
 	/* max_fds can increase, so grab it once to avoid race */
@@ -644,7 +645,7 @@ int core_sys_select(int n, fd_set __user *inp, fd_set __user *outp,
 	/*
 	 * We need 6 bitmaps (in/out/ex for both incoming and outgoing),
 	 * since we used fdset we need to allocate memory in units of
-	 * long-words.
+	 * long-words. 
 	 */
 	size = FDS_BYTES(n);
 	bits = stack_fds;
@@ -776,9 +777,7 @@ static inline int get_sigset_argpack(struct sigset_argpack *to,
 {
 	// the path is hot enough for overhead of copy_from_user() to matter
 	if (from) {
-		if (can_do_masked_user_access())
-			from = masked_user_access_begin(from);
-		else if (!user_read_access_begin(from, sizeof(*from)))
+		if (!user_read_access_begin(from, sizeof(*from)))
 			return -EFAULT;
 		unsafe_get_user(to->p, &from->p, Efault);
 		unsafe_get_user(to->size, &from->size, Efault);
@@ -837,8 +836,8 @@ SYSCALL_DEFINE1(old_select, struct sel_arg_struct __user *, arg)
 
 struct poll_list {
 	struct poll_list *next;
-	unsigned int len;
-	struct pollfd entries[] __counted_by(len);
+	int len;
+	struct pollfd entries[];
 };
 
 #define POLLFD_PER_PAGE  ((PAGE_SIZE-sizeof(struct poll_list)) / sizeof(struct pollfd))
@@ -855,22 +854,29 @@ static inline __poll_t do_pollfd(struct pollfd *pollfd, poll_table *pwait,
 				     __poll_t busy_flag)
 {
 	int fd = pollfd->fd;
-	__poll_t mask, filter;
+	__poll_t mask = 0, filter;
+	struct fd f;
 
-	if (unlikely(fd < 0))
-		return 0;
-
-	CLASS(fd, f)(fd);
-	if (fd_empty(f))
-		return EPOLLNVAL;
+	if (fd < 0)
+		goto out;
+	mask = EPOLLNVAL;
+	f = fdget(fd);
+	if (!f.file)
+		goto out;
 
 	/* userland u16 ->events contains POLL... bitmap */
 	filter = demangle_poll(pollfd->events) | EPOLLERR | EPOLLHUP;
 	pwait->_key = filter | busy_flag;
-	mask = vfs_poll(fd_file(f), pwait);
+	mask = vfs_poll(f.file, pwait);
 	if (mask & busy_flag)
 		*can_busy_poll = true;
-	return mask & filter;		/* Mask out unneeded events. */
+	mask &= filter;		/* Mask out unneeded events. */
+	fdput(f);
+
+out:
+	/* ... and so does ->revents */
+	pollfd->revents = mangle_poll(mask);
+	return mask;
 }
 
 static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
@@ -902,7 +908,6 @@ static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 			pfd = walk->entries;
 			pfd_end = pfd + walk->len;
 			for (; pfd != pfd_end; pfd++) {
-				__poll_t mask;
 				/*
 				 * Fish for events. If we found one, record it
 				 * and kill poll_table->_qproc, so we don't
@@ -910,9 +915,8 @@ static int do_poll(struct poll_list *list, struct poll_wqueues *wait,
 				 * this. They'll get immediately deregistered
 				 * when we break out and return.
 				 */
-				mask = do_pollfd(pfd, pt, &can_busy_loop, busy_flag);
-				pfd->revents = mangle_poll(mask);
-				if (mask) {
+				if (do_pollfd(pfd, pt, &can_busy_loop,
+					      busy_flag)) {
 					count++;
 					pt->_qproc = NULL;
 					/* found something, stop busy polling */
@@ -968,15 +972,14 @@ static int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 		struct timespec64 *end_time)
 {
 	struct poll_wqueues table;
-	int err = -EFAULT, fdcount;
+	int err = -EFAULT, fdcount, len;
 	/* Allocate small arguments on the stack to save memory and be
 	   faster - use long to make sure the buffer is aligned properly
 	   on 64 bit archs to avoid unaligned access */
 	long stack_pps[POLL_STACK_ALLOC/sizeof(long)];
 	struct poll_list *const head = (struct poll_list *)stack_pps;
  	struct poll_list *walk = head;
-	unsigned int todo = nfds;
-	unsigned int len;
+ 	unsigned long todo = nfds;
 
 	if (nfds > rlimit(RLIMIT_NOFILE))
 		return -EINVAL;
@@ -992,9 +995,9 @@ static int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 					sizeof(struct pollfd) * walk->len))
 			goto out_fds;
 
-		if (walk->len >= todo)
-			break;
 		todo -= walk->len;
+		if (!todo)
+			break;
 
 		len = min(todo, POLLFD_PER_PAGE);
 		walk = walk->next = kmalloc(struct_size(walk, entries, len),
@@ -1014,7 +1017,7 @@ static int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 
 	for (walk = head; walk; walk = walk->next) {
 		struct pollfd *fds = walk->entries;
-		unsigned int j;
+		int j;
 
 		for (j = walk->len; j; fds++, ufds++, j--)
 			unsafe_put_user(fds->revents, &ufds->revents, Efault);

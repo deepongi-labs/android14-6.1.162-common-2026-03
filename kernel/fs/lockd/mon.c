@@ -18,7 +18,7 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include "netns.h"
 

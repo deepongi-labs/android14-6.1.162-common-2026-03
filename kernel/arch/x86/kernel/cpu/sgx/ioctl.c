@@ -3,7 +3,6 @@
 
 #include <asm/mman.h>
 #include <asm/sgx.h>
-#include <crypto/sha2.h>
 #include <linux/mman.h>
 #include <linux/delay.h>
 #include <linux/file.h>
@@ -119,7 +118,7 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	encl->base = secs->base;
 	encl->size = secs->size;
 	encl->attributes = secs->attributes;
-	encl->attributes_mask = SGX_ATTR_UNPRIV_MASK;
+	encl->attributes_mask = SGX_ATTR_DEBUG | SGX_ATTR_MODE64BIT | SGX_ATTR_KSS;
 
 	/* Set only after completion, as encl->lock has not been taken. */
 	set_bit(SGX_ENCL_CREATED, &encl->flags);
@@ -222,18 +221,18 @@ static int __sgx_encl_add_page(struct sgx_encl *encl,
 	if (!(vma->vm_flags & VM_MAYEXEC))
 		return -EACCES;
 
-	ret = get_user_pages(src, 1, 0, &src_page);
+	ret = get_user_pages(src, 1, 0, &src_page, NULL);
 	if (ret < 1)
 		return -EFAULT;
 
 	pginfo.secs = (unsigned long)sgx_get_epc_virt_addr(encl->secs.epc_page);
 	pginfo.addr = encl_page->desc & PAGE_MASK;
 	pginfo.metadata = (unsigned long)secinfo;
-	pginfo.contents = (unsigned long)kmap_local_page(src_page);
+	pginfo.contents = (unsigned long)kmap_atomic(src_page);
 
 	ret = __eadd(&pginfo, sgx_get_epc_virt_addr(epc_page));
 
-	kunmap_local((void *)pginfo.contents);
+	kunmap_atomic((void *)pginfo.contents);
 	put_page(src_page);
 
 	return ret ? -EIO : 0;
@@ -464,6 +463,31 @@ static long sgx_ioc_enclave_add_pages(struct sgx_encl *encl, void __user *arg)
 	return ret;
 }
 
+static int __sgx_get_key_hash(struct crypto_shash *tfm, const void *modulus,
+			      void *hash)
+{
+	SHASH_DESC_ON_STACK(shash, tfm);
+
+	shash->tfm = tfm;
+
+	return crypto_shash_digest(shash, modulus, SGX_MODULUS_SIZE, hash);
+}
+
+static int sgx_get_key_hash(const void *modulus, void *hash)
+{
+	struct crypto_shash *tfm;
+	int ret;
+
+	tfm = crypto_alloc_shash("sha256", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(tfm))
+		return PTR_ERR(tfm);
+
+	ret = __sgx_get_key_hash(tfm, modulus, hash);
+
+	crypto_free_shash(tfm);
+	return ret;
+}
+
 static int sgx_encl_init(struct sgx_encl *encl, struct sgx_sigstruct *sigstruct,
 			 void *token)
 {
@@ -499,7 +523,9 @@ static int sgx_encl_init(struct sgx_encl *encl, struct sgx_sigstruct *sigstruct,
 	    sgx_xfrm_reserved_mask)
 		return -EINVAL;
 
-	sha256(sigstruct->modulus, SGX_MODULUS_SIZE, (u8 *)mrsigner);
+	ret = sgx_get_key_hash(sigstruct->modulus, mrsigner);
+	if (ret)
+		return ret;
 
 	mutex_lock(&encl->lock);
 
@@ -562,7 +588,7 @@ err_out:
  *
  * Flush any outstanding enqueued EADD operations and perform EINIT.  The
  * Launch Enclave Public Key Hash MSRs are rewritten as necessary to match
- * the enclave's MRSIGNER, which is calculated from the provided sigstruct.
+ * the enclave's MRSIGNER, which is caculated from the provided sigstruct.
  *
  * Return:
  * - 0:		Success.

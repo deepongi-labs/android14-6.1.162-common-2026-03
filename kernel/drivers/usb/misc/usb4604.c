@@ -97,7 +97,8 @@ static int usb4604_probe(struct usb4604 *hub)
 	return usb4604_switch_mode(hub, hub->mode);
 }
 
-static int usb4604_i2c_probe(struct i2c_client *i2c)
+static int usb4604_i2c_probe(struct i2c_client *i2c,
+			     const struct i2c_device_id *id)
 {
 	struct usb4604 *hub;
 
@@ -135,7 +136,7 @@ static SIMPLE_DEV_PM_OPS(usb4604_i2c_pm_ops, usb4604_i2c_suspend,
 		usb4604_i2c_resume);
 
 static const struct i2c_device_id usb4604_id[] = {
-	{ "usb4604" },
+	{ "usb4604", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, usb4604_id);

@@ -250,7 +250,7 @@ static int i2c_acpi_get_info(struct acpi_device *adev,
 
 	if (adapter) {
 		/* The adapter must match the one in I2cSerialBus() connector */
-		if (!device_match_acpi_handle(&adapter->dev, lookup.adapter_handle))
+		if (ACPI_HANDLE(&adapter->dev) != lookup.adapter_handle)
 			return -ENODEV;
 	} else {
 		struct acpi_device *adapter_adev;
@@ -370,7 +370,6 @@ static const struct acpi_device_id i2c_acpi_force_100khz_device_ids[] = {
 	 * the device works without issues on Windows at what is expected to be
 	 * a 400KHz frequency. The root cause of the issue is not known.
 	 */
-	{ "DLL0945", 0 },
 	{ "ELAN06FA", 0 },
 	{}
 };
@@ -465,12 +464,18 @@ EXPORT_SYMBOL_GPL(i2c_acpi_find_adapter_by_handle);
 
 static struct i2c_client *i2c_acpi_find_client_by_adev(struct acpi_device *adev)
 {
-	return i2c_find_device_by_fwnode(acpi_fwnode_handle(adev));
-}
+	struct device *dev;
+	struct i2c_client *client;
 
-static struct i2c_adapter *i2c_acpi_find_adapter_by_adev(struct acpi_device *adev)
-{
-	return i2c_find_adapter_by_fwnode(acpi_fwnode_handle(adev));
+	dev = bus_find_device_by_acpi_dev(&i2c_bus_type, adev);
+	if (!dev)
+		return NULL;
+
+	client = i2c_verify_client(dev);
+	if (!client)
+		put_device(dev);
+
+	return client;
 }
 
 static int i2c_acpi_notify(struct notifier_block *nb, unsigned long value,
@@ -499,17 +504,11 @@ static int i2c_acpi_notify(struct notifier_block *nb, unsigned long value,
 			break;
 
 		client = i2c_acpi_find_client_by_adev(adev);
-		if (client) {
-			i2c_unregister_device(client);
-			put_device(&client->dev);
-		}
+		if (!client)
+			break;
 
-		adapter = i2c_acpi_find_adapter_by_adev(adev);
-		if (adapter) {
-			acpi_unbind_one(&adapter->dev);
-			put_device(&adapter->dev);
-		}
-
+		i2c_unregister_device(client);
+		put_device(&client->dev);
 		break;
 	}
 

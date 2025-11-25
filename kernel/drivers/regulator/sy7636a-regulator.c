@@ -83,11 +83,9 @@ static int sy7636a_regulator_probe(struct platform_device *pdev)
 	if (!regmap)
 		return -EPROBE_DEFER;
 
-	device_set_of_node_from_dev(&pdev->dev, pdev->dev.parent);
-
-	gdp = devm_gpiod_get(&pdev->dev, "epd-pwr-good", GPIOD_IN);
+	gdp = devm_gpiod_get(pdev->dev.parent, "epd-pwr-good", GPIOD_IN);
 	if (IS_ERR(gdp)) {
-		dev_err(&pdev->dev, "Power good GPIO fault %ld\n", PTR_ERR(gdp));
+		dev_err(pdev->dev.parent, "Power good GPIO fault %ld\n", PTR_ERR(gdp));
 		return PTR_ERR(gdp);
 	}
 
@@ -107,6 +105,7 @@ static int sy7636a_regulator_probe(struct platform_device *pdev)
 	}
 
 	config.dev = &pdev->dev;
+	config.dev->of_node = pdev->dev.parent->of_node;
 	config.regmap = regmap;
 
 	rdev = devm_regulator_register(&pdev->dev, &desc, &config);
@@ -128,7 +127,6 @@ MODULE_DEVICE_TABLE(platform, sy7636a_regulator_id_table);
 static struct platform_driver sy7636a_regulator_driver = {
 	.driver = {
 		.name = "sy7636a-regulator",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = sy7636a_regulator_probe,
 	.id_table = sy7636a_regulator_id_table,

@@ -46,7 +46,8 @@ void tcp_set_ca_state(struct sock *sk, const u8 ca_state)
 }
 
 /* Must be called with rcu lock held */
-static struct tcp_congestion_ops *tcp_ca_find_autoload(const char *name)
+static struct tcp_congestion_ops *tcp_ca_find_autoload(struct net *net,
+						       const char *name)
 {
 	struct tcp_congestion_ops *ca = tcp_ca_find(name);
 
@@ -74,28 +75,20 @@ struct tcp_congestion_ops *tcp_ca_find_key(u32 key)
 	return NULL;
 }
 
-int tcp_validate_congestion_control(struct tcp_congestion_ops *ca)
+/*
+ * Attach new congestion control algorithm to the list
+ * of available options.
+ */
+int tcp_register_congestion_control(struct tcp_congestion_ops *ca)
 {
+	int ret = 0;
+
 	/* all algorithms must implement these */
 	if (!ca->ssthresh || !ca->undo_cwnd ||
 	    !(ca->cong_avoid || ca->cong_control)) {
 		pr_err("%s does not implement required ops\n", ca->name);
 		return -EINVAL;
 	}
-
-	return 0;
-}
-
-/* Attach new congestion control algorithm to the list
- * of available options.
- */
-int tcp_register_congestion_control(struct tcp_congestion_ops *ca)
-{
-	int ret;
-
-	ret = tcp_validate_congestion_control(ca);
-	if (ret)
-		return ret;
 
 	ca->key = jhash(ca->name, sizeof(ca->name), strlen(ca->name));
 
@@ -137,47 +130,7 @@ void tcp_unregister_congestion_control(struct tcp_congestion_ops *ca)
 }
 EXPORT_SYMBOL_GPL(tcp_unregister_congestion_control);
 
-/* Replace a registered old ca with a new one.
- *
- * The new ca must have the same name as the old one, that has been
- * registered.
- */
-int tcp_update_congestion_control(struct tcp_congestion_ops *ca, struct tcp_congestion_ops *old_ca)
-{
-	struct tcp_congestion_ops *existing;
-	int ret = 0;
-
-	ca->key = jhash(ca->name, sizeof(ca->name), strlen(ca->name));
-
-	spin_lock(&tcp_cong_list_lock);
-	existing = tcp_ca_find_key(old_ca->key);
-	if (ca->key == TCP_CA_UNSPEC || !existing || strcmp(existing->name, ca->name)) {
-		pr_notice("%s not registered or non-unique key\n",
-			  ca->name);
-		ret = -EINVAL;
-	} else if (existing != old_ca) {
-		pr_notice("invalid old congestion control algorithm to replace\n");
-		ret = -EINVAL;
-	} else {
-		/* Add the new one before removing the old one to keep
-		 * one implementation available all the time.
-		 */
-		list_add_tail_rcu(&ca->list, &tcp_cong_list);
-		list_del_rcu(&existing->list);
-		pr_debug("%s updated\n", ca->name);
-	}
-	spin_unlock(&tcp_cong_list_lock);
-
-	/* Wait for outstanding readers to complete before the
-	 * module or struct_ops gets removed entirely.
-	 */
-	if (!ret)
-		synchronize_rcu();
-
-	return ret;
-}
-
-u32 tcp_ca_get_key_by_name(const char *name, bool *ecn_ca)
+u32 tcp_ca_get_key_by_name(struct net *net, const char *name, bool *ecn_ca)
 {
 	const struct tcp_congestion_ops *ca;
 	u32 key = TCP_CA_UNSPEC;
@@ -185,7 +138,7 @@ u32 tcp_ca_get_key_by_name(const char *name, bool *ecn_ca)
 	might_sleep();
 
 	rcu_read_lock();
-	ca = tcp_ca_find_autoload(name);
+	ca = tcp_ca_find_autoload(net, name);
 	if (ca) {
 		key = ca->key;
 		*ecn_ca = ca->flags & TCP_CONG_NEEDS_ECN;
@@ -202,10 +155,9 @@ char *tcp_ca_get_name_by_key(u32 key, char *buffer)
 
 	rcu_read_lock();
 	ca = tcp_ca_find_key(key);
-	if (ca) {
-		strscpy(buffer, ca->name, TCP_CA_NAME_MAX);
-		ret = buffer;
-	}
+	if (ca)
+		ret = strncpy(buffer, ca->name,
+			      TCP_CA_NAME_MAX);
 	rcu_read_unlock();
 
 	return ret;
@@ -270,9 +222,8 @@ void tcp_cleanup_congestion_control(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
-	if (icsk->icsk_ca_initialized && icsk->icsk_ca_ops->release)
+	if (icsk->icsk_ca_ops->release)
 		icsk->icsk_ca_ops->release(sk);
-	icsk->icsk_ca_initialized = 0;
 	bpf_module_put(icsk->icsk_ca_ops, icsk->icsk_ca_ops->owner);
 }
 
@@ -284,7 +235,7 @@ int tcp_set_default_congestion_control(struct net *net, const char *name)
 	int ret;
 
 	rcu_read_lock();
-	ca = tcp_ca_find_autoload(name);
+	ca = tcp_ca_find_autoload(net, name);
 	if (!ca) {
 		ret = -ENOENT;
 	} else if (!bpf_try_module_get(ca, ca->owner)) {
@@ -339,7 +290,7 @@ void tcp_get_default_congestion_control(struct net *net, char *name)
 
 	rcu_read_lock();
 	ca = rcu_dereference(net->ipv4.tcp_congestion_control);
-	strscpy(name, ca->name, TCP_CA_NAME_MAX);
+	strncpy(name, ca->name, TCP_CA_NAME_MAX);
 	rcu_read_unlock();
 }
 
@@ -422,7 +373,7 @@ int tcp_set_congestion_control(struct sock *sk, const char *name, bool load,
 	if (!load)
 		ca = tcp_ca_find(name);
 	else
-		ca = tcp_ca_find_autoload(name);
+		ca = tcp_ca_find_autoload(sock_net(sk), name);
 
 	/* No change asking for existing value */
 	if (ca == icsk->icsk_ca_ops) {
@@ -452,7 +403,7 @@ int tcp_set_congestion_control(struct sock *sk, const char *name, bool load,
  * ABC caps N to 2. Slow start exits when cwnd grows over ssthresh and
  * returns the leftover acks to adjust cwnd in congestion avoidance mode.
  */
-__bpf_kfunc u32 tcp_slow_start(struct tcp_sock *tp, u32 acked)
+u32 tcp_slow_start(struct tcp_sock *tp, u32 acked)
 {
 	u32 cwnd = min(tcp_snd_cwnd(tp) + acked, tp->snd_ssthresh);
 
@@ -466,7 +417,7 @@ EXPORT_SYMBOL_GPL(tcp_slow_start);
 /* In theory this is tp->snd_cwnd += 1 / tp->snd_cwnd (or alternative w),
  * for every packet that was ACKed.
  */
-__bpf_kfunc void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked)
+void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked)
 {
 	/* If credits accumulated at a higher w, apply them gently now. */
 	if (tp->snd_cwnd_cnt >= w) {
@@ -492,7 +443,7 @@ EXPORT_SYMBOL_GPL(tcp_cong_avoid_ai);
 /* This is Jacobson's slow start and congestion avoidance.
  * SIGCOMM '88, p. 328.
  */
-__bpf_kfunc void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
+void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
@@ -511,7 +462,7 @@ __bpf_kfunc void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 EXPORT_SYMBOL_GPL(tcp_reno_cong_avoid);
 
 /* Slow start threshold is half the congestion window (min 2) */
-__bpf_kfunc u32 tcp_reno_ssthresh(struct sock *sk)
+u32 tcp_reno_ssthresh(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
@@ -519,7 +470,7 @@ __bpf_kfunc u32 tcp_reno_ssthresh(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(tcp_reno_ssthresh);
 
-__bpf_kfunc u32 tcp_reno_undo_cwnd(struct sock *sk)
+u32 tcp_reno_undo_cwnd(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 

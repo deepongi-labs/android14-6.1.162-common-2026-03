@@ -12,6 +12,7 @@
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
+#include <linux/fb.h>
 #include <linux/backlight.h>
 #include <linux/mfd/aat2870.h>
 
@@ -58,7 +59,7 @@ static int aat2870_bl_update_status(struct backlight_device *bd)
 	struct aat2870_bl_driver_data *aat2870_bl = bl_get_data(bd);
 	struct aat2870_data *aat2870 =
 			dev_get_drvdata(aat2870_bl->pdev->dev.parent);
-	int brightness = backlight_get_brightness(bd);
+	int brightness = bd->props.brightness;
 	int ret;
 
 	if ((brightness < 0) || (bd->props.max_brightness < brightness)) {
@@ -68,6 +69,11 @@ static int aat2870_bl_update_status(struct backlight_device *bd)
 
 	dev_dbg(&bd->dev, "brightness=%d, power=%d, state=%d\n",
 		 bd->props.brightness, bd->props.power, bd->props.state);
+
+	if ((bd->props.power != FB_BLANK_UNBLANK) ||
+			(bd->props.state & BL_CORE_FBBLANK) ||
+			(bd->props.state & BL_CORE_SUSPENDED))
+		brightness = 0;
 
 	ret = aat2870->write(aat2870, AAT2870_BLM,
 			     (u8)aat2870_brightness(aat2870_bl, brightness));
@@ -89,9 +95,15 @@ static int aat2870_bl_update_status(struct backlight_device *bd)
 	return 0;
 }
 
+static int aat2870_bl_check_fb(struct backlight_device *bd, struct fb_info *fi)
+{
+	return 1;
+}
+
 static const struct backlight_ops aat2870_bl_ops = {
 	.options = BL_CORE_SUSPENDRESUME,
 	.update_status = aat2870_bl_update_status,
+	.check_fb = aat2870_bl_check_fb,
 };
 
 static int aat2870_bl_probe(struct platform_device *pdev)
@@ -156,7 +168,7 @@ static int aat2870_bl_probe(struct platform_device *pdev)
 		bd->props.max_brightness = 255;
 
 	aat2870_bl->brightness = 0;
-	bd->props.power = BACKLIGHT_POWER_ON;
+	bd->props.power = FB_BLANK_UNBLANK;
 	bd->props.brightness = bd->props.max_brightness;
 
 	ret = aat2870_bl_update_status(bd);
@@ -171,14 +183,16 @@ out:
 	return ret;
 }
 
-static void aat2870_bl_remove(struct platform_device *pdev)
+static int aat2870_bl_remove(struct platform_device *pdev)
 {
 	struct aat2870_bl_driver_data *aat2870_bl = platform_get_drvdata(pdev);
 	struct backlight_device *bd = aat2870_bl->bd;
 
-	bd->props.power = BACKLIGHT_POWER_OFF;
+	bd->props.power = FB_BLANK_POWERDOWN;
 	bd->props.brightness = 0;
 	backlight_update_status(bd);
+
+	return 0;
 }
 
 static struct platform_driver aat2870_bl_driver = {

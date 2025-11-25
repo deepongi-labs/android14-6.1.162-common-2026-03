@@ -5,7 +5,10 @@
 #include <linux/bitops.h>
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
@@ -199,10 +202,15 @@
 #define WSA881X_PROBE_TIMEOUT 1000
 
 #define WSA881X_PA_GAIN_TLV(xname, reg, shift, max, invert, tlv_array) \
-	SOC_SINGLE_EXT_TLV(xname, reg, shift, max, invert, \
-			   snd_soc_get_volsw, wsa881x_put_pa_gain, tlv_array)
+{	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, \
+	.access = SNDRV_CTL_ELEM_ACCESS_TLV_READ |\
+		 SNDRV_CTL_ELEM_ACCESS_READWRITE,\
+	.tlv.p = (tlv_array), \
+	.info = snd_soc_info_volsw, .get = snd_soc_get_volsw,\
+	.put = wsa881x_put_pa_gain, \
+	.private_value = SOC_SINGLE_VALUE(reg, shift, max, invert, 0) }
 
-static const struct reg_default wsa881x_defaults[] = {
+static struct reg_default wsa881x_defaults[] = {
 	{ WSA881X_CHIP_ID0, 0x00 },
 	{ WSA881X_CHIP_ID1, 0x00 },
 	{ WSA881X_CHIP_ID2, 0x00 },
@@ -346,7 +354,7 @@ static const struct reg_sequence wsa881x_vi_txfe_en_2_0[] = {
 };
 
 /* Default register reset values for WSA881x rev 2.0 */
-static const struct reg_sequence wsa881x_rev_2_0[] = {
+static struct reg_sequence wsa881x_rev_2_0[] = {
 	{ WSA881X_RESET_CTL, 0x00, 0x00 },
 	{ WSA881X_TADC_VALUE_CTL, 0x01, 0x00 },
 	{ WSA881X_INTR_MASK, 0x1B, 0x00 },
@@ -381,32 +389,33 @@ enum wsa_port_ids {
 
 /* 4 ports */
 static struct sdw_dpn_prop wsa_sink_dpn_prop[WSA881X_MAX_SWR_PORTS] = {
-	[WSA881X_PORT_DAC] = {
-		.num = WSA881X_PORT_DAC + 1,
+	{
+		/* DAC */
+		.num = 1,
 		.type = SDW_DPN_SIMPLE,
 		.min_ch = 1,
 		.max_ch = 1,
 		.simple_ch_prep_sm = true,
 		.read_only_wordlength = true,
-	},
-	[WSA881X_PORT_COMP] = {
-		.num = WSA881X_PORT_COMP + 1,
+	}, {
+		/* COMP */
+		.num = 2,
 		.type = SDW_DPN_SIMPLE,
 		.min_ch = 1,
 		.max_ch = 1,
 		.simple_ch_prep_sm = true,
 		.read_only_wordlength = true,
-	},
-	[WSA881X_PORT_BOOST] = {
-		.num = WSA881X_PORT_BOOST + 1,
+	}, {
+		/* BOOST */
+		.num = 3,
 		.type = SDW_DPN_SIMPLE,
 		.min_ch = 1,
 		.max_ch = 1,
 		.simple_ch_prep_sm = true,
 		.read_only_wordlength = true,
-	},
-	[WSA881X_PORT_VISENSE] = {
-		.num = WSA881X_PORT_VISENSE + 1,
+	}, {
+		/* VISENSE */
+		.num = 4,
 		.type = SDW_DPN_SIMPLE,
 		.min_ch = 1,
 		.max_ch = 1,
@@ -415,21 +424,18 @@ static struct sdw_dpn_prop wsa_sink_dpn_prop[WSA881X_MAX_SWR_PORTS] = {
 	}
 };
 
-static const struct sdw_port_config wsa881x_pconfig[WSA881X_MAX_SWR_PORTS] = {
-	[WSA881X_PORT_DAC] = {
-		.num = WSA881X_PORT_DAC + 1,
+static struct sdw_port_config wsa881x_pconfig[WSA881X_MAX_SWR_PORTS] = {
+	{
+		.num = 1,
 		.ch_mask = 0x1,
-	},
-	[WSA881X_PORT_COMP] = {
-		.num = WSA881X_PORT_COMP + 1,
+	}, {
+		.num = 2,
 		.ch_mask = 0xf,
-	},
-	[WSA881X_PORT_BOOST] = {
-		.num = WSA881X_PORT_BOOST + 1,
+	}, {
+		.num = 3,
 		.ch_mask = 0x3,
-	},
-	[WSA881X_PORT_VISENSE] = {
-		.num = WSA881X_PORT_VISENSE + 1,
+	}, {	/* IV feedback */
+		.num = 4,
 		.ch_mask = 0x3,
 	},
 };
@@ -631,10 +637,10 @@ static bool wsa881x_volatile_register(struct device *dev, unsigned int reg)
 	}
 }
 
-static const struct regmap_config wsa881x_regmap_config = {
+static struct regmap_config wsa881x_regmap_config = {
 	.reg_bits = 32,
 	.val_bits = 8,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.reg_defaults = wsa881x_defaults,
 	.max_register = WSA881X_SPKR_STATUS3,
 	.num_reg_defaults = ARRAY_SIZE(wsa881x_defaults),
@@ -672,11 +678,7 @@ struct wsa881x_priv {
 	struct sdw_stream_runtime *sruntime;
 	struct sdw_port_config port_config[WSA881X_MAX_SWR_PORTS];
 	struct gpio_desc *sd_n;
-	/*
-	 * Logical state for SD_N GPIO: high for shutdown, low for enable.
-	 * For backwards compatibility.
-	 */
-	unsigned int sd_n_val;
+	int version;
 	int active_ports;
 	bool port_prepared[WSA881X_MAX_SWR_PORTS];
 	bool port_enable[WSA881X_MAX_SWR_PORTS];
@@ -687,6 +689,7 @@ static void wsa881x_init(struct wsa881x_priv *wsa881x)
 	struct regmap *rm = wsa881x->regmap;
 	unsigned int val = 0;
 
+	regmap_read(rm, WSA881X_CHIP_ID1, &wsa881x->version);
 	regmap_register_patch(wsa881x->regmap, wsa881x_rev_2_0,
 			      ARRAY_SIZE(wsa881x_rev_2_0));
 
@@ -775,6 +778,7 @@ static int wsa881x_put_pa_gain(struct snd_kcontrol *kc,
 		usleep_range(1000, 1010);
 	}
 
+	pm_runtime_mark_last_busy(comp->dev);
 	pm_runtime_put_autosuspend(comp->dev);
 
 	return 1;
@@ -1108,39 +1112,20 @@ static int wsa881x_probe(struct sdw_slave *pdev,
 	struct wsa881x_priv *wsa881x;
 	struct device *dev = &pdev->dev;
 
-	wsa881x = devm_kzalloc(dev, sizeof(*wsa881x), GFP_KERNEL);
+	wsa881x = devm_kzalloc(&pdev->dev, sizeof(*wsa881x), GFP_KERNEL);
 	if (!wsa881x)
 		return -ENOMEM;
 
-	wsa881x->sd_n = devm_gpiod_get_optional(dev, "powerdown",
+	wsa881x->sd_n = devm_gpiod_get_optional(&pdev->dev, "powerdown",
 						GPIOD_FLAGS_BIT_NONEXCLUSIVE);
-	if (IS_ERR(wsa881x->sd_n))
-		return dev_err_probe(dev, PTR_ERR(wsa881x->sd_n),
-				     "Shutdown Control GPIO not found\n");
+	if (IS_ERR(wsa881x->sd_n)) {
+		dev_err(&pdev->dev, "Shutdown Control GPIO not found\n");
+		return PTR_ERR(wsa881x->sd_n);
+	}
 
-	/*
-	 * Backwards compatibility work-around.
-	 *
-	 * The SD_N GPIO is active low, however upstream DTS used always active
-	 * high.  Changing the flag in driver and DTS will break backwards
-	 * compatibility, so add a simple value inversion to work with both old
-	 * and new DTS.
-	 *
-	 * This won't work properly with DTS using the flags properly in cases:
-	 * 1. Old DTS with proper ACTIVE_LOW, however such case was broken
-	 *    before as the driver required the active high.
-	 * 2. New DTS with proper ACTIVE_HIGH (intended), which is rare case
-	 *    (not existing upstream) but possible. This is the price of
-	 *    backwards compatibility, therefore this hack should be removed at
-	 *    some point.
-	 */
-	wsa881x->sd_n_val = gpiod_is_active_low(wsa881x->sd_n);
-	if (!wsa881x->sd_n_val)
-		dev_warn(dev, "Using ACTIVE_HIGH for shutdown GPIO. Your DTB might be outdated or you use unsupported configuration for the GPIO.");
-
-	dev_set_drvdata(dev, wsa881x);
+	dev_set_drvdata(&pdev->dev, wsa881x);
 	wsa881x->slave = pdev;
-	wsa881x->dev = dev;
+	wsa881x->dev = &pdev->dev;
 	wsa881x->sconfig.ch_count = 1;
 	wsa881x->sconfig.bps = 1;
 	wsa881x->sconfig.frame_rate = 48000;
@@ -1149,12 +1134,13 @@ static int wsa881x_probe(struct sdw_slave *pdev,
 	pdev->prop.sink_ports = GENMASK(WSA881X_MAX_SWR_PORTS - 1, 0);
 	pdev->prop.sink_dpn_prop = wsa_sink_dpn_prop;
 	pdev->prop.scp_int1_mask = SDW_SCP_INT1_BUS_CLASH | SDW_SCP_INT1_PARITY;
-	pdev->prop.clk_stop_mode1 = true;
-	gpiod_direction_output(wsa881x->sd_n, !wsa881x->sd_n_val);
+	gpiod_direction_output(wsa881x->sd_n, 1);
 
 	wsa881x->regmap = devm_regmap_init_sdw(pdev, &wsa881x_regmap_config);
-	if (IS_ERR(wsa881x->regmap))
-		return dev_err_probe(dev, PTR_ERR(wsa881x->regmap), "regmap_init failed\n");
+	if (IS_ERR(wsa881x->regmap)) {
+		dev_err(&pdev->dev, "regmap_init failed\n");
+		return PTR_ERR(wsa881x->regmap);
+	}
 
 	pm_runtime_set_autosuspend_delay(dev, 3000);
 	pm_runtime_use_autosuspend(dev);
@@ -1162,18 +1148,18 @@ static int wsa881x_probe(struct sdw_slave *pdev,
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 
-	return devm_snd_soc_register_component(dev,
+	return devm_snd_soc_register_component(&pdev->dev,
 					       &wsa881x_component_drv,
 					       wsa881x_dais,
 					       ARRAY_SIZE(wsa881x_dais));
 }
 
-static int wsa881x_runtime_suspend(struct device *dev)
+static int __maybe_unused wsa881x_runtime_suspend(struct device *dev)
 {
 	struct regmap *regmap = dev_get_regmap(dev, NULL);
 	struct wsa881x_priv *wsa881x = dev_get_drvdata(dev);
 
-	gpiod_direction_output(wsa881x->sd_n, wsa881x->sd_n_val);
+	gpiod_direction_output(wsa881x->sd_n, 0);
 
 	regcache_cache_only(regmap, true);
 	regcache_mark_dirty(regmap);
@@ -1181,20 +1167,20 @@ static int wsa881x_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int wsa881x_runtime_resume(struct device *dev)
+static int __maybe_unused wsa881x_runtime_resume(struct device *dev)
 {
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct regmap *regmap = dev_get_regmap(dev, NULL);
 	struct wsa881x_priv *wsa881x = dev_get_drvdata(dev);
 	unsigned long time;
 
-	gpiod_direction_output(wsa881x->sd_n, !wsa881x->sd_n_val);
+	gpiod_direction_output(wsa881x->sd_n, 1);
 
 	time = wait_for_completion_timeout(&slave->initialization_complete,
 					   msecs_to_jiffies(WSA881X_PROBE_TIMEOUT));
 	if (!time) {
 		dev_err(dev, "Initialization not complete, timed out\n");
-		gpiod_direction_output(wsa881x->sd_n, wsa881x->sd_n_val);
+		gpiod_direction_output(wsa881x->sd_n, 0);
 		return -ETIMEDOUT;
 	}
 
@@ -1205,7 +1191,7 @@ static int wsa881x_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops wsa881x_pm_ops = {
-	RUNTIME_PM_OPS(wsa881x_runtime_suspend, wsa881x_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(wsa881x_runtime_suspend, wsa881x_runtime_resume, NULL)
 };
 
 static const struct sdw_device_id wsa881x_slave_id[] = {
@@ -1221,7 +1207,7 @@ static struct sdw_driver wsa881x_codec_driver = {
 	.id_table = wsa881x_slave_id,
 	.driver = {
 		.name	= "wsa881x-codec",
-		.pm = pm_ptr(&wsa881x_pm_ops),
+		.pm = &wsa881x_pm_ops,
 	}
 };
 module_sdw_driver(wsa881x_codec_driver);

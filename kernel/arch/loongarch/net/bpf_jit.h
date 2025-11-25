@@ -4,7 +4,6 @@
  *
  * Copyright (C) 2022 Loongson Technology Corporation Limited
  */
-#include <linux/bitfield.h>
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <asm/cacheflush.h>
@@ -16,9 +15,7 @@ struct jit_ctx {
 	unsigned int flags;
 	unsigned int epilogue_offset;
 	u32 *offset;
-	int num_exentries;
 	union loongarch_instruction *image;
-	union loongarch_instruction *ro_image;
 	u32 stack_size;
 };
 
@@ -27,11 +24,6 @@ struct jit_data {
 	u8 *image;
 	struct jit_ctx ctx;
 };
-
-static inline void emit_nop(union loongarch_instruction *insn)
-{
-	insn->word = INSN_NOP;
-}
 
 #define emit_insn(ctx, func, ...)						\
 do {										\
@@ -308,9 +300,4 @@ static inline int emit_tailcall_jmp(struct jit_ctx *ctx, u8 cond, enum loongarch
 	}
 
 	return -EINVAL;
-}
-
-static inline void bpf_flush_icache(void *start, void *end)
-{
-	flush_icache_range((unsigned long)start, (unsigned long)end);
 }

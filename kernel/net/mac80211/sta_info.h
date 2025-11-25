@@ -138,7 +138,7 @@ enum ieee80211_agg_stop_reason {
 struct airtime_info {
 	u64 rx_airtime;
 	u64 tx_airtime;
-	unsigned long last_active;
+	u32 last_active;
 	s32 deficit;
 	atomic_t aql_tx_pending; /* Estimated airtime for frames pending */
 	u32 aql_limit_low;
@@ -169,7 +169,7 @@ struct sta_info;
  * @buf_size: reorder buffer size at receiver
  * @failed_bar_ssn: ssn of the last failed BAR tx attempt
  * @bar_pending: BAR needs to be re-sent
- * @amsdu: support A-MSDU within A-MDPU
+ * @amsdu: support A-MSDU withing A-MDPU
  * @ssn: starting sequence number of the session
  *
  * This structure's lifetime is managed by RCU, assignments to
@@ -259,6 +259,9 @@ struct tid_ampdu_rx {
 /**
  * struct sta_ampdu_mlme - STA aggregation information.
  *
+ * @mtx: mutex to protect all TX data (except non-NULL assignments
+ *	to tid_tx[idx], which are protected by the sta spinlock)
+ *	tid_start_tx is also protected by sta->lock.
  * @tid_rx: aggregation info for Rx per TID -- RCU protected
  * @tid_rx_token: dialog tokens for valid aggregation sessions
  * @tid_rx_timer_expired: bitmap indicating on which TIDs the
@@ -272,13 +275,13 @@ struct tid_ampdu_rx {
  *	unexpected aggregation related frames outside a session
  * @work: work struct for starting/stopping aggregation
  * @tid_tx: aggregation info for Tx per TID
- * @tid_start_tx: sessions where start was requested, not just protected
- *	by wiphy mutex but also sta->lock
+ * @tid_start_tx: sessions where start was requested
  * @last_addba_req_time: timestamp of the last addBA request.
  * @addba_req_num: number of times addBA request has been sent.
  * @dialog_token_allocator: dialog token enumerator for each new session;
  */
 struct sta_ampdu_mlme {
+	struct mutex mtx;
 	/* rx */
 	struct tid_ampdu_rx __rcu *tid_rx[IEEE80211_NUM_TIDS];
 	u8 tid_rx_token[IEEE80211_NUM_TIDS];
@@ -288,7 +291,7 @@ struct sta_ampdu_mlme {
 	unsigned long agg_session_valid[BITS_TO_LONGS(IEEE80211_NUM_TIDS)];
 	unsigned long unexpected_agg[BITS_TO_LONGS(IEEE80211_NUM_TIDS)];
 	/* tx */
-	struct wiphy_work work;
+	struct work_struct work;
 	struct tid_ampdu_tx __rcu *tid_tx[IEEE80211_NUM_TIDS];
 	struct tid_ampdu_tx *tid_start_tx[IEEE80211_NUM_TIDS];
 	unsigned long last_addba_req_time[IEEE80211_NUM_TIDS];
@@ -466,6 +469,14 @@ struct ieee80211_fragment_cache {
 	unsigned int next;
 };
 
+/*
+ * The bandwidth threshold below which the per-station CoDel parameters will be
+ * scaled to be more lenient (to prevent starvation of slow stations). This
+ * value will be scaled by the number of active stations when it is being
+ * applied.
+ */
+#define STA_SLOW_THRESHOLD 6000 /* 6 Mbps */
+
 /**
  * struct link_sta_info - Link STA information
  * All link specific sta info are stored here for reference. This can be
@@ -504,11 +515,6 @@ struct ieee80211_fragment_cache {
  * @status_stats.avg_ack_signal: average ACK signal
  * @cur_max_bandwidth: maximum bandwidth to use for TX to the station,
  *	taken from HT/VHT capabilities or VHT operating mode notification
- * @rx_omi_bw_rx: RX OMI bandwidth restriction to apply for RX
- * @rx_omi_bw_tx: RX OMI bandwidth restriction to apply for TX
- * @rx_omi_bw_staging: RX OMI bandwidth restriction to apply later
- *	during finalize
- * @debugfs_dir: debug filesystem directory dentry
  * @pub: public (driver visible) link STA data
  * TODO Move other link params from sta_info as required for MLD operation
  */
@@ -557,67 +563,8 @@ struct link_sta_info {
 	} tx_stats;
 
 	enum ieee80211_sta_rx_bandwidth cur_max_bandwidth;
-	enum ieee80211_sta_rx_bandwidth rx_omi_bw_rx,
-					rx_omi_bw_tx,
-					rx_omi_bw_staging;
-
-#ifdef CONFIG_MAC80211_DEBUGFS
-	struct dentry *debugfs_dir;
-#endif
 
 	struct ieee80211_link_sta *pub;
-};
-
-/**
- * struct ieee80211_sta_removed_link_stats - Removed link sta data
- *
- * keep required accumulated removed link data for stats
- *
- * @rx_packets: accumulated packets (MSDUs & MMPDUs) received from
- *	this station for removed links
- * @tx_packets: accumulated packets (MSDUs & MMPDUs) transmitted to
- *	this station for removed links
- * @rx_bytes: accumulated bytes (size of MPDUs) received from this
- *	station for removed links
- * @tx_bytes: accumulated bytes (size of MPDUs) transmitted to this
- *	station for removed links
- * @tx_retries: cumulative retry counts (MPDUs) for removed links
- * @tx_failed: accumulated number of failed transmissions (MPDUs)
- *	(retries exceeded, no ACK) for removed links
- * @rx_dropped_misc: accumulated dropped packets for un-specified reason
- *	from this station for removed links
- * @beacon_loss_count: Number of times beacon loss event has triggered
- *	from this station for removed links.
- * @expected_throughput: expected throughput in kbps (including 802.11
- *	headers) towards this station for removed links
- * @pertid_stats: accumulated per-TID statistics for removed link of
- *	station
- * @pertid_stats.rx_msdu : accumulated number of received MSDUs towards
- *	this station for removed links.
- * @pertid_stats.tx_msdu: accumulated number of (attempted) transmitted
- *	MSDUs towards this station for removed links
- * @pertid_stats.tx_msdu_retries: accumulated number of retries (not
- *	counting the first) for transmitted MSDUs towards this station
- *	for removed links
- * @pertid_stats.tx_msdu_failed: accumulated number of failed transmitted
- *	MSDUs towards this station for removed links
- */
-struct ieee80211_sta_removed_link_stats {
-	u32 rx_packets;
-	u32 tx_packets;
-	u64 rx_bytes;
-	u64 tx_bytes;
-	u32 tx_retries;
-	u32 tx_failed;
-	u32 rx_dropped_misc;
-	u32 beacon_loss_count;
-	u32 expected_throughput;
-	struct {
-		u64 rx_msdu;
-		u64 tx_msdu;
-		u64 tx_msdu_retries;
-		u64 tx_msdu_failed;
-	} pertid_stats;
 };
 
 /**
@@ -670,14 +617,12 @@ struct ieee80211_sta_removed_link_stats {
  * @sta: station information we share with the driver
  * @sta_state: duplicates information about station state (for debug)
  * @rcu_head: RCU head used for freeing this station struct
+ * @cur_max_bandwidth: maximum bandwidth to use for TX to the station,
+ *	taken from HT/VHT capabilities or VHT operating mode notification
+ * @cparams: CoDel parameters for this station.
  * @reserved_tid: reserved TID (if any, otherwise IEEE80211_TID_UNRESERVED)
- * @amsdu_mesh_control: track the mesh A-MSDU format used by the peer:
- *
- *	  * -1: not yet known
- *	  * 0: non-mesh A-MSDU length field
- *	  * 1: big-endian mesh A-MSDU length field
- *	  * 2: little-endian mesh A-MSDU length field
- *
+ * @amsdu_mesh_control: track the mesh A-MSDU format used by the peer
+ *	(-1: not yet known, 0: non-standard [without mesh header], 1: standard)
  * @fast_tx: TX fastpath information
  * @fast_rx: RX fastpath information
  * @tdls_chandef: a TDLS peer can have a wider chandef that is compatible to
@@ -696,7 +641,6 @@ struct ieee80211_sta_removed_link_stats {
  *	@deflink address and remaining would be allocated and the address
  *	would be assigned to link[link_id] where link_id is the id assigned
  *	by the AP.
- * @rem_link_stats: accumulated removed link stats
  */
 struct sta_info {
 	/* General information, mostly static */
@@ -761,6 +705,8 @@ struct sta_info {
 	struct dentry *debugfs_dir;
 #endif
 
+	struct codel_params cparams;
+
 	u8 reserved_tid;
 	s8 amsdu_mesh_control;
 
@@ -771,17 +717,10 @@ struct sta_info {
 	struct ieee80211_sta_aggregates cur;
 	struct link_sta_info deflink;
 	struct link_sta_info __rcu *link[IEEE80211_MLD_MAX_NUM_LINKS];
-	struct ieee80211_sta_removed_link_stats rem_link_stats;
 
 	/* keep last! */
 	struct ieee80211_sta sta;
 };
-
-static inline int ieee80211_tdls_sta_link_id(struct sta_info *sta)
-{
-	/* TDLS STA can only have a single link */
-	return sta->sta.valid_links ? __ffs(sta->sta.valid_links) : 0;
-}
 
 static inline enum nl80211_plink_state sta_plink_state(struct sta_info *sta)
 {
@@ -851,10 +790,13 @@ static inline void sta_info_pre_move_state(struct sta_info *sta,
 void ieee80211_assign_tid_tx(struct sta_info *sta, int tid,
 			     struct tid_ampdu_tx *tid_tx);
 
-#define rcu_dereference_protected_tid_tx(sta, tid)			\
-	rcu_dereference_protected((sta)->ampdu_mlme.tid_tx[tid],	\
-				  lockdep_is_held(&(sta)->lock) ||	\
-				  lockdep_is_held(&(sta)->local->hw.wiphy->mtx));
+static inline struct tid_ampdu_tx *
+rcu_dereference_protected_tid_tx(struct sta_info *sta, int tid)
+{
+	return rcu_dereference_protected(sta->ampdu_mlme.tid_tx[tid],
+					 lockdep_is_held(&sta->lock) ||
+					 lockdep_is_held(&sta->ampdu_mlme.mtx));
+}
 
 /* Maximum number of frames to buffer per power saving station per AC */
 #define STA_MAX_TX_BUFFER	64
@@ -879,7 +821,7 @@ struct sta_info *sta_info_get(struct ieee80211_sub_if_data *sdata,
 struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 				  const u8 *addr);
 
-/* user must hold wiphy mutex or be in RCU critical section */
+/* user must hold sta_mtx or be in RCU critical section */
 struct sta_info *sta_info_get_by_addrs(struct ieee80211_local *local,
 				       const u8 *sta_addr, const u8 *vif_addr);
 
@@ -942,32 +884,23 @@ void sta_info_stop(struct ieee80211_local *local);
 /**
  * __sta_info_flush - flush matching STA entries from the STA table
  *
- * Return: the number of removed STA entries.
+ * Returns the number of removed STA entries.
  *
  * @sdata: sdata to remove all stations from
  * @vlans: if the given interface is an AP interface, also flush VLANs
- * @link_id: if given (>=0), all those STA entries using @link_id only
- *	     will be removed. If -1 is passed, all STA entries will be
- *	     removed.
- * @do_not_flush_sta: a station that shouldn't be flushed.
  */
-int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans,
-		     int link_id, struct sta_info *do_not_flush_sta);
+int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans);
 
 /**
  * sta_info_flush - flush matching STA entries from the STA table
  *
- * Return: the number of removed STA entries.
+ * Returns the number of removed STA entries.
  *
  * @sdata: sdata to remove all stations from
- * @link_id: if given (>=0), all those STA entries using @link_id only
- *	     will be removed. If -1 is passed, all STA entries will be
- *	     removed.
  */
-static inline int sta_info_flush(struct ieee80211_sub_if_data *sdata,
-				 int link_id)
+static inline int sta_info_flush(struct ieee80211_sub_if_data *sdata)
 {
-	return __sta_info_flush(sdata, false, link_id, NULL);
+	return __sta_info_flush(sdata, false);
 }
 
 void sta_set_rate_info_tx(struct sta_info *sta,
@@ -975,9 +908,6 @@ void sta_set_rate_info_tx(struct sta_info *sta,
 			  struct rate_info *rinfo);
 void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
 		   bool tidstats);
-
-void sta_set_accumulated_removed_links_sinfo(struct sta_info *sta,
-					     struct station_info *sinfo);
 
 u32 sta_get_expected_throughput(struct sta_info *sta);
 
@@ -993,13 +923,11 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta);
 void ieee80211_sta_ps_deliver_poll_response(struct sta_info *sta);
 void ieee80211_sta_ps_deliver_uapsd(struct sta_info *sta);
 
-unsigned long ieee80211_sta_last_active(struct sta_info *sta, int link_id);
+unsigned long ieee80211_sta_last_active(struct sta_info *sta);
 
 void ieee80211_sta_set_max_amsdu_subframes(struct sta_info *sta,
 					   const u8 *ext_capab,
 					   unsigned int ext_capab_len);
-
-void __ieee80211_sta_recalc_aggregates(struct sta_info *sta, u16 active_links);
 
 enum sta_stats_type {
 	STA_STATS_RATE_TYPE_INVALID = 0,
@@ -1008,7 +936,6 @@ enum sta_stats_type {
 	STA_STATS_RATE_TYPE_VHT,
 	STA_STATS_RATE_TYPE_HE,
 	STA_STATS_RATE_TYPE_S1G,
-	STA_STATS_RATE_TYPE_EHT,
 };
 
 #define STA_STATS_FIELD_HT_MCS		GENMASK( 7,  0)
@@ -1018,16 +945,12 @@ enum sta_stats_type {
 #define STA_STATS_FIELD_VHT_NSS		GENMASK( 7,  4)
 #define STA_STATS_FIELD_HE_MCS		GENMASK( 3,  0)
 #define STA_STATS_FIELD_HE_NSS		GENMASK( 7,  4)
-#define STA_STATS_FIELD_EHT_MCS		GENMASK( 3,  0)
-#define STA_STATS_FIELD_EHT_NSS		GENMASK( 7,  4)
-#define STA_STATS_FIELD_BW		GENMASK(12,  8)
-#define STA_STATS_FIELD_SGI		GENMASK(13, 13)
-#define STA_STATS_FIELD_TYPE		GENMASK(16, 14)
-#define STA_STATS_FIELD_HE_RU		GENMASK(19, 17)
-#define STA_STATS_FIELD_HE_GI		GENMASK(21, 20)
-#define STA_STATS_FIELD_HE_DCM		GENMASK(22, 22)
-#define STA_STATS_FIELD_EHT_RU		GENMASK(20, 17)
-#define STA_STATS_FIELD_EHT_GI		GENMASK(22, 21)
+#define STA_STATS_FIELD_BW		GENMASK(11,  8)
+#define STA_STATS_FIELD_SGI		GENMASK(12, 12)
+#define STA_STATS_FIELD_TYPE		GENMASK(15, 13)
+#define STA_STATS_FIELD_HE_RU		GENMASK(18, 16)
+#define STA_STATS_FIELD_HE_GI		GENMASK(20, 19)
+#define STA_STATS_FIELD_HE_DCM		GENMASK(21, 21)
 
 #define STA_STATS_FIELD(_n, _v)		FIELD_PREP(STA_STATS_FIELD_ ## _n, _v)
 #define STA_STATS_GET(_n, _v)		FIELD_GET(STA_STATS_FIELD_ ## _n, _v)
@@ -1065,13 +988,6 @@ static inline u32 sta_stats_encode_rate(struct ieee80211_rx_status *s)
 		r |= STA_STATS_FIELD(HE_GI, s->he_gi);
 		r |= STA_STATS_FIELD(HE_RU, s->he_ru);
 		r |= STA_STATS_FIELD(HE_DCM, s->he_dcm);
-		break;
-	case RX_ENC_EHT:
-		r |= STA_STATS_FIELD(TYPE, STA_STATS_RATE_TYPE_EHT);
-		r |= STA_STATS_FIELD(EHT_NSS, s->nss);
-		r |= STA_STATS_FIELD(EHT_MCS, s->rate_idx);
-		r |= STA_STATS_FIELD(EHT_GI, s->eht.gi);
-		r |= STA_STATS_FIELD(EHT_RU, s->eht.ru);
 		break;
 	default:
 		WARN_ON(1);

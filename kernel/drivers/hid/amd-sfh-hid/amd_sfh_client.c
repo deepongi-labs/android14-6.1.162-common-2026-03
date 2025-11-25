@@ -39,12 +39,8 @@ int amd_sfh_get_report(struct hid_device *hid, int report_id, int report_type)
 	struct amdtp_hid_data *hid_data = hid->driver_data;
 	struct amdtp_cl_data *cli_data = hid_data->cli_data;
 	struct request_list *req_list = &cli_data->req_list;
-	struct amd_input_data *in_data = cli_data->in_data;
-	struct amd_mp2_dev *mp2;
 	int i;
 
-	mp2 = container_of(in_data, struct amd_mp2_dev, in_data);
-	guard(mutex)(&mp2->lock);
 	for (i = 0; i < cli_data->num_hid_devices; i++) {
 		if (cli_data->hid_sensor_hubs[i] == hid) {
 			struct request_list *new = kzalloc(sizeof(*new), GFP_KERNEL);
@@ -79,8 +75,6 @@ void amd_sfh_work(struct work_struct *work)
 	u8 report_id, node_type;
 	u8 report_size = 0;
 
-	mp2 = container_of(in_data, struct amd_mp2_dev, in_data);
-	guard(mutex)(&mp2->lock);
 	req_node = list_last_entry(&req_list->list, struct request_list, list);
 	list_del(&req_node->list);
 	current_index = req_node->current_index;
@@ -89,6 +83,7 @@ void amd_sfh_work(struct work_struct *work)
 	node_type = req_node->report_type;
 	kfree(req_node);
 
+	mp2 = container_of(in_data, struct amd_mp2_dev, in_data);
 	mp2_ops = mp2->mp2_ops;
 	if (node_type == HID_FEATURE_REPORT) {
 		report_size = mp2_ops->get_feat_rep(sensor_index, report_id,
@@ -112,8 +107,6 @@ void amd_sfh_work(struct work_struct *work)
 	cli_data->cur_hid_dev = current_index;
 	cli_data->sensor_requested_cnt[current_index] = 0;
 	amdtp_hid_wakeup(cli_data->hid_sensor_hubs[current_index]);
-	if (!list_empty(&req_list->list))
-		schedule_delayed_work(&cli_data->work, 0);
 }
 
 void amd_sfh_work_buffer(struct work_struct *work)
@@ -124,10 +117,9 @@ void amd_sfh_work_buffer(struct work_struct *work)
 	u8 report_size;
 	int i;
 
-	mp2 = container_of(in_data, struct amd_mp2_dev, in_data);
-	guard(mutex)(&mp2->lock);
 	for (i = 0; i < cli_data->num_hid_devices; i++) {
 		if (cli_data->sensor_sts[i] == SENSOR_ENABLED) {
+			mp2 = container_of(in_data, struct amd_mp2_dev, in_data);
 			report_size = mp2->mp2_ops->get_in_rep(i, cli_data->sensor_idx[i],
 							       cli_data->report_id[i], in_data);
 			hid_input_report(cli_data->hid_sensor_hubs[i], HID_INPUT_REPORT,
@@ -154,10 +146,7 @@ static const char *get_sensor_name(int idx)
 		return "gyroscope";
 	case mag_idx:
 		return "magnetometer";
-	case op_idx:
-		return "operating-mode";
 	case als_idx:
-	case ACS_IDX: /* ambient color sensor */
 		return "ALS";
 	case HPD_IDX:
 		return "HPD";
@@ -253,20 +242,6 @@ int amd_sfh_hid_client_init(struct amd_mp2_dev *privdata)
 			rc = -ENOMEM;
 			goto cleanup;
 		}
-
-		if (cl_data->sensor_idx[i] == op_idx) {
-			info.period = AMD_SFH_IDLE_LOOP;
-			info.sensor_idx = cl_data->sensor_idx[i];
-			info.dma_address = cl_data->sensor_dma_addr[i];
-			mp2_ops->start(privdata, info);
-			cl_data->sensor_sts[i] = amd_sfh_wait_for_response(privdata,
-									   cl_data->sensor_idx[i],
-									   SENSOR_ENABLED);
-			if (cl_data->sensor_sts[i] == SENSOR_ENABLED)
-				cl_data->is_any_sensor_enabled = true;
-			continue;
-		}
-
 		cl_data->sensor_sts[i] = SENSOR_DISABLED;
 		cl_data->sensor_requested_cnt[i] = 0;
 		cl_data->cur_hid_dev = i;
@@ -327,19 +302,16 @@ int amd_sfh_hid_client_init(struct amd_mp2_dev *privdata)
 
 	for (i = 0; i < cl_data->num_hid_devices; i++) {
 		cl_data->cur_hid_dev = i;
-		if (cl_data->sensor_idx[i] == op_idx) {
-			dev_dbg(dev, "sid 0x%x (%s) status 0x%x\n",
-				cl_data->sensor_idx[i], get_sensor_name(cl_data->sensor_idx[i]),
-				cl_data->sensor_sts[i]);
-			continue;
-		}
-
 		if (cl_data->sensor_sts[i] == SENSOR_ENABLED) {
 			rc = amdtp_hid_probe(i, cl_data);
 			if (rc)
 				goto cleanup;
 		} else {
 			cl_data->sensor_sts[i] = SENSOR_DISABLED;
+			dev_dbg(dev, "sid 0x%x (%s) status 0x%x\n",
+				cl_data->sensor_idx[i],
+				get_sensor_name(cl_data->sensor_idx[i]),
+				cl_data->sensor_sts[i]);
 		}
 		dev_dbg(dev, "sid 0x%x (%s) status 0x%x\n",
 			cl_data->sensor_idx[i], get_sensor_name(cl_data->sensor_idx[i]),

@@ -380,7 +380,8 @@ static const struct v4l2_subdev_ops bt819_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int bt819_probe(struct i2c_client *client)
+static int bt819_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int i, ver;
 	struct bt819 *decoder;
@@ -457,9 +458,9 @@ static void bt819_remove(struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static const struct i2c_device_id bt819_id[] = {
-	{ "bt819a" },
-	{ "bt817a" },
-	{ "bt815a" },
+	{ "bt819a", 0 },
+	{ "bt817a", 0 },
+	{ "bt815a", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, bt819_id);

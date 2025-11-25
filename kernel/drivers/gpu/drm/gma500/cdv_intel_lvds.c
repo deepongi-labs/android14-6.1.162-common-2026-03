@@ -12,8 +12,6 @@
 #include <linux/i2c.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_simple_kms_helper.h>
 
 #include "cdv_device.h"
@@ -153,7 +151,7 @@ static void cdv_intel_lvds_restore(struct drm_connector *connector)
 }
 
 static enum drm_mode_status cdv_intel_lvds_mode_valid(struct drm_connector *connector,
-			      const struct drm_display_mode *mode)
+			      struct drm_display_mode *mode)
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
@@ -568,7 +566,7 @@ void cdv_intel_lvds_init(struct drm_device *dev,
 			dev->dev, "I2C bus registration failed.\n");
 		goto err_encoder_cleanup;
 	}
-	gma_encoder->i2c_bus->target_addr = 0x2C;
+	gma_encoder->i2c_bus->slave_addr = 0x2C;
 	dev_priv->lvds_i2c_bus = gma_encoder->i2c_bus;
 
 	/*

@@ -12,6 +12,7 @@
 #include <linux/platform_device.h>
 #include <linux/of_address.h>
 #include <linux/of_pci.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/phy/phy.h>
 
@@ -52,7 +53,7 @@ static int iproc_pltfm_pcie_probe(struct platform_device *pdev)
 	pcie = pci_host_bridge_priv(bridge);
 
 	pcie->dev = dev;
-	pcie->type = (uintptr_t)of_device_get_match_data(dev);
+	pcie->type = (enum iproc_pcie_type) of_device_get_match_data(dev);
 
 	ret = of_address_to_resource(np, 0, &reg);
 	if (ret < 0) {
@@ -114,11 +115,11 @@ static int iproc_pltfm_pcie_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void iproc_pltfm_pcie_remove(struct platform_device *pdev)
+static int iproc_pltfm_pcie_remove(struct platform_device *pdev)
 {
 	struct iproc_pcie *pcie = platform_get_drvdata(pdev);
 
-	iproc_pcie_remove(pcie);
+	return iproc_pcie_remove(pcie);
 }
 
 static void iproc_pltfm_pcie_shutdown(struct platform_device *pdev)

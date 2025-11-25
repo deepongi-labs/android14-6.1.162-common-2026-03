@@ -14,6 +14,15 @@
 
 #include "internal.h"
 
+/* Call with exclusively locked inode->i_rwsem */
+static void nfs_block_o_direct(struct nfs_inode *nfsi, struct inode *inode)
+{
+	if (test_bit(NFS_INO_ODIRECT, &nfsi->flags)) {
+		clear_bit(NFS_INO_ODIRECT, &nfsi->flags);
+		inode_dio_wait(inode);
+	}
+}
+
 /**
  * nfs_start_io_read - declare the file is being used for buffered reads
  * @inode: file inode
@@ -30,28 +39,19 @@
  * Note that buffered writes and truncates both take a write lock on
  * inode->i_rwsem, meaning that those are serialised w.r.t. the reads.
  */
-int
+void
 nfs_start_io_read(struct inode *inode)
 {
 	struct nfs_inode *nfsi = NFS_I(inode);
-	int err;
-
 	/* Be an optimist! */
-	err = down_read_killable(&inode->i_rwsem);
-	if (err)
-		return err;
+	down_read(&inode->i_rwsem);
 	if (test_bit(NFS_INO_ODIRECT, &nfsi->flags) == 0)
-		return 0;
+		return;
 	up_read(&inode->i_rwsem);
-
 	/* Slow path.... */
-	err = down_write_killable(&inode->i_rwsem);
-	if (err)
-		return err;
-	nfs_file_block_o_direct(nfsi);
+	down_write(&inode->i_rwsem);
+	nfs_block_o_direct(nfsi, inode);
 	downgrade_write(&inode->i_rwsem);
-
-	return 0;
 }
 
 /**
@@ -74,15 +74,11 @@ nfs_end_io_read(struct inode *inode)
  * Declare that a buffered read operation is about to start, and ensure
  * that we block all direct I/O.
  */
-int
+void
 nfs_start_io_write(struct inode *inode)
 {
-	int err;
-
-	err = down_write_killable(&inode->i_rwsem);
-	if (!err)
-		nfs_file_block_o_direct(NFS_I(inode));
-	return err;
+	down_write(&inode->i_rwsem);
+	nfs_block_o_direct(NFS_I(inode), inode);
 }
 
 /**
@@ -123,28 +119,19 @@ static void nfs_block_buffered(struct nfs_inode *nfsi, struct inode *inode)
  * Note that buffered writes and truncates both take a write lock on
  * inode->i_rwsem, meaning that those are serialised w.r.t. O_DIRECT.
  */
-int
+void
 nfs_start_io_direct(struct inode *inode)
 {
 	struct nfs_inode *nfsi = NFS_I(inode);
-	int err;
-
 	/* Be an optimist! */
-	err = down_read_killable(&inode->i_rwsem);
-	if (err)
-		return err;
+	down_read(&inode->i_rwsem);
 	if (test_bit(NFS_INO_ODIRECT, &nfsi->flags) != 0)
-		return 0;
+		return;
 	up_read(&inode->i_rwsem);
-
 	/* Slow path.... */
-	err = down_write_killable(&inode->i_rwsem);
-	if (err)
-		return err;
+	down_write(&inode->i_rwsem);
 	nfs_block_buffered(nfsi, inode);
 	downgrade_write(&inode->i_rwsem);
-
-	return 0;
 }
 
 /**

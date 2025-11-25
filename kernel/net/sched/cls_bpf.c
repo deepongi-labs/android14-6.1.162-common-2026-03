@@ -19,7 +19,6 @@
 #include <net/rtnetlink.h>
 #include <net/pkt_cls.h>
 #include <net/sock.h>
-#include <net/tc_wrapper.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Borkmann <dborkman@redhat.com>");
@@ -78,9 +77,8 @@ static int cls_bpf_exec_opcode(int code)
 	}
 }
 
-TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
-				       const struct tcf_proto *tp,
-				       struct tcf_result *res)
+static int cls_bpf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
+			    struct tcf_result *res)
 {
 	struct cls_bpf_head *head = rcu_dereference_bh(tp->root);
 	bool at_ingress = skb_at_tc_ingress(skb);
@@ -97,13 +95,15 @@ TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
 		} else if (at_ingress) {
 			/* It is safe to push/pull even if skb_shared() */
 			__skb_push(skb, skb->mac_len);
-			filter_res = bpf_prog_run_data_pointers(prog->filter, skb);
+			bpf_compute_data_pointers(skb);
+			filter_res = bpf_prog_run(prog->filter, skb);
 			__skb_pull(skb, skb->mac_len);
 		} else {
-			filter_res = bpf_prog_run_data_pointers(prog->filter, skb);
+			bpf_compute_data_pointers(skb);
+			filter_res = bpf_prog_run(prog->filter, skb);
 		}
-		if (unlikely(!skb->tstamp && skb->tstamp_type))
-			skb->tstamp_type = SKB_CLOCK_REALTIME;
+		if (unlikely(!skb->tstamp && skb->mono_delivery_time))
+			skb->mono_delivery_time = 0;
 
 		if (prog->exts_integrated) {
 			res->class   = 0;
@@ -507,8 +507,6 @@ static int cls_bpf_change(struct net *net, struct sk_buff *in_skb,
 	if (!tc_in_hw(prog->gen_flags))
 		prog->gen_flags |= TCA_CLS_FLAGS_NOT_IN_HW;
 
-	tcf_proto_update_usesw(tp, prog->gen_flags);
-
 	if (oldprog) {
 		idr_replace(&head->handle_idr, prog, handle);
 		list_replace_rcu(&oldprog->link, &prog->link);
@@ -693,7 +691,6 @@ static struct tcf_proto_ops cls_bpf_ops __read_mostly = {
 	.dump		=	cls_bpf_dump,
 	.bind_class	=	cls_bpf_bind_class,
 };
-MODULE_ALIAS_NET_CLS("bpf");
 
 static int __init cls_bpf_init_mod(void)
 {

@@ -5,7 +5,6 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/err.h>
@@ -62,26 +61,24 @@ static unsigned long clk_pfd_recalc_rate(struct clk_hw *hw,
 	return tmp;
 }
 
-static int clk_pfd_determine_rate(struct clk_hw *hw,
-				  struct clk_rate_request *req)
+static long clk_pfd_round_rate(struct clk_hw *hw, unsigned long rate,
+			       unsigned long *prate)
 {
-	u64 tmp = req->best_parent_rate;
+	u64 tmp = *prate;
 	u8 frac;
 
-	tmp = tmp * 18 + req->rate / 2;
-	do_div(tmp, req->rate);
+	tmp = tmp * 18 + rate / 2;
+	do_div(tmp, rate);
 	frac = tmp;
 	if (frac < 12)
 		frac = 12;
 	else if (frac > 35)
 		frac = 35;
-	tmp = req->best_parent_rate;
+	tmp = *prate;
 	tmp *= 18;
 	do_div(tmp, frac);
 
-	req->rate = tmp;
-
-	return 0;
+	return tmp;
 }
 
 static int clk_pfd_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -119,7 +116,7 @@ static const struct clk_ops clk_pfd_ops = {
 	.enable		= clk_pfd_enable,
 	.disable	= clk_pfd_disable,
 	.recalc_rate	= clk_pfd_recalc_rate,
-	.determine_rate = clk_pfd_determine_rate,
+	.round_rate	= clk_pfd_round_rate,
 	.set_rate	= clk_pfd_set_rate,
 	.is_enabled     = clk_pfd_is_enabled,
 };
@@ -156,4 +153,3 @@ struct clk_hw *imx_clk_hw_pfd(const char *name, const char *parent_name,
 
 	return hw;
 }
-EXPORT_SYMBOL_GPL(imx_clk_hw_pfd);

@@ -20,7 +20,6 @@ enum ucsi_psy_online_states {
 };
 
 static enum power_supply_property ucsi_psy_props[] = {
-	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_USB_TYPE,
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN,
@@ -55,8 +54,8 @@ static int ucsi_psy_get_online(struct ucsi_connector *con,
 			       union power_supply_propval *val)
 {
 	val->intval = UCSI_PSY_OFFLINE;
-	if (UCSI_CONSTAT(con, CONNECTED) &&
-	    (UCSI_CONSTAT(con, PWR_DIR) == TYPEC_SINK))
+	if (con->status.flags & UCSI_CONSTAT_CONNECTED &&
+	    (con->status.flags & UCSI_CONSTAT_PWR_DIR) == TYPEC_SINK)
 		val->intval = UCSI_PSY_FIXED_ONLINE;
 	return 0;
 }
@@ -66,7 +65,7 @@ static int ucsi_psy_get_voltage_min(struct ucsi_connector *con,
 {
 	u32 pdo;
 
-	switch (UCSI_CONSTAT(con, PWR_OPMODE)) {
+	switch (UCSI_CONSTAT_PWR_OPMODE(con->status.flags)) {
 	case UCSI_CONSTAT_PWR_OPMODE_PD:
 		pdo = con->src_pdos[0];
 		val->intval = pdo_fixed_voltage(pdo) * 1000;
@@ -89,7 +88,7 @@ static int ucsi_psy_get_voltage_max(struct ucsi_connector *con,
 {
 	u32 pdo;
 
-	switch (UCSI_CONSTAT(con, PWR_OPMODE)) {
+	switch (UCSI_CONSTAT_PWR_OPMODE(con->status.flags)) {
 	case UCSI_CONSTAT_PWR_OPMODE_PD:
 		if (con->num_pdos > 0) {
 			pdo = con->src_pdos[con->num_pdos - 1];
@@ -117,7 +116,7 @@ static int ucsi_psy_get_voltage_now(struct ucsi_connector *con,
 	int index;
 	u32 pdo;
 
-	switch (UCSI_CONSTAT(con, PWR_OPMODE)) {
+	switch (UCSI_CONSTAT_PWR_OPMODE(con->status.flags)) {
 	case UCSI_CONSTAT_PWR_OPMODE_PD:
 		index = rdo_index(con->rdo);
 		if (index > 0) {
@@ -145,7 +144,7 @@ static int ucsi_psy_get_current_max(struct ucsi_connector *con,
 {
 	u32 pdo;
 
-	switch (UCSI_CONSTAT(con, PWR_OPMODE)) {
+	switch (UCSI_CONSTAT_PWR_OPMODE(con->status.flags)) {
 	case UCSI_CONSTAT_PWR_OPMODE_PD:
 		if (con->num_pdos > 0) {
 			pdo = con->src_pdos[con->num_pdos - 1];
@@ -164,7 +163,7 @@ static int ucsi_psy_get_current_max(struct ucsi_connector *con,
 	case UCSI_CONSTAT_PWR_OPMODE_DEFAULT:
 	/* UCSI can't tell b/w DCP/CDP or USB2/3x1/3x2 SDP chargers */
 	default:
-		val->intval = UCSI_TYPEC_DEFAULT_CURRENT * 1000;
+		val->intval = 0;
 		break;
 	}
 	return 0;
@@ -173,7 +172,9 @@ static int ucsi_psy_get_current_max(struct ucsi_connector *con,
 static int ucsi_psy_get_current_now(struct ucsi_connector *con,
 				    union power_supply_propval *val)
 {
-	if (UCSI_CONSTAT(con, PWR_OPMODE) == UCSI_CONSTAT_PWR_OPMODE_PD)
+	u16 flags = con->status.flags;
+
+	if (UCSI_CONSTAT_PWR_OPMODE(flags) == UCSI_CONSTAT_PWR_OPMODE_PD)
 		val->intval = rdo_op_current(con->rdo) * 1000;
 	else
 		val->intval = 0;
@@ -183,39 +184,12 @@ static int ucsi_psy_get_current_now(struct ucsi_connector *con,
 static int ucsi_psy_get_usb_type(struct ucsi_connector *con,
 				 union power_supply_propval *val)
 {
+	u16 flags = con->status.flags;
+
 	val->intval = POWER_SUPPLY_USB_TYPE_C;
-	if (UCSI_CONSTAT(con, CONNECTED) &&
-	    UCSI_CONSTAT(con, PWR_OPMODE) == UCSI_CONSTAT_PWR_OPMODE_PD)
+	if (flags & UCSI_CONSTAT_CONNECTED &&
+	    UCSI_CONSTAT_PWR_OPMODE(flags) == UCSI_CONSTAT_PWR_OPMODE_PD)
 		val->intval = POWER_SUPPLY_USB_TYPE_PD;
-
-	return 0;
-}
-
-static int ucsi_psy_get_charge_type(struct ucsi_connector *con, union power_supply_propval *val)
-{
-	if (!(UCSI_CONSTAT(con, CONNECTED))) {
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_NONE;
-		return 0;
-	}
-
-	/* The Battery Charging Cabability Status field is only valid in sink role. */
-	if (UCSI_CONSTAT(con, PWR_DIR) != TYPEC_SINK) {
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_UNKNOWN;
-		return 0;
-	}
-
-	switch (UCSI_CONSTAT(con, BC_STATUS)) {
-	case UCSI_CONSTAT_BC_NOMINAL_CHARGING:
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_STANDARD;
-		break;
-	case UCSI_CONSTAT_BC_SLOW_CHARGING:
-	case UCSI_CONSTAT_BC_TRICKLE_CHARGING:
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_TRICKLE;
-		break;
-	default:
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_NONE;
-		break;
-	}
 
 	return 0;
 }
@@ -227,8 +201,6 @@ static int ucsi_psy_get_prop(struct power_supply *psy,
 	struct ucsi_connector *con = power_supply_get_drvdata(psy);
 
 	switch (psp) {
-	case POWER_SUPPLY_PROP_CHARGE_TYPE:
-		return ucsi_psy_get_charge_type(con, val);
 	case POWER_SUPPLY_PROP_USB_TYPE:
 		return ucsi_psy_get_usb_type(con, val);
 	case POWER_SUPPLY_PROP_ONLINE:
@@ -250,6 +222,12 @@ static int ucsi_psy_get_prop(struct power_supply *psy,
 	}
 }
 
+static enum power_supply_usb_type ucsi_psy_usb_types[] = {
+	POWER_SUPPLY_USB_TYPE_C,
+	POWER_SUPPLY_USB_TYPE_PD,
+	POWER_SUPPLY_USB_TYPE_PD_PPS,
+};
+
 int ucsi_register_port_psy(struct ucsi_connector *con)
 {
 	struct power_supply_config psy_cfg = {};
@@ -266,9 +244,8 @@ int ucsi_register_port_psy(struct ucsi_connector *con)
 
 	con->psy_desc.name = psy_name;
 	con->psy_desc.type = POWER_SUPPLY_TYPE_USB;
-	con->psy_desc.usb_types = BIT(POWER_SUPPLY_USB_TYPE_C)  |
-				  BIT(POWER_SUPPLY_USB_TYPE_PD) |
-				  BIT(POWER_SUPPLY_USB_TYPE_PD_PPS);
+	con->psy_desc.usb_types = ucsi_psy_usb_types;
+	con->psy_desc.num_usb_types = ARRAY_SIZE(ucsi_psy_usb_types);
 	con->psy_desc.properties = ucsi_psy_props;
 	con->psy_desc.num_properties = ARRAY_SIZE(ucsi_psy_props);
 	con->psy_desc.get_property = ucsi_psy_get_prop;

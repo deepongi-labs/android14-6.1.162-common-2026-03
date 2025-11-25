@@ -7,16 +7,13 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
-#include <linux/platform_device.h>
-#include <linux/regmap.h>
-#include <linux/seq_file.h>
-#include <linux/slab.h>
-#include <linux/string_choices.h>
-#include <linux/types.h>
-
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinmux.h>
+#include <linux/platform_device.h>
+#include <linux/regmap.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 
 #include <dt-bindings/pinctrl/qcom,pmic-mpp.h>
 
@@ -144,6 +141,7 @@ struct pmic_mpp_state {
 	struct regmap	*map;
 	struct pinctrl_dev *ctrl;
 	struct gpio_chip chip;
+	struct irq_chip irq;
 };
 
 static const struct pinconf_generic_params pmic_mpp_bindings[] = {
@@ -370,7 +368,7 @@ static int pmic_mpp_config_get(struct pinctrl_dev *pctldev,
 			return -EINVAL;
 		arg = 1;
 		break;
-	case PIN_CONFIG_LEVEL:
+	case PIN_CONFIG_OUTPUT:
 		arg = pad->out_value;
 		break;
 	case PMIC_MPP_CONF_DTEST_SELECTOR:
@@ -447,7 +445,7 @@ static int pmic_mpp_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 		case PIN_CONFIG_INPUT_ENABLE:
 			pad->input_enabled = arg ? true : false;
 			break;
-		case PIN_CONFIG_LEVEL:
+		case PIN_CONFIG_OUTPUT:
 			pad->output_enabled = true;
 			pad->out_value = arg;
 			break;
@@ -545,7 +543,7 @@ static void pmic_mpp_config_dbg_show(struct pinctrl_dev *pctldev,
 		seq_printf(s, " %d", pad->aout_level);
 		if (pad->has_pullup)
 			seq_printf(s, " %-8s", biases[pad->pullup]);
-		seq_printf(s, " %-4s", str_high_low(pad->out_value));
+		seq_printf(s, " %-4s", pad->out_value ? "high" : "low");
 		if (pad->dtest)
 			seq_printf(s, " dtest%d", pad->dtest);
 		if (pad->paired)
@@ -576,7 +574,7 @@ static int pmic_mpp_direction_output(struct gpio_chip *chip,
 	struct pmic_mpp_state *state = gpiochip_get_data(chip);
 	unsigned long config;
 
-	config = pinconf_to_config_packed(PIN_CONFIG_LEVEL, val);
+	config = pinconf_to_config_packed(PIN_CONFIG_OUTPUT, val);
 
 	return pmic_mpp_config_set(state->ctrl, pin, &config, 1);
 }
@@ -600,14 +598,14 @@ static int pmic_mpp_get(struct gpio_chip *chip, unsigned pin)
 	return !!pad->out_value;
 }
 
-static int pmic_mpp_set(struct gpio_chip *chip, unsigned int pin, int value)
+static void pmic_mpp_set(struct gpio_chip *chip, unsigned pin, int value)
 {
 	struct pmic_mpp_state *state = gpiochip_get_data(chip);
 	unsigned long config;
 
-	config = pinconf_to_config_packed(PIN_CONFIG_LEVEL, value);
+	config = pinconf_to_config_packed(PIN_CONFIG_OUTPUT, value);
 
-	return pmic_mpp_config_set(state->ctrl, pin, &config, 1);
+	pmic_mpp_config_set(state->ctrl, pin, &config, 1);
 }
 
 static int pmic_mpp_of_xlate(struct gpio_chip *chip,
@@ -823,33 +821,6 @@ static int pmic_mpp_child_to_parent_hwirq(struct gpio_chip *chip,
 	return 0;
 }
 
-static void pmic_mpp_irq_mask(struct irq_data *d)
-{
-	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-
-	irq_chip_mask_parent(d);
-	gpiochip_disable_irq(gc, irqd_to_hwirq(d));
-}
-
-static void pmic_mpp_irq_unmask(struct irq_data *d)
-{
-	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
-
-	gpiochip_enable_irq(gc, irqd_to_hwirq(d));
-	irq_chip_unmask_parent(d);
-}
-
-static const struct irq_chip pmic_mpp_irq_chip = {
-	.name = "spmi-mpp",
-	.irq_ack = irq_chip_ack_parent,
-	.irq_mask = pmic_mpp_irq_mask,
-	.irq_unmask = pmic_mpp_irq_unmask,
-	.irq_set_type = irq_chip_set_type_parent,
-	.irq_set_wake = irq_chip_set_wake_parent,
-	.flags = IRQCHIP_MASK_ON_SUSPEND | IRQCHIP_IMMUTABLE,
-	GPIOCHIP_IRQ_RESOURCE_HELPERS,
-};
-
 static int pmic_mpp_probe(struct platform_device *pdev)
 {
 	struct irq_domain *parent_domain;
@@ -942,11 +913,19 @@ static int pmic_mpp_probe(struct platform_device *pdev)
 	if (!parent_domain)
 		return -ENXIO;
 
+	state->irq.name = "spmi-mpp",
+	state->irq.irq_ack = irq_chip_ack_parent,
+	state->irq.irq_mask = irq_chip_mask_parent,
+	state->irq.irq_unmask = irq_chip_unmask_parent,
+	state->irq.irq_set_type = irq_chip_set_type_parent,
+	state->irq.irq_set_wake = irq_chip_set_wake_parent,
+	state->irq.flags = IRQCHIP_MASK_ON_SUSPEND,
+
 	girq = &state->chip.irq;
-	gpio_irq_chip_set_chip(girq, &pmic_mpp_irq_chip);
+	girq->chip = &state->irq;
 	girq->default_type = IRQ_TYPE_NONE;
 	girq->handler = handle_level_irq;
-	girq->fwnode = dev_fwnode(state->dev);
+	girq->fwnode = of_node_to_fwnode(state->dev->of_node);
 	girq->parent_domain = parent_domain;
 	girq->child_to_parent_hwirq = pmic_mpp_child_to_parent_hwirq;
 	girq->populate_parent_alloc_arg = gpiochip_populate_parent_fwspec_fourcell;
@@ -972,11 +951,12 @@ err_range:
 	return ret;
 }
 
-static void pmic_mpp_remove(struct platform_device *pdev)
+static int pmic_mpp_remove(struct platform_device *pdev)
 {
 	struct pmic_mpp_state *state = platform_get_drvdata(pdev);
 
 	gpiochip_remove(&state->chip);
+	return 0;
 }
 
 static const struct of_device_id pmic_mpp_of_match[] = {

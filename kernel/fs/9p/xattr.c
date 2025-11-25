@@ -8,7 +8,6 @@
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/uio.h>
-#include <linux/posix_acl_xattr.h>
 #include <net/9p/9p.h>
 #include <net/9p/client.h>
 
@@ -153,7 +152,7 @@ static int v9fs_xattr_handler_get(const struct xattr_handler *handler,
 }
 
 static int v9fs_xattr_handler_set(const struct xattr_handler *handler,
-				  struct mnt_idmap *idmap,
+				  struct user_namespace *mnt_userns,
 				  struct dentry *dentry, struct inode *inode,
 				  const char *name, const void *value,
 				  size_t size, int flags)
@@ -163,29 +162,33 @@ static int v9fs_xattr_handler_set(const struct xattr_handler *handler,
 	return v9fs_xattr_set(dentry, full_name, value, size, flags);
 }
 
-static const struct xattr_handler v9fs_xattr_user_handler = {
+static struct xattr_handler v9fs_xattr_user_handler = {
 	.prefix	= XATTR_USER_PREFIX,
 	.get	= v9fs_xattr_handler_get,
 	.set	= v9fs_xattr_handler_set,
 };
 
-static const struct xattr_handler v9fs_xattr_trusted_handler = {
+static struct xattr_handler v9fs_xattr_trusted_handler = {
 	.prefix	= XATTR_TRUSTED_PREFIX,
 	.get	= v9fs_xattr_handler_get,
 	.set	= v9fs_xattr_handler_set,
 };
 
 #ifdef CONFIG_9P_FS_SECURITY
-static const struct xattr_handler v9fs_xattr_security_handler = {
+static struct xattr_handler v9fs_xattr_security_handler = {
 	.prefix	= XATTR_SECURITY_PREFIX,
 	.get	= v9fs_xattr_handler_get,
 	.set	= v9fs_xattr_handler_set,
 };
 #endif
 
-const struct xattr_handler * const v9fs_xattr_handlers[] = {
+const struct xattr_handler *v9fs_xattr_handlers[] = {
 	&v9fs_xattr_user_handler,
 	&v9fs_xattr_trusted_handler,
+#ifdef CONFIG_9P_FS_POSIX_ACL
+	&v9fs_xattr_acl_access_handler,
+	&v9fs_xattr_acl_default_handler,
+#endif
 #ifdef CONFIG_9P_FS_SECURITY
 	&v9fs_xattr_security_handler,
 #endif

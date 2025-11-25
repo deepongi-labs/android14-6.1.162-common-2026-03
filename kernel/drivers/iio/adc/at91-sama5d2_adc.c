@@ -9,7 +9,6 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -586,6 +585,15 @@ struct at91_adc_temp {
 	u16				saved_oversampling;
 };
 
+/*
+ * Buffer size requirements:
+ * No channels * bytes_per_channel(2) + timestamp bytes (8)
+ * Divided by 2 because we need half words.
+ * We assume 32 channels for now, has to be increased if needed.
+ * Nobody minds a buffer being too big.
+ */
+#define AT91_BUFFER_MAX_HWORDS ((32 * 2 + 8) / 2)
+
 struct at91_adc_state {
 	void __iomem			*base;
 	int				irq;
@@ -607,8 +615,8 @@ struct at91_adc_state {
 	struct at91_adc_temp		temp_st;
 	struct iio_dev			*indio_dev;
 	struct device			*dev;
-	/* We assume 32 channels for now, has to be increased if needed. */
-	IIO_DECLARE_BUFFER_WITH_TS(u16, buffer, 32);
+	/* Ensure naturally aligned timestamp */
+	u16				buffer[AT91_BUFFER_MAX_HWORDS] __aligned(8);
 	/*
 	 * lock to prevent concurrent 'single conversion' requests through
 	 * sysfs.
@@ -896,6 +904,7 @@ static int at91_adc_config_emr(struct at91_adc_state *st,
 	emr |= osr | AT91_SAMA5D2_TRACKX(trackx);
 	at91_adc_writel(st, EMR, emr);
 
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 
 	st->oversampling_ratio = oversampling_ratio;
@@ -970,6 +979,7 @@ static int at91_adc_configure_touch(struct at91_adc_state *st, bool state)
 				AT91_SAMA5D2_IER_PEN | AT91_SAMA5D2_IER_NOPEN);
 		at91_adc_writel(st, TSMR, 0);
 
+		pm_runtime_mark_last_busy(st->dev);
 		pm_runtime_put_autosuspend(st->dev);
 		return 0;
 	}
@@ -1140,8 +1150,10 @@ static int at91_adc_configure_trigger(struct iio_trigger *trig, bool state)
 
 	at91_adc_configure_trigger_registers(st, state);
 
-	if (!state)
+	if (!state) {
+		pm_runtime_mark_last_busy(st->dev);
 		pm_runtime_put_autosuspend(st->dev);
+	}
 
 	return 0;
 }
@@ -1194,7 +1206,7 @@ static void at91_dma_buffer_done(void *data)
 {
 	struct iio_dev *indio_dev = data;
 
-	iio_trigger_poll_nested(indio_dev->trig);
+	iio_trigger_poll_chained(indio_dev->trig);
 }
 
 static int at91_adc_dma_start(struct iio_dev *indio_dev)
@@ -1332,6 +1344,7 @@ static int at91_adc_buffer_prepare(struct iio_dev *indio_dev)
 		at91_adc_writel(st, IER, AT91_SAMA5D2_IER_DRDY);
 
 pm_runtime_put:
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 	return ret;
 }
@@ -1389,6 +1402,7 @@ static int at91_adc_buffer_postdisable(struct iio_dev *indio_dev)
 	if (st->dma_st.dma_chan)
 		dmaengine_terminate_sync(st->dma_st.dma_chan);
 
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 
 	return 0;
@@ -1597,6 +1611,7 @@ static void at91_adc_setup_samp_freq(struct iio_dev *indio_dev, unsigned freq,
 	mr |= AT91_SAMA5D2_MR_TRACKTIM(tracktim);
 	at91_adc_writel(st, MR, mr);
 
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 
 	dev_dbg(&indio_dev->dev, "freq: %u, startup: %u, prescal: %u, tracktim=%u\n",
@@ -1802,6 +1817,7 @@ static int at91_adc_read_info_raw(struct iio_dev *indio_dev,
 	at91_adc_readl(st, LCDR);
 
 pm_runtime_put:
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 	return ret;
 }
@@ -1810,10 +1826,19 @@ static int at91_adc_read_info_locked(struct iio_dev *indio_dev,
 				     struct iio_chan_spec const *chan, int *val)
 {
 	struct at91_adc_state *st = iio_priv(indio_dev);
+	int ret;
 
-	guard(mutex)(&st->lock);
+	ret = iio_device_claim_direct_mode(indio_dev);
+	if (ret)
+		return ret;
 
-	return at91_adc_read_info_raw(indio_dev, chan, val);
+	mutex_lock(&st->lock);
+	ret = at91_adc_read_info_raw(indio_dev, chan, val);
+	mutex_unlock(&st->lock);
+
+	iio_device_release_direct_mode(indio_dev);
+
+	return ret;
 }
 
 static void at91_adc_temp_sensor_configure(struct at91_adc_state *st,
@@ -1858,11 +1883,14 @@ static int at91_adc_read_temp(struct iio_dev *indio_dev,
 	u32 tmp;
 	int ret, vbg, vtemp;
 
-	guard(mutex)(&st->lock);
+	ret = iio_device_claim_direct_mode(indio_dev);
+	if (ret)
+		return ret;
+	mutex_lock(&st->lock);
 
 	ret = pm_runtime_resume_and_get(st->dev);
 	if (ret < 0)
-		return ret;
+		goto unlock;
 
 	at91_adc_temp_sensor_configure(st, true);
 
@@ -1882,7 +1910,11 @@ static int at91_adc_read_temp(struct iio_dev *indio_dev,
 restore_config:
 	/* Revert previous settings. */
 	at91_adc_temp_sensor_configure(st, false);
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
+unlock:
+	mutex_unlock(&st->lock);
+	iio_device_release_direct_mode(indio_dev);
 	if (ret < 0)
 		return ret;
 
@@ -1904,16 +1936,10 @@ static int at91_adc_read_raw(struct iio_dev *indio_dev,
 			     int *val, int *val2, long mask)
 {
 	struct at91_adc_state *st = iio_priv(indio_dev);
-	int ret;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
-
-		ret = at91_adc_read_info_locked(indio_dev, chan, val);
-		iio_device_release_direct(indio_dev);
-		return ret;
+		return at91_adc_read_info_locked(indio_dev, chan, val);
 
 	case IIO_CHAN_INFO_SCALE:
 		*val = st->vref_uv / 1000;
@@ -1925,13 +1951,7 @@ static int at91_adc_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_PROCESSED:
 		if (chan->type != IIO_TEMP)
 			return -EINVAL;
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
-
-		ret = at91_adc_read_temp(indio_dev, chan, val);
-		iio_device_release_direct(indio_dev);
-
-		return ret;
+		return at91_adc_read_temp(indio_dev, chan, val);
 
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		*val = at91_adc_get_sample_freq(st);
@@ -1959,26 +1979,28 @@ static int at91_adc_write_raw(struct iio_dev *indio_dev,
 		if (val == st->oversampling_ratio)
 			return 0;
 
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
 		mutex_lock(&st->lock);
 		/* update ratio */
 		ret = at91_adc_config_emr(st, val, 0);
 		mutex_unlock(&st->lock);
-		iio_device_release_direct(indio_dev);
+		iio_device_release_direct_mode(indio_dev);
 		return ret;
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		if (val < st->soc_info.min_sample_rate ||
 		    val > st->soc_info.max_sample_rate)
 			return -EINVAL;
 
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
 		mutex_lock(&st->lock);
 		at91_adc_setup_samp_freq(indio_dev, val,
 					 st->soc_info.startup_time, 0);
 		mutex_unlock(&st->lock);
-		iio_device_release_direct(indio_dev);
+		iio_device_release_direct_mode(indio_dev);
 		return 0;
 	default:
 		return -EINVAL;
@@ -2171,7 +2193,7 @@ static ssize_t at91_adc_get_fifo_state(struct device *dev,
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct at91_adc_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", !!st->dma_st.dma_chan);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", !!st->dma_st.dma_chan);
 }
 
 static ssize_t at91_adc_get_watermark(struct device *dev,
@@ -2180,22 +2202,35 @@ static ssize_t at91_adc_get_watermark(struct device *dev,
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct at91_adc_state *st = iio_priv(indio_dev);
 
-	return sysfs_emit(buf, "%d\n", st->dma_st.watermark);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", st->dma_st.watermark);
+}
+
+static ssize_t hwfifo_watermark_min_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	return sysfs_emit(buf, "%s\n", "2");
+}
+
+static ssize_t hwfifo_watermark_max_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	return sysfs_emit(buf, "%s\n", AT91_HWFIFO_MAX_SIZE_STR);
 }
 
 static IIO_DEVICE_ATTR(hwfifo_enabled, 0444,
 		       at91_adc_get_fifo_state, NULL, 0);
 static IIO_DEVICE_ATTR(hwfifo_watermark, 0444,
 		       at91_adc_get_watermark, NULL, 0);
+static IIO_DEVICE_ATTR_RO(hwfifo_watermark_min, 0);
+static IIO_DEVICE_ATTR_RO(hwfifo_watermark_max, 0);
 
-IIO_STATIC_CONST_DEVICE_ATTR(hwfifo_watermark_min, "2");
-IIO_STATIC_CONST_DEVICE_ATTR(hwfifo_watermark_max, AT91_HWFIFO_MAX_SIZE_STR);
-
-static const struct iio_dev_attr *at91_adc_fifo_attributes[] = {
-	&iio_dev_attr_hwfifo_watermark_min,
-	&iio_dev_attr_hwfifo_watermark_max,
-	&iio_dev_attr_hwfifo_watermark,
-	&iio_dev_attr_hwfifo_enabled,
+static const struct attribute *at91_adc_fifo_attributes[] = {
+	&iio_dev_attr_hwfifo_watermark_min.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark_max.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark.dev_attr.attr,
+	&iio_dev_attr_hwfifo_enabled.dev_attr.attr,
 	NULL,
 };
 
@@ -2212,7 +2247,7 @@ static int at91_adc_buffer_and_trigger_init(struct device *dev,
 					    struct iio_dev *indio)
 {
 	struct at91_adc_state *st = iio_priv(indio);
-	const struct iio_dev_attr **fifo_attrs;
+	const struct attribute **fifo_attrs;
 	int ret;
 
 	if (st->selected_trig->hw_trig)
@@ -2390,8 +2425,12 @@ static int at91_adc_probe(struct platform_device *pdev)
 	st->dma_st.phys_addr = res->start;
 
 	st->irq = platform_get_irq(pdev, 0);
-	if (st->irq < 0)
+	if (st->irq <= 0) {
+		if (!st->irq)
+			st->irq = -ENXIO;
+
 		return st->irq;
+	}
 
 	st->per_clk = devm_clk_get(&pdev->dev, "adc_clk");
 	if (IS_ERR(st->per_clk))
@@ -2456,6 +2495,7 @@ static int at91_adc_probe(struct platform_device *pdev)
 	dev_info(&pdev->dev, "version: %x\n",
 		 readl_relaxed(st->base + st->soc_info.platform->layout->VERSION));
 
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 
 	return 0;
@@ -2475,7 +2515,7 @@ reg_disable:
 	return ret;
 }
 
-static void at91_adc_remove(struct platform_device *pdev)
+static int at91_adc_remove(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct at91_adc_state *st = iio_priv(indio_dev);
@@ -2490,6 +2530,8 @@ static void at91_adc_remove(struct platform_device *pdev)
 
 	regulator_disable(st->vref);
 	regulator_disable(st->reg);
+
+	return 0;
 }
 
 static int at91_adc_suspend(struct device *dev)
@@ -2557,6 +2599,7 @@ static int at91_adc_resume(struct device *dev)
 		at91_adc_configure_trigger_registers(st, true);
 	}
 
+	pm_runtime_mark_last_busy(st->dev);
 	pm_runtime_put_autosuspend(st->dev);
 
 	return 0;

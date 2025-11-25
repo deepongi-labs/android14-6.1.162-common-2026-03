@@ -736,5 +736,4 @@ void go7007_update_board(struct go7007 *go)
 }
 EXPORT_SYMBOL(go7007_update_board);
 
-MODULE_DESCRIPTION("WIS GO7007 MPEG encoder support");
 MODULE_LICENSE("GPL v2");

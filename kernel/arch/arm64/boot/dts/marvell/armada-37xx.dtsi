@@ -11,6 +11,8 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 
 / {
+	model = "Marvell Armada 37xx SoC";
+	compatible = "marvell,armada3700";
 	interrupt-parent = <&gic>;
 	#address-cells = <2>;
 	#size-cells = <2>;
@@ -31,11 +33,6 @@
 		 */
 		psci-area@4000000 {
 			reg = <0 0x4000000 0 0x200000>;
-			no-map;
-		};
-
-		tee@4400000 {
-			reg = <0 0x4400000 0 0x1000000>;
 			no-map;
 		};
 	};
@@ -66,7 +63,7 @@
 	};
 
 	pmu {
-		compatible = "arm,cortex-a53-pmu";
+		compatible = "arm,armv8-pmuv3";
 		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH>;
 	};
 
@@ -76,7 +73,7 @@
 		#size-cells = <2>;
 		ranges;
 
-		bus@d0000000 {
+		internal-regs@d0000000 {
 			#address-cells = <1>;
 			#size-cells = <1>;
 			compatible = "simple-bus";
@@ -524,7 +521,6 @@
 			pcie_intc: interrupt-controller {
 				interrupt-controller;
 				#interrupt-cells = <1>;
-				#address-cells = <0>;
 			};
 		};
 	};

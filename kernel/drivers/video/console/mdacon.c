@@ -427,8 +427,13 @@ static inline u16 *mda_addr(unsigned int x, unsigned int y)
 	return mda_vram_base + y * mda_num_columns + x;
 }
 
-static void mdacon_putcs(struct vc_data *c, const u16 *s, unsigned int count,
-			 unsigned int y, unsigned int x)
+static void mdacon_putc(struct vc_data *c, int ch, int y, int x)
+{
+	scr_writew(mda_convert_attr(ch), mda_addr(x, y));
+}
+
+static void mdacon_putcs(struct vc_data *c, const unsigned short *s,
+		         int count, int y, int x)
 {
 	u16 *dest = mda_addr(x, y);
 
@@ -443,6 +448,9 @@ static void mdacon_clear(struct vc_data *c, unsigned int y, unsigned int x,
 	u16 *dest = mda_addr(x, y);
 	u16 eattr = mda_convert_attr(c->vc_video_erase_char);
 
+	if (width <= 0)
+		return;
+
 	scr_memsetw(dest, eattr, width * 2);
 }
 
@@ -451,8 +459,7 @@ static bool mdacon_switch(struct vc_data *c)
 	return true;	/* redrawing needed */
 }
 
-static bool mdacon_blank(struct vc_data *c, enum vesa_blank_mode blank,
-			 bool mode_switch)
+static int mdacon_blank(struct vc_data *c, int blank, int mode_switch)
 {
 	if (mda_type == TYPE_MDA) {
 		if (blank) 
@@ -460,20 +467,20 @@ static bool mdacon_blank(struct vc_data *c, enum vesa_blank_mode blank,
 				mda_convert_attr(c->vc_video_erase_char),
 				c->vc_screenbuf_size);
 		/* Tell console.c that it has to restore the screen itself */
-		return true;
+		return 1;
 	} else {
 		if (blank)
 			outb_p(0x00, mda_mode_port);	/* disable video */
 		else
 			outb_p(MDA_MODE_VIDEO_EN | MDA_MODE_BLINK_EN, 
 				mda_mode_port);
-		return false;
+		return 0;
 	}
 }
 
-static void mdacon_cursor(struct vc_data *c, bool enable)
+static void mdacon_cursor(struct vc_data *c, int mode)
 {
-	if (!enable) {
+	if (mode == CM_ERASE) {
 		mda_set_cursor(mda_vram_len - 1);
 		return;
 	}
@@ -532,6 +539,7 @@ static const struct consw mda_con = {
 	.con_init =		mdacon_init,
 	.con_deinit =		mdacon_deinit,
 	.con_clear =		mdacon_clear,
+	.con_putc =		mdacon_putc,
 	.con_putcs =		mdacon_putcs,
 	.con_cursor =		mdacon_cursor,
 	.con_scroll =		mdacon_scroll,
@@ -561,6 +569,5 @@ static void __exit mda_console_exit(void)
 module_init(mda_console_init);
 module_exit(mda_console_exit);
 
-MODULE_DESCRIPTION("MDA based console driver");
 MODULE_LICENSE("GPL");
 

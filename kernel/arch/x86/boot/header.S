@@ -43,24 +43,23 @@ SYSSEG		= 0x1000		/* historical load address >> 4 */
 	.section ".bstext", "ax"
 #ifdef CONFIG_EFI_STUB
 	# "MZ", MS-DOS header
-	.word	IMAGE_DOS_SIGNATURE
-	.org	0x38
+	.word	MZ_MAGIC
+	.org	0x3c
 	#
 	# Offset to the PE header.
 	#
-	.long	LINUX_PE_MAGIC
 	.long	pe_header
 pe_header:
-	.long	IMAGE_NT_SIGNATURE
+	.long	PE_MAGIC
 
 coff_header:
 #ifdef CONFIG_X86_32
 	.set	image_file_add_flags, IMAGE_FILE_32BIT_MACHINE
-	.set	pe_opt_magic, IMAGE_NT_OPTIONAL_HDR32_MAGIC
+	.set	pe_opt_magic, PE_OPT_MAGIC_PE32
 	.word	IMAGE_FILE_MACHINE_I386
 #else
 	.set	image_file_add_flags, 0
-	.set	pe_opt_magic, IMAGE_NT_OPTIONAL_HDR64_MAGIC
+	.set	pe_opt_magic, PE_OPT_MAGIC_PE32PLUS
 	.word	IMAGE_FILE_MACHINE_AMD64
 #endif
 	.word	section_count			# nr_sections
@@ -111,7 +110,11 @@ extra_header_fields:
 	.long	salign				# SizeOfHeaders
 	.long	0				# CheckSum
 	.word	IMAGE_SUBSYSTEM_EFI_APPLICATION	# Subsystem (EFI application)
-	.word	IMAGE_DLLCHARACTERISTICS_NX_COMPAT	# DllCharacteristics
+#ifdef CONFIG_EFI_DXE_MEM_ATTRIBUTES
+	.word	IMAGE_DLL_CHARACTERISTICS_NX_COMPAT	# DllCharacteristics
+#else
+	.word	0				# DllCharacteristics
+#endif
 #ifdef CONFIG_X86_32
 	.long	0				# SizeOfStackReserve
 	.long	0				# SizeOfStackCommit
@@ -179,11 +182,15 @@ pecompat_fstart:
 #else
 	.set	pecompat_fstart, setup_size
 #endif
-	.ascii	".text\0\0\0"
-	.long	textsize            		# VirtualSize
-	.long	setup_size			# VirtualAddress
-	.long	textsize			# SizeOfRawData
-	.long	setup_size			# PointerToRawData
+	.ascii	".text"
+	.byte	0
+	.byte	0
+	.byte	0
+	.long	ZO__data
+	.long	setup_size
+	.long	ZO__data			# Size of initialized data
+						# on disk
+	.long	setup_size
 	.long	0				# PointerToRelocations
 	.long	0				# PointerToLineNumbers
 	.word	0				# NumberOfRelocations
@@ -191,23 +198,6 @@ pecompat_fstart:
 	.long	IMAGE_SCN_CNT_CODE		| \
 		IMAGE_SCN_MEM_READ		| \
 		IMAGE_SCN_MEM_EXECUTE		# Characteristics
-
-#ifdef CONFIG_EFI_SBAT
-	.ascii	".sbat\0\0\0"
-	.long	ZO__esbat - ZO__sbat            # VirtualSize
-	.long	setup_size + ZO__sbat           # VirtualAddress
-	.long	ZO__esbat - ZO__sbat            # SizeOfRawData
-	.long	setup_size + ZO__sbat           # PointerToRawData
-
-	.long	0, 0, 0
-	.long	IMAGE_SCN_CNT_INITIALIZED_DATA	| \
-		IMAGE_SCN_MEM_READ		| \
-		IMAGE_SCN_MEM_DISCARDABLE	# Characteristics
-
-	.set	textsize, ZO__sbat
-#else
-	.set	textsize, ZO__data
-#endif
 
 	.ascii	".data\0\0\0"
 	.long	ZO__end - ZO__data		# VirtualSize
@@ -267,7 +257,7 @@ start_sys_seg:	.word	SYSSEG		# obsolete and meaningless, but just
 
 type_of_loader:	.byte	0		# 0 means ancient bootloader, newer
 					# bootloaders know to change this.
-					# See Documentation/arch/x86/boot.rst for
+					# See Documentation/x86/boot.rst for
 					# assigned ids
 
 # flags, unused bits must be zero (RFU) bit within loadflags
@@ -374,7 +364,11 @@ xloadflags:
 #endif
 
 #ifdef CONFIG_X86_64
+#ifdef CONFIG_X86_5LEVEL
 #define XLF56 (XLF_5LEVEL|XLF_5LEVEL_ENABLED)
+#else
+#define XLF56 XLF_5LEVEL
+#endif
 #else
 #define XLF56 0
 #endif
@@ -594,7 +588,7 @@ start_of_setup:
 	xorl	%eax, %eax
 	subw	%di, %cx
 	shrw	$2, %cx
-	rep stosl
+	rep; stosl
 
 # Jump to C code (should not return)
 	calll	main

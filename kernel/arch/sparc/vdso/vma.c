@@ -243,9 +243,8 @@ static int stick_patch(const struct vdso_image *image, struct vdso_elfinfo *e, b
  * Allocate pages for the vdso and vvar, and copy in the vdso text from the
  * kernel image.
  */
-static int __init init_vdso_image(const struct vdso_image *image,
-				  struct vm_special_mapping *vdso_mapping,
-				  bool elf64)
+int __init init_vdso_image(const struct vdso_image *image,
+			   struct vm_special_mapping *vdso_mapping, bool elf64)
 {
 	int cnpages = (image->size) / PAGE_SIZE;
 	struct page *dp, **dpp = NULL;
@@ -355,7 +354,7 @@ static unsigned long vdso_addr(unsigned long start, unsigned int len)
 	unsigned int offset;
 
 	/* This loses some more bits than a modulo, but is cheaper */
-	offset = get_random_u32_below(PTRS_PER_PTE);
+	offset = prandom_u32_max(PTRS_PER_PTE);
 	return start + (offset << PAGE_SHIFT);
 }
 

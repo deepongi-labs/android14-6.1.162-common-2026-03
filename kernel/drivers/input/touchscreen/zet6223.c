@@ -11,7 +11,7 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/regulator/consumer.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #define ZET6223_MAX_FINGERS		16
 #define ZET6223_MAX_PKT_SIZE		(3 + 4 * ZET6223_MAX_FINGERS)
@@ -25,6 +25,8 @@
 struct zet6223_ts {
 	struct i2c_client *client;
 	struct input_dev *input;
+	struct regulator *vcc;
+	struct regulator *vio;
 	struct touchscreen_properties prop;
 	struct regulator_bulk_data supplies[2];
 	u16 max_x;
@@ -165,7 +167,8 @@ static int zet6223_query_device(struct zet6223_ts *ts)
 	return 0;
 }
 
-static int zet6223_probe(struct i2c_client *client)
+static int zet6223_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct zet6223_ts *ts;
@@ -236,7 +239,7 @@ static const struct of_device_id zet6223_of_match[] = {
 MODULE_DEVICE_TABLE(of, zet6223_of_match);
 
 static const struct i2c_device_id zet6223_id[] = {
-	{ "zet6223" },
+	{ "zet6223", 0},
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, zet6223_id);

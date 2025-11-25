@@ -87,7 +87,6 @@ struct bow_context {
 	struct mutex ranges_lock; /* Hold to access this struct and/or ranges */
 	struct rb_root ranges;
 	struct dm_kobject_holder kobj_holder;	/* for sysfs attributes */
-	struct mutex state_lock;
 	atomic_t state; /* One of the enum state values above */
 	u64 trims_total;
 	struct log_sector *log_sector;
@@ -95,13 +94,13 @@ struct bow_context {
 	bool forward_trims;
 };
 
-static sector_t range_top(struct bow_range *br)
+sector_t range_top(struct bow_range *br)
 {
 	return container_of(rb_next(&br->node), struct bow_range, node)
 		->sector;
 }
 
-static u64 range_size(struct bow_range *br)
+u64 range_size(struct bow_range *br)
 {
 	return (range_top(br) - br->sector) * SECTOR_SIZE;
 }
@@ -146,8 +145,8 @@ static struct bow_range *find_first_overlapping_range(struct rb_root *ranges,
 	return br;
 }
 
-static void add_before(struct rb_root *ranges, struct bow_range *new_br,
-		       struct bow_range *existing)
+void add_before(struct rb_root *ranges, struct bow_range *new_br,
+		struct bow_range *existing)
 {
 	struct rb_node *parent = &(existing->node);
 	struct rb_node **link = &(parent->rb_left);
@@ -527,12 +526,6 @@ static ssize_t state_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return -EINVAL;
 	}
 
-	/* Block new writes until state change is complete. */
-	mutex_lock(&bc->state_lock);
-
-	/* Flush any already-queued writes before the state change. */
-	flush_workqueue(bc->workqueue);
-
 	mutex_lock(&bc->ranges_lock);
 	original_state = atomic_read(&bc->state);
 	if (state != original_state + 1) {
@@ -568,8 +561,6 @@ static ssize_t state_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 bad:
 	mutex_unlock(&bc->ranges_lock);
-	mutex_unlock(&bc->state_lock);
-
 	return ret;
 }
 
@@ -745,7 +736,6 @@ static int dm_bow_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	init_completion(&bc->kobj_holder.completion);
-	mutex_init(&bc->state_lock);
 	mutex_init(&bc->ranges_lock);
 	bc->ranges = RB_ROOT;
 	bc->bufio = dm_bufio_client_create(bc->dev->bdev, bc->block_size, 1, 0,
@@ -802,7 +792,7 @@ bad:
 	return ret;
 }
 
-static void dm_bow_resume(struct dm_target *ti)
+void dm_bow_resume(struct dm_target *ti)
 {
 	struct mapped_device *md = dm_table_get_md(ti->table);
 	struct bow_context *bc = ti->private;
@@ -1112,7 +1102,7 @@ static int remove_trim(struct bow_context *bc, struct bio *bio)
 	return DM_MAPIO_REMAPPED;
 }
 
-static int remap_unless_illegal_trim(struct bow_context *bc, struct bio *bio)
+int remap_unless_illegal_trim(struct bow_context *bc, struct bio *bio)
 {
 	if (!bc->forward_trims && bio_op(bio) == REQ_OP_DISCARD) {
 		bio->bi_status = BLK_STS_NOTSUPP;
@@ -1131,8 +1121,6 @@ static int dm_bow_map(struct dm_target *ti, struct bio *bio)
 	int ret = DM_MAPIO_REMAPPED;
 	struct bow_context *bc = ti->private;
 
-	/* Fast path when already committed or when performing a read. */
-
 	if (likely(bc->state.counter == COMMITTED))
 		return remap_unless_illegal_trim(bc, bio);
 
@@ -1141,13 +1129,6 @@ static int dm_bow_map(struct dm_target *ti, struct bio *bio)
 
 	if (bio->bi_iter.bi_size == 0)
 		return remap_unless_illegal_trim(bc, bio);
-
-	/*
-	 * Fall back to the slower path when we may be in TRIM/CHECKPOINT.
-	 * Operations must wait for any pending state changes to complete.
-	 */
-
-	mutex_lock(&bc->state_lock);
 
 	if (atomic_read(&bc->state) != COMMITTED) {
 		enum state state;
@@ -1170,8 +1151,6 @@ static int dm_bow_map(struct dm_target *ti, struct bio *bio)
 		/* else pass-through */
 		mutex_unlock(&bc->ranges_lock);
 	}
-
-	mutex_unlock(&bc->state_lock);
 
 	if (ret == DM_MAPIO_REMAPPED)
 		return remap_unless_illegal_trim(bc, bio);
@@ -1283,10 +1262,7 @@ static void dm_bow_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int dm_bow_prepare_ioctl(struct dm_target *ti,
-				struct block_device **bdev,
-				unsigned int cmd, unsigned long arg,
-				bool *forward)
+int dm_bow_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
 	struct bow_context *bc = ti->private;
 	struct dm_dev *dev = bc->dev;
@@ -1319,7 +1295,7 @@ static struct target_type bow_target = {
 	.io_hints = dm_bow_io_hints,
 };
 
-static int __init dm_bow_init(void)
+int __init dm_bow_init(void)
 {
 	int r = dm_register_target(&bow_target);
 
@@ -1328,7 +1304,7 @@ static int __init dm_bow_init(void)
 	return r;
 }
 
-static void dm_bow_exit(void)
+void dm_bow_exit(void)
 {
 	dm_unregister_target(&bow_target);
 }

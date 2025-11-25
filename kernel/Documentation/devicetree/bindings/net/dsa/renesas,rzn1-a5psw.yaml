@@ -14,7 +14,7 @@ description: |
   handles 4 ports + 1 CPU management port.
 
 allOf:
-  - $ref: dsa.yaml#/$defs/ethernet-ports
+  - $ref: dsa.yaml#
 
 properties:
   compatible:
@@ -61,17 +61,23 @@ properties:
 
   ethernet-ports:
     type: object
-    additionalProperties: true
+    properties:
+      '#address-cells':
+        const: 1
+      '#size-cells':
+        const: 0
+
     patternProperties:
       "^(ethernet-)?port@[0-4]$":
         type: object
-        additionalProperties: true
+        description: Ethernet switch ports
+
         properties:
           pcs-handle:
-            maxItems: 1
             description:
               phandle pointing to a PCS sub-node compatible with
               renesas,rzn1-miic.yaml#
+            $ref: /schemas/types.yaml#/definitions/phandle
 
 unevaluatedProperties: false
 

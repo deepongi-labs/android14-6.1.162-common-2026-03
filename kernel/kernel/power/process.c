@@ -20,6 +20,8 @@
 #include <trace/events/power.h>
 #include <linux/cpuset.h>
 
+#include <trace/hooks/power.h>
+
 /*
  * Timeout for stopping processes
  */
@@ -85,24 +87,30 @@ static int try_to_freeze_tasks(bool user_only)
 	elapsed = ktime_sub(end, start);
 	elapsed_msecs = ktime_to_ms(elapsed);
 
-	if (todo) {
-		pr_err("Freezing %s %s after %d.%03d seconds "
-		       "(%d tasks refusing to freeze, wq_busy=%d):\n", what,
-		       wakeup ? "aborted" : "failed",
+	if (wakeup) {
+		pr_err("Freezing of tasks aborted after %d.%03d seconds",
+		       elapsed_msecs / 1000, elapsed_msecs % 1000);
+	} else if (todo) {
+		pr_err("Freezing of tasks failed after %d.%03d seconds"
+		       " (%d tasks refusing to freeze, wq_busy=%d):\n",
 		       elapsed_msecs / 1000, elapsed_msecs % 1000,
 		       todo - wq_busy, wq_busy);
 
 		if (wq_busy)
-			show_freezable_workqueues();
+			show_all_workqueues();
 
-		if (!wakeup || pm_debug_messages_on) {
+		if (pm_debug_messages_on) {
 			read_lock(&tasklist_lock);
 			for_each_process_thread(g, p) {
-				if (p != current && freezing(p) && !frozen(p))
+				if (p != current && freezing(p) && !frozen(p)) {
 					sched_show_task(p);
+					trace_android_vh_try_to_freeze_todo_unfrozen(p);
+				}
 			}
 			read_unlock(&tasklist_lock);
 		}
+
+		trace_android_vh_try_to_freeze_todo(todo, elapsed_msecs, wq_busy);
 	} else {
 		pr_info("Freezing %s completed (elapsed %d.%03d seconds)\n",
 			what, elapsed_msecs / 1000, elapsed_msecs % 1000);
@@ -132,7 +140,6 @@ int freeze_processes(void)
 	if (!pm_freezing)
 		static_branch_inc(&freezer_active);
 
-	pm_wakeup_clear(0);
 	pm_freezing = true;
 	error = try_to_freeze_tasks(true);
 	if (!error)
@@ -189,10 +196,12 @@ void thaw_processes(void)
 
 	oom_killer_enable();
 
-	pr_info("Restarting tasks: Starting\n");
+	pr_info("Restarting tasks ... ");
 
 	__usermodehelper_set_disable_depth(UMH_FREEZING);
 	thaw_workqueues();
+
+	cpuset_wait_for_hotplug();
 
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
@@ -208,7 +217,7 @@ void thaw_processes(void)
 	usermodehelper_enable();
 
 	schedule();
-	pr_info("Restarting tasks: Done\n");
+	pr_cont("done.\n");
 	trace_suspend_resume(TPS("thaw_processes"), 0, false);
 }
 
@@ -217,7 +226,7 @@ void thaw_kernel_threads(void)
 	struct task_struct *g, *p;
 
 	pm_nosig_freezing = false;
-	pr_info("Restarting kernel threads ...\n");
+	pr_info("Restarting kernel threads ... ");
 
 	thaw_workqueues();
 
@@ -229,5 +238,5 @@ void thaw_kernel_threads(void)
 	read_unlock(&tasklist_lock);
 
 	schedule();
-	pr_info("Done restarting kernel threads.\n");
+	pr_cont("done.\n");
 }

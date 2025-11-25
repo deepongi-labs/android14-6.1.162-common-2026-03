@@ -9,10 +9,9 @@
  * Core code for the Via multifunction framebuffer device.
  */
 #include <linux/aperture.h>
-#include <linux/export.h>
 #include <linux/via-core.h>
 #include <linux/via_i2c.h>
-#include "via-gpio.h"
+#include <linux/via-gpio.h>
 #include "global.h"
 
 #include <linux/module.h>
@@ -725,9 +724,6 @@ static struct pci_driver via_driver = {
 static int __init via_core_init(void)
 {
 	int ret;
-
-	if (fb_modesetting_disabled("viafb"))
-		return -ENODEV;
 
 	ret = viafb_init();
 	if (ret)

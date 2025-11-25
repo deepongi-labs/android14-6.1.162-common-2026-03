@@ -136,7 +136,7 @@ static int pxa_check_atapi_dma(struct ata_queued_cmd *qc)
 	return -EOPNOTSUPP;
 }
 
-static const struct scsi_host_template pxa_ata_sht = {
+static struct scsi_host_template pxa_ata_sht = {
 	ATA_BMDMA_SHT(DRV_NAME),
 };
 
@@ -280,9 +280,10 @@ static int pxa_ata_probe(struct platform_device *pdev)
 	/*
 	 * Request the DMA channel
 	 */
-	data->dma_chan = dma_request_chan(&pdev->dev, "data");
-	if (IS_ERR(data->dma_chan))
-		return PTR_ERR(data->dma_chan);
+	data->dma_chan =
+		dma_request_slave_channel(&pdev->dev, "data");
+	if (!data->dma_chan)
+		return -EBUSY;
 	ret = dmaengine_slave_config(data->dma_chan, &config);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "dma configuration failed: %d\n", ret);
@@ -300,7 +301,7 @@ static int pxa_ata_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void pxa_ata_remove(struct platform_device *pdev)
+static int pxa_ata_remove(struct platform_device *pdev)
 {
 	struct ata_host *host = platform_get_drvdata(pdev);
 	struct pata_pxa_data *data = host->ports[0]->private_data;
@@ -308,6 +309,8 @@ static void pxa_ata_remove(struct platform_device *pdev)
 	dma_release_channel(data->dma_chan);
 
 	ata_host_detach(host);
+
+	return 0;
 }
 
 static struct platform_driver pxa_ata_driver = {

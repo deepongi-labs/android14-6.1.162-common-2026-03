@@ -28,7 +28,7 @@ description: |
     SLEEP   - Triggered by F/W
     WAKE    - Triggered by F/W
     CONTROL - Triggered by F/W
-  See also: <dt-bindings/soc/qcom,rpmh-rsc.h>
+  See also:: <dt-bindings/soc/qcom,rpmh-rsc.h>
 
   The order in which they are described in the DT, should match the hardware
   configuration.
@@ -44,13 +44,7 @@ description: |
 
 properties:
   compatible:
-    oneOf:
-      - items:
-          - enum:
-              - qcom,sc7180-rpmh-apps-rsc
-              - qcom,sdm845-rpmh-apps-rsc
-          - const: qcom,rpmh-rsc
-      - const: qcom,rpmh-rsc
+    const: qcom,rpmh-rsc
 
   interrupts:
     minItems: 1
@@ -105,9 +99,6 @@ properties:
       - const: drv-2
       - const: drv-3
 
-  power-domains:
-    maxItems: 1
-
   bcm-voter:
     $ref: /schemas/interconnect/qcom,bcm-voter.yaml#
 
@@ -118,9 +109,8 @@ properties:
     $ref: /schemas/power/qcom,rpmpd.yaml#
 
 patternProperties:
-  '^regulators(-[0-9])?$':
+  '-regulators$':
     $ref: /schemas/regulator/qcom,rpmh-regulator.yaml#
-    unevaluatedProperties: false
 
 required:
   - compatible
@@ -130,21 +120,6 @@ required:
   - qcom,tcs-offset
   - reg
   - reg-names
-
-allOf:
-  # Some platforms may lack a OSI-mode PSCI implementation, which implies the
-  # system power domain can't provide feedback about entering power collapse
-  - if:
-      not:
-        properties:
-          compatible:
-            contains:
-              enum:
-                - qcom,sc7180-rpmh-apps-rsc
-                - qcom,sdm845-rpmh-apps-rsc
-    then:
-      required:
-        - power-domains
 
 additionalProperties: false
 
@@ -176,7 +151,6 @@ examples:
                           <SLEEP_TCS   3>,
                           <WAKE_TCS    3>,
                           <CONTROL_TCS 1>;
-        power-domains = <&CLUSTER_PD>;
       };
 
   - |
@@ -200,7 +174,6 @@ examples:
                           <SLEEP_TCS   1>,
                           <WAKE_TCS    1>,
                           <CONTROL_TCS 0>;
-        power-domains = <&CLUSTER_PD>;
     };
 
   - |
@@ -224,7 +197,6 @@ examples:
                           <SLEEP_TCS   3>,
                           <WAKE_TCS    3>,
                           <CONTROL_TCS 0>;
-        power-domains = <&CLUSTER_PD>;
 
         clock-controller {
             compatible = "qcom,sm8350-rpmh-clk";

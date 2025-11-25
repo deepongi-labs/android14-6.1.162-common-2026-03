@@ -14,9 +14,7 @@ allOf:
 
 properties:
   compatible:
-    enum:
-      - xlnx,axi-iic-2.1
-      - xlnx,xps-iic-2.00.a
+    const: xlnx,xps-iic-2.00.a
 
   reg:
     maxItems: 1
@@ -31,13 +29,6 @@ properties:
     const: pclk
     description: |
       Input clock name.
-
-  clock-frequency:
-    description:
-      Optional I2C SCL clock frequency. If not specified, do not configure
-      in software, rely only on hardware design value.
-    default: 100000
-    enum: [ 100000, 400000, 1000000 ]
 
 required:
   - compatible

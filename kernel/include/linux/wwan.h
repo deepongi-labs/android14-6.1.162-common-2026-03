@@ -7,6 +7,7 @@
 #include <linux/poll.h>
 #include <linux/netdevice.h>
 #include <linux/types.h>
+#include <linux/android_kabi.h>
 
 /**
  * enum wwan_port_type - WWAN port types
@@ -15,10 +16,6 @@
  * @WWAN_PORT_QMI: Qcom modem/MSM interface for modem control
  * @WWAN_PORT_QCDM: Qcom Modem diagnostic interface
  * @WWAN_PORT_FIREHOSE: XML based command protocol
- * @WWAN_PORT_XMMRPC: Control protocol for Intel XMM modems
- * @WWAN_PORT_FASTBOOT: Fastboot protocol control
- * @WWAN_PORT_ADB: ADB protocol control
- * @WWAN_PORT_MIPC: MTK MIPC diagnostic interface
  *
  * @WWAN_PORT_MAX: Highest supported port types
  * @WWAN_PORT_UNKNOWN: Special value to indicate an unknown port type
@@ -30,10 +27,6 @@ enum wwan_port_type {
 	WWAN_PORT_QMI,
 	WWAN_PORT_QCDM,
 	WWAN_PORT_FIREHOSE,
-	WWAN_PORT_XMMRPC,
-	WWAN_PORT_FASTBOOT,
-	WWAN_PORT_ADB,
-	WWAN_PORT_MIPC,
 
 	/* Add new port types above this line */
 
@@ -68,15 +61,9 @@ struct wwan_port_ops {
 	int (*tx_blocking)(struct wwan_port *port, struct sk_buff *skb);
 	__poll_t (*tx_poll)(struct wwan_port *port, struct file *filp,
 			    poll_table *wait);
-};
 
-/** struct wwan_port_caps - The WWAN port capbilities
- * @frag_len: WWAN port TX fragments length
- * @headroom_len: WWAN port TX fragments reserved headroom length
- */
-struct wwan_port_caps {
-	size_t frag_len;
-	unsigned int headroom_len;
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /**
@@ -84,7 +71,6 @@ struct wwan_port_caps {
  * @parent: Device to use as parent and shared by all WWAN ports
  * @type: WWAN port type
  * @ops: WWAN port operations
- * @caps: WWAN port capabilities
  * @drvdata: Pointer to caller driver data
  *
  * Allocate and register a new WWAN port. The port will be automatically exposed
@@ -97,12 +83,11 @@ struct wwan_port_caps {
  *
  * This function must be balanced with a call to wwan_remove_port().
  *
- * Returns: a valid pointer to wwan_port on success or PTR_ERR on failure
+ * Returns a valid pointer to wwan_port on success or PTR_ERR on failure
  */
 struct wwan_port *wwan_create_port(struct device *parent,
 				   enum wwan_port_type type,
 				   const struct wwan_port_ops *ops,
-				   struct wwan_port_caps *caps,
 				   void *drvdata);
 
 /**
@@ -184,6 +169,9 @@ struct wwan_ops {
 		       u32 if_id, struct netlink_ext_ack *extack);
 	void (*dellink)(void *ctxt, struct net_device *dev,
 			struct list_head *head);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 int wwan_register_ops(struct device *parent, const struct wwan_ops *ops,

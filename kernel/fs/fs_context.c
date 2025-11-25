@@ -161,24 +161,21 @@ int vfs_parse_fs_param(struct fs_context *fc, struct fs_parameter *param)
 EXPORT_SYMBOL(vfs_parse_fs_param);
 
 /**
- * vfs_parse_fs_qstr - Convenience function to just parse a string.
- * @fc: Filesystem context.
- * @key: Parameter name.
- * @value: Default value.
+ * vfs_parse_fs_string - Convenience function to just parse a string.
  */
-int vfs_parse_fs_qstr(struct fs_context *fc, const char *key,
-			const struct qstr *value)
+int vfs_parse_fs_string(struct fs_context *fc, const char *key,
+			const char *value, size_t v_size)
 {
 	int ret;
 
 	struct fs_parameter param = {
 		.key	= key,
 		.type	= fs_value_is_flag,
-		.size	= value ? value->len : 0,
+		.size	= v_size,
 	};
 
 	if (value) {
-		param.string = kmemdup_nul(value->name, value->len, GFP_KERNEL);
+		param.string = kmemdup_nul(value, v_size, GFP_KERNEL);
 		if (!param.string)
 			return -ENOMEM;
 		param.type = fs_value_is_string;
@@ -188,22 +185,20 @@ int vfs_parse_fs_qstr(struct fs_context *fc, const char *key,
 	kfree(param.string);
 	return ret;
 }
-EXPORT_SYMBOL(vfs_parse_fs_qstr);
+EXPORT_SYMBOL(vfs_parse_fs_string);
 
 /**
- * vfs_parse_monolithic_sep - Parse key[=val][,key[=val]]* mount data
- * @fc: The superblock configuration to fill in.
+ * generic_parse_monolithic - Parse key[=val][,key[=val]]* mount data
+ * @ctx: The superblock configuration to fill in.
  * @data: The data to parse
- * @sep: callback for separating next option
  *
- * Parse a blob of data that's in key[=val][,key[=val]]* form with a custom
- * option separator callback.
+ * Parse a blob of data that's in key[=val][,key[=val]]* form.  This can be
+ * called from the ->monolithic_mount_data() fs_context operation.
  *
  * Returns 0 on success or the error returned by the ->parse_option() fs_context
  * operation on failure.
  */
-int vfs_parse_monolithic_sep(struct fs_context *fc, void *data,
-			     char *(*sep)(char **))
+int generic_parse_monolithic(struct fs_context *fc, void *data)
 {
 	char *options = data, *key;
 	int ret = 0;
@@ -215,44 +210,24 @@ int vfs_parse_monolithic_sep(struct fs_context *fc, void *data,
 	if (ret)
 		return ret;
 
-	while ((key = sep(&options)) != NULL) {
+	while ((key = strsep(&options, ",")) != NULL) {
 		if (*key) {
+			size_t v_len = 0;
 			char *value = strchr(key, '=');
 
 			if (value) {
-				if (unlikely(value == key))
+				if (value == key)
 					continue;
 				*value++ = 0;
+				v_len = strlen(value);
 			}
-			ret = vfs_parse_fs_string(fc, key, value);
+			ret = vfs_parse_fs_string(fc, key, value, v_len);
 			if (ret < 0)
 				break;
 		}
 	}
 
 	return ret;
-}
-EXPORT_SYMBOL(vfs_parse_monolithic_sep);
-
-static char *vfs_parse_comma_sep(char **s)
-{
-	return strsep(s, ",");
-}
-
-/**
- * generic_parse_monolithic - Parse key[=val][,key[=val]]* mount data
- * @fc: The superblock configuration to fill in.
- * @data: The data to parse
- *
- * Parse a blob of data that's in key[=val][,key[=val]]* form.  This can be
- * called from the ->monolithic_mount_data() fs_context operation.
- *
- * Returns 0 on success or the error returned by the ->parse_option() fs_context
- * operation on failure.
- */
-int generic_parse_monolithic(struct fs_context *fc, void *data)
-{
-	return vfs_parse_monolithic_sep(fc, data, vfs_parse_comma_sep);
 }
 EXPORT_SYMBOL(generic_parse_monolithic);
 
@@ -379,7 +354,7 @@ void fc_drop_locked(struct fs_context *fc)
 static void legacy_fs_context_free(struct fs_context *fc);
 
 /**
- * vfs_dup_fs_context - Duplicate a filesystem context.
+ * vfs_dup_fc_config: Duplicate a filesystem context.
  * @src_fc: The context to copy.
  */
 struct fs_context *vfs_dup_fs_context(struct fs_context *src_fc)
@@ -425,9 +400,7 @@ EXPORT_SYMBOL(vfs_dup_fs_context);
 
 /**
  * logfc - Log a message to a filesystem context
- * @log: The filesystem context to log to, or NULL to use printk.
- * @prefix: A string to prefix the output with, or NULL.
- * @level: 'w' for a warning, 'e' for an error.  Anything else is a notice.
+ * @fc: The filesystem context to log to.
  * @fmt: The format of the buffer.
  */
 void logfc(struct fc_log *log, const char *prefix, char level, const char *fmt, ...)
@@ -444,10 +417,6 @@ void logfc(struct fc_log *log, const char *prefix, char level, const char *fmt, 
 			break;
 		case 'e':
 			printk(KERN_ERR "%s%s%pV\n", prefix ? prefix : "",
-						prefix ? ": " : "", &vaf);
-			break;
-		case 'i':
-			printk(KERN_INFO "%s%s%pV\n", prefix ? prefix : "",
 						prefix ? ": " : "", &vaf);
 			break;
 		default:
@@ -494,7 +463,7 @@ static void put_fc_log(struct fs_context *fc)
 	if (log) {
 		if (refcount_dec_and_test(&log->usage)) {
 			fc->log.log = NULL;
-			for (i = 0; i < ARRAY_SIZE(log->buffer) ; i++)
+			for (i = 0; i <= 7; i++)
 				if (log->need_free & (1 << i))
 					kfree(log->buffer[i]);
 			kfree(log);
@@ -744,7 +713,6 @@ void vfs_clean_context(struct fs_context *fc)
 	security_free_mnt_opts(&fc->security);
 	kfree(fc->source);
 	fc->source = NULL;
-	fc->exclusive = false;
 
 	fc->purpose = FS_CONTEXT_FOR_RECONFIGURE;
 	fc->phase = FS_CONTEXT_AWAITING_RECONF;

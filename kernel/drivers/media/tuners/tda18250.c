@@ -741,7 +741,8 @@ static const struct dvb_tuner_ops tda18250_ops = {
 	.sleep = tda18250_sleep,
 };
 
-static int tda18250_probe(struct i2c_client *client)
+static int tda18250_probe(struct i2c_client *client,
+		const struct i2c_device_id *id)
 {
 	struct tda18250_config *cfg = client->dev.platform_data;
 	struct dvb_frontend *fe = cfg->fe;
@@ -868,7 +869,7 @@ static void tda18250_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id tda18250_id_table[] = {
-	{ "tda18250" },
+	{"tda18250", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, tda18250_id_table);

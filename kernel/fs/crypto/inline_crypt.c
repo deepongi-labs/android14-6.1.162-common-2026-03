@@ -15,7 +15,6 @@
 #include <linux/blk-crypto.h>
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
-#include <linux/export.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
@@ -40,9 +39,9 @@ static struct block_device **fscrypt_get_devices(struct super_block *sb,
 	return devs;
 }
 
-static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_inode_info *ci)
+static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_info *ci)
 {
-	const struct super_block *sb = ci->ci_inode->i_sb;
+	struct super_block *sb = ci->ci_inode->i_sb;
 	unsigned int flags = fscrypt_policy_flags(&ci->ci_policy);
 	int dun_bits;
 
@@ -90,7 +89,7 @@ static void fscrypt_log_blk_crypto_impl(struct fscrypt_mode *mode,
 }
 
 /* Enable inline encryption for this file if supported. */
-int fscrypt_select_encryption_impl(struct fscrypt_inode_info *ci,
+int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
 				   bool is_hw_wrapped_key)
 {
 	const struct inode *inode = ci->ci_inode;
@@ -132,8 +131,9 @@ int fscrypt_select_encryption_impl(struct fscrypt_inode_info *ci,
 	crypto_cfg.crypto_mode = ci->ci_mode->blk_crypto_mode;
 	crypto_cfg.data_unit_size = 1U << ci->ci_data_unit_bits;
 	crypto_cfg.dun_bytes = fscrypt_get_dun_bytes(ci);
-	crypto_cfg.key_type = is_hw_wrapped_key ?
-		BLK_CRYPTO_KEY_TYPE_HW_WRAPPED : BLK_CRYPTO_KEY_TYPE_RAW;
+	crypto_cfg.key_type =
+		is_hw_wrapped_key ? BLK_CRYPTO_KEY_TYPE_HW_WRAPPED :
+		BLK_CRYPTO_KEY_TYPE_STANDARD;
 
 	devs = fscrypt_get_devices(sb, &num_devs);
 	if (IS_ERR(devs))
@@ -154,15 +154,15 @@ out_free_devs:
 }
 
 int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
-				     const u8 *key_bytes, size_t key_size,
+				     const u8 *raw_key, size_t raw_key_size,
 				     bool is_hw_wrapped,
-				     const struct fscrypt_inode_info *ci)
+				     const struct fscrypt_info *ci)
 {
 	const struct inode *inode = ci->ci_inode;
 	struct super_block *sb = inode->i_sb;
 	enum blk_crypto_mode_num crypto_mode = ci->ci_mode->blk_crypto_mode;
 	enum blk_crypto_key_type key_type = is_hw_wrapped ?
-		BLK_CRYPTO_KEY_TYPE_HW_WRAPPED : BLK_CRYPTO_KEY_TYPE_RAW;
+		BLK_CRYPTO_KEY_TYPE_HW_WRAPPED : BLK_CRYPTO_KEY_TYPE_STANDARD;
 	struct blk_crypto_key *blk_key;
 	struct block_device **devs;
 	unsigned int num_devs;
@@ -173,7 +173,7 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 	if (!blk_key)
 		return -ENOMEM;
 
-	err = blk_crypto_init_key(blk_key, key_bytes, key_size, key_type,
+	err = blk_crypto_init_key(blk_key, raw_key, raw_key_size, key_type,
 				  crypto_mode, fscrypt_get_dun_bytes(ci),
 				  1U << ci->ci_data_unit_bits);
 	if (err) {
@@ -263,12 +263,11 @@ int fscrypt_derive_sw_secret(struct super_block *sb,
 
 bool __fscrypt_inode_uses_inline_crypto(const struct inode *inode)
 {
-	return fscrypt_get_inode_info_raw(inode)->ci_inlinecrypt;
+	return inode->i_crypt_info->ci_inlinecrypt;
 }
 EXPORT_SYMBOL_GPL(__fscrypt_inode_uses_inline_crypto);
 
-static void fscrypt_generate_dun(const struct fscrypt_inode_info *ci,
-				 u64 lblk_num,
+static void fscrypt_generate_dun(const struct fscrypt_info *ci, u64 lblk_num,
 				 u64 dun[BLK_CRYPTO_DUN_ARRAY_SIZE])
 {
 	u64 index = lblk_num << ci->ci_data_units_per_block_bits;
@@ -304,7 +303,7 @@ static void fscrypt_generate_dun(const struct fscrypt_inode_info *ci,
 void fscrypt_set_bio_crypt_ctx(struct bio *bio, const struct inode *inode,
 			       u64 first_lblk, gfp_t gfp_mask)
 {
-	const struct fscrypt_inode_info *ci;
+	const struct fscrypt_info *ci;
 	u64 dun[BLK_CRYPTO_DUN_ARRAY_SIZE];
 
 	if (fscrypt_inode_should_skip_dm_default_key(inode))
@@ -312,7 +311,7 @@ void fscrypt_set_bio_crypt_ctx(struct bio *bio, const struct inode *inode,
 
 	if (!fscrypt_inode_uses_inline_crypto(inode))
 		return;
-	ci = fscrypt_get_inode_info_raw(inode);
+	ci = inode->i_crypt_info;
 
 	fscrypt_generate_dun(ci, first_lblk, dun);
 	bio_crypt_set_ctx(bio, ci->ci_enc_key.blk_key, dun, gfp_mask);
@@ -324,7 +323,7 @@ static bool bh_get_inode_and_lblk_num(const struct buffer_head *bh,
 				      const struct inode **inode_ret,
 				      u64 *lblk_num_ret)
 {
-	struct folio *folio = bh->b_folio;
+	struct page *page = bh->b_page;
 	const struct address_space *mapping;
 	const struct inode *inode;
 
@@ -332,13 +331,14 @@ static bool bh_get_inode_and_lblk_num(const struct buffer_head *bh,
 	 * The ext4 journal (jbd2) can submit a buffer_head it directly created
 	 * for a non-pagecache page.  fscrypt doesn't care about these.
 	 */
-	mapping = folio_mapping(folio);
+	mapping = page_mapping(page);
 	if (!mapping)
 		return false;
 	inode = mapping->host;
 
 	*inode_ret = inode;
-	*lblk_num_ret = (folio_pos(folio) + bh_offset(bh)) >> inode->i_blkbits;
+	*lblk_num_ret = ((u64)page->index << (PAGE_SHIFT - inode->i_blkbits)) +
+			(bh_offset(bh) >> inode->i_blkbits);
 	return true;
 }
 
@@ -392,7 +392,6 @@ bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
 			   u64 next_lblk)
 {
 	const struct bio_crypt_ctx *bc = bio->bi_crypt_context;
-	const struct fscrypt_inode_info *ci;
 	u64 next_dun[BLK_CRYPTO_DUN_ARRAY_SIZE];
 
 	if (!!bc != fscrypt_inode_uses_inline_crypto(inode))
@@ -402,17 +401,16 @@ bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
 		return false;
 	if (!bc)
 		return true;
-	ci = fscrypt_get_inode_info_raw(inode);
 
 	/*
 	 * Comparing the key pointers is good enough, as all I/O for each key
 	 * uses the same pointer.  I.e., there's currently no need to support
 	 * merging requests where the keys are the same but the pointers differ.
 	 */
-	if (bc->bc_key != ci->ci_enc_key.blk_key)
+	if (bc->bc_key != inode->i_crypt_info->ci_enc_key.blk_key)
 		return false;
 
-	fscrypt_generate_dun(ci, next_lblk, next_dun);
+	fscrypt_generate_dun(inode->i_crypt_info, next_lblk, next_dun);
 	return bio_crypt_dun_is_contiguous(bc, bio->bi_iter.bi_size, next_dun);
 }
 EXPORT_SYMBOL_GPL(fscrypt_mergeable_bio);
@@ -506,7 +504,7 @@ EXPORT_SYMBOL_GPL(fscrypt_dio_supported);
  */
 u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk, u64 nr_blocks)
 {
-	const struct fscrypt_inode_info *ci;
+	const struct fscrypt_info *ci;
 	u32 dun;
 
 	if (!fscrypt_inode_uses_inline_crypto(inode))
@@ -515,7 +513,7 @@ u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk, u64 nr_blocks)
 	if (nr_blocks <= 1)
 		return nr_blocks;
 
-	ci = fscrypt_get_inode_info_raw(inode);
+	ci = inode->i_crypt_info;
 	if (!(fscrypt_policy_flags(&ci->ci_policy) &
 	      FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32))
 		return nr_blocks;

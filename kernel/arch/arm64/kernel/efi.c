@@ -9,13 +9,9 @@
 
 #include <linux/efi.h>
 #include <linux/init.h>
-#include <linux/kmemleak.h>
-#include <linux/screen_info.h>
-#include <linux/vmalloc.h>
 
 #include <asm/efi.h>
 #include <asm/stacktrace.h>
-#include <asm/vmap_stack.h>
 
 static bool region_is_misaligned(const efi_memory_desc_t *md)
 {
@@ -30,21 +26,13 @@ static bool region_is_misaligned(const efi_memory_desc_t *md)
  * executable, everything else can be mapped with the XN bits
  * set. Also take the new (optional) RO/XP bits into account.
  */
-static __init ptdesc_t create_mapping_protection(efi_memory_desc_t *md)
+static __init pteval_t create_mapping_protection(efi_memory_desc_t *md)
 {
 	u64 attr = md->attribute;
 	u32 type = md->type;
 
-	if (type == EFI_MEMORY_MAPPED_IO) {
-		pgprot_t prot = __pgprot(PROT_DEVICE_nGnRE);
-
-		if (arm64_is_protected_mmio(md->phys_addr,
-					    md->num_pages << EFI_PAGE_SHIFT))
-			prot = pgprot_encrypted(prot);
-		else
-			prot = pgprot_decrypted(prot);
-		return pgprot_val(prot);
-	}
+	if (type == EFI_MEMORY_MAPPED_IO)
+		return PROT_DEVICE_nGnRE;
 
 	if (region_is_misaligned(md)) {
 		static bool __initdata code_is_misaligned;
@@ -82,9 +70,13 @@ static __init ptdesc_t create_mapping_protection(efi_memory_desc_t *md)
 	return pgprot_val(PAGE_KERNEL_EXEC);
 }
 
+/* we will fill this structure from the stub, so don't put it in .bss */
+struct screen_info screen_info __section(".data");
+EXPORT_SYMBOL(screen_info);
+
 int __init efi_create_mapping(struct mm_struct *mm, efi_memory_desc_t *md)
 {
-	ptdesc_t prot_val = create_mapping_protection(md);
+	pteval_t prot_val = create_mapping_protection(md);
 	bool page_mappings_only = (md->type == EFI_RUNTIME_SERVICES_CODE ||
 				   md->type == EFI_RUNTIME_SERVICES_DATA);
 
@@ -105,33 +97,22 @@ int __init efi_create_mapping(struct mm_struct *mm, efi_memory_desc_t *md)
 	return 0;
 }
 
-struct set_perm_data {
-	const efi_memory_desc_t	*md;
-	bool			has_bti;
-};
-
 static int __init set_permissions(pte_t *ptep, unsigned long addr, void *data)
 {
-	struct set_perm_data *spd = data;
-	const efi_memory_desc_t *md = spd->md;
-	pte_t pte = __ptep_get(ptep);
+	efi_memory_desc_t *md = data;
+	pte_t pte = READ_ONCE(*ptep);
 
 	if (md->attribute & EFI_MEMORY_RO)
 		pte = set_pte_bit(pte, __pgprot(PTE_RDONLY));
 	if (md->attribute & EFI_MEMORY_XP)
 		pte = set_pte_bit(pte, __pgprot(PTE_PXN));
-	else if (system_supports_bti_kernel() && spd->has_bti)
-		pte = set_pte_bit(pte, __pgprot(PTE_GP));
-	__set_pte(ptep, pte);
+	set_pte(ptep, pte);
 	return 0;
 }
 
 int __init efi_set_mapping_permissions(struct mm_struct *mm,
-				       efi_memory_desc_t *md,
-				       bool has_bti)
+				       efi_memory_desc_t *md)
 {
-	struct set_perm_data data = { md, has_bti };
-
 	BUG_ON(md->type != EFI_RUNTIME_SERVICES_CODE &&
 	       md->type != EFI_RUNTIME_SERVICES_DATA);
 
@@ -147,7 +128,7 @@ int __init efi_set_mapping_permissions(struct mm_struct *mm,
 	 */
 	return apply_to_page_range(mm, md->virt_addr,
 				   md->num_pages << EFI_PAGE_SHIFT,
-				   set_permissions, &data);
+				   set_permissions, md);
 }
 
 /*
@@ -165,21 +146,7 @@ asmlinkage efi_status_t efi_handle_corrupted_x18(efi_status_t s, const char *f)
 	return s;
 }
 
-static DEFINE_RAW_SPINLOCK(efi_rt_lock);
-
-void arch_efi_call_virt_setup(void)
-{
-	efi_virtmap_load();
-	raw_spin_lock(&efi_rt_lock);
-	__efi_fpsimd_begin();
-}
-
-void arch_efi_call_virt_teardown(void)
-{
-	__efi_fpsimd_end();
-	raw_spin_unlock(&efi_rt_lock);
-	efi_virtmap_unload();
-}
+DEFINE_RAW_SPINLOCK(efi_rt_lock);
 
 asmlinkage u64 *efi_rt_stack_top __ro_after_init;
 
@@ -215,14 +182,14 @@ static int __init arm64_efi_rt_init(void)
 	if (!efi_enabled(EFI_RUNTIME_SERVICES))
 		return 0;
 
-	p = arch_alloc_vmap_stack(THREAD_SIZE, NUMA_NO_NODE);
-	if (!p) {
+	p = __vmalloc_node(THREAD_SIZE, THREAD_ALIGN, GFP_KERNEL,
+			   NUMA_NO_NODE, &&l);
+l:	if (!p) {
 		pr_warn("Failed to allocate EFI runtime stack\n");
 		clear_bit(EFI_RUNTIME_SERVICES, &efi.flags);
 		return -ENOMEM;
 	}
 
-	kmemleak_not_leak(p);
 	efi_rt_stack_top = p + THREAD_SIZE;
 	return 0;
 }

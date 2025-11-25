@@ -40,7 +40,6 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
-#include <net/gro.h>
 
 #include "gemini.h"
 
@@ -289,13 +288,13 @@ static void gmac_set_flow_control(struct net_device *netdev, bool tx, bool rx)
 	spin_unlock_irqrestore(&port->config_lock, flags);
 }
 
-static void gmac_adjust_link(struct net_device *netdev)
+static void gmac_speed_set(struct net_device *netdev)
 {
 	struct gemini_ethernet_port *port = netdev_priv(netdev);
 	struct phy_device *phydev = netdev->phydev;
 	union gmac_status status, old_status;
-	bool pause_tx = false;
-	bool pause_rx = false;
+	int pause_tx = 0;
+	int pause_rx = 0;
 
 	status.bits32 = readl(port->gmac_base + GMAC_STATUS);
 	old_status.bits32 = status.bits32;
@@ -330,9 +329,14 @@ static void gmac_adjust_link(struct net_device *netdev)
 	}
 
 	if (phydev->duplex == DUPLEX_FULL) {
-		phy_get_pause(phydev, &pause_tx, &pause_rx);
-		netdev_dbg(netdev, "set negotiated pause params pause TX = %s, pause RX = %s\n",
-			   pause_tx ? "ON" : "OFF", pause_rx ? "ON" : "OFF");
+		u16 lcladv = phy_read(phydev, MII_ADVERTISE);
+		u16 rmtadv = phy_read(phydev, MII_LPA);
+		u8 cap = mii_resolve_flowctrl_fdx(lcladv, rmtadv);
+
+		if (cap & FLOW_CTRL_RX)
+			pause_rx = 1;
+		if (cap & FLOW_CTRL_TX)
+			pause_tx = 1;
 	}
 
 	gmac_set_flow_control(netdev, pause_tx, pause_rx);
@@ -363,7 +367,7 @@ static int gmac_setup_phy(struct net_device *netdev)
 
 	phy = of_phy_get_and_connect(netdev,
 				     dev->of_node,
-				     gmac_adjust_link);
+				     gmac_speed_set);
 	if (!phy)
 		return -ENODEV;
 	netdev->phydev = phy;
@@ -1855,8 +1859,9 @@ static int gmac_open(struct net_device *netdev)
 	gmac_enable_tx_rx(netdev);
 	netif_tx_start_all_queues(netdev);
 
-	hrtimer_setup(&port->rx_coalesce_timer, &gmac_coalesce_delay_expired, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
+	hrtimer_init(&port->rx_coalesce_timer, CLOCK_MONOTONIC,
+		     HRTIMER_MODE_REL);
+	port->rx_coalesce_timer.function = &gmac_coalesce_delay_expired;
 
 	netdev_dbg(netdev, "opened\n");
 
@@ -1969,7 +1974,7 @@ static void gmac_get_stats64(struct net_device *netdev,
 
 	/* Racing with RX NAPI */
 	do {
-		start = u64_stats_fetch_begin(&port->rx_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->rx_stats_syncp);
 
 		stats->rx_packets = port->stats.rx_packets;
 		stats->rx_bytes = port->stats.rx_bytes;
@@ -1981,11 +1986,11 @@ static void gmac_get_stats64(struct net_device *netdev,
 		stats->rx_crc_errors = port->stats.rx_crc_errors;
 		stats->rx_frame_errors = port->stats.rx_frame_errors;
 
-	} while (u64_stats_fetch_retry(&port->rx_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->rx_stats_syncp, start));
 
 	/* Racing with MIB and TX completion interrupts */
 	do {
-		start = u64_stats_fetch_begin(&port->ir_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->ir_stats_syncp);
 
 		stats->tx_errors = port->stats.tx_errors;
 		stats->tx_packets = port->stats.tx_packets;
@@ -1995,15 +2000,15 @@ static void gmac_get_stats64(struct net_device *netdev,
 		stats->rx_missed_errors = port->stats.rx_missed_errors;
 		stats->rx_fifo_errors = port->stats.rx_fifo_errors;
 
-	} while (u64_stats_fetch_retry(&port->ir_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->ir_stats_syncp, start));
 
 	/* Racing with hard_start_xmit */
 	do {
-		start = u64_stats_fetch_begin(&port->tx_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->tx_stats_syncp);
 
 		stats->tx_dropped = port->stats.tx_dropped;
 
-	} while (u64_stats_fetch_retry(&port->tx_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->tx_stats_syncp, start));
 
 	stats->rx_dropped += stats->rx_missed_errors;
 }
@@ -2017,7 +2022,7 @@ static int gmac_change_mtu(struct net_device *netdev, int new_mtu)
 
 	gmac_disable_tx_rx(netdev);
 
-	WRITE_ONCE(netdev->mtu, new_mtu);
+	netdev->mtu = new_mtu;
 	gmac_update_config0_reg(netdev, max_len << CONFIG0_MAXLEN_SHIFT,
 				CONFIG0_MAXLEN_MASK);
 
@@ -2072,18 +2077,18 @@ static void gmac_get_ethtool_stats(struct net_device *netdev,
 	/* Racing with MIB interrupt */
 	do {
 		p = values;
-		start = u64_stats_fetch_begin(&port->ir_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->ir_stats_syncp);
 
 		for (i = 0; i < RX_STATS_NUM; i++)
 			*p++ = port->hw_stats[i];
 
-	} while (u64_stats_fetch_retry(&port->ir_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->ir_stats_syncp, start));
 	values = p;
 
 	/* Racing with RX NAPI */
 	do {
 		p = values;
-		start = u64_stats_fetch_begin(&port->rx_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->rx_stats_syncp);
 
 		for (i = 0; i < RX_STATUS_NUM; i++)
 			*p++ = port->rx_stats[i];
@@ -2091,13 +2096,13 @@ static void gmac_get_ethtool_stats(struct net_device *netdev,
 			*p++ = port->rx_csum_stats[i];
 		*p++ = port->rx_napi_exits;
 
-	} while (u64_stats_fetch_retry(&port->rx_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->rx_stats_syncp, start));
 	values = p;
 
 	/* Racing with TX start_xmit */
 	do {
 		p = values;
-		start = u64_stats_fetch_begin(&port->tx_stats_syncp);
+		start = u64_stats_fetch_begin_irq(&port->tx_stats_syncp);
 
 		for (i = 0; i < TX_MAX_FRAGS; i++) {
 			*values++ = port->tx_frag_stats[i];
@@ -2106,7 +2111,7 @@ static void gmac_get_ethtool_stats(struct net_device *netdev,
 		*values++ = port->tx_frags_linearized;
 		*values++ = port->tx_hw_csummed;
 
-	} while (u64_stats_fetch_retry(&port->tx_stats_syncp, start));
+	} while (u64_stats_fetch_retry_irq(&port->tx_stats_syncp, start));
 }
 
 static int gmac_get_ksettings(struct net_device *netdev,
@@ -2145,19 +2150,6 @@ static void gmac_get_pauseparam(struct net_device *netdev,
 	pparam->rx_pause = config0.bits.rx_fc_en;
 	pparam->tx_pause = config0.bits.tx_fc_en;
 	pparam->autoneg = true;
-}
-
-static int gmac_set_pauseparam(struct net_device *netdev,
-			       struct ethtool_pauseparam *pparam)
-{
-	struct phy_device *phydev = netdev->phydev;
-
-	if (!pparam->autoneg)
-		return -EOPNOTSUPP;
-
-	phy_set_asym_pause(phydev, pparam->rx_pause, pparam->tx_pause);
-
-	return 0;
 }
 
 static void gmac_get_ringparam(struct net_device *netdev,
@@ -2280,7 +2272,6 @@ static const struct ethtool_ops gmac_351x_ethtool_ops = {
 	.set_link_ksettings = gmac_set_ksettings,
 	.nway_reset	= gmac_nway_reset,
 	.get_pauseparam	= gmac_get_pauseparam,
-	.set_pauseparam = gmac_set_pauseparam,
 	.get_ringparam	= gmac_get_ringparam,
 	.set_ringparam	= gmac_set_ringparam,
 	.get_coalesce	= gmac_get_coalesce,
@@ -2469,8 +2460,8 @@ static int gemini_ethernet_port_probe(struct platform_device *pdev)
 
 	/* Interrupt */
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return irq;
+	if (irq <= 0)
+		return irq ? irq : -ENODEV;
 	port->irq = irq;
 
 	/* Clock the port */
@@ -2573,11 +2564,13 @@ unprepare:
 	return ret;
 }
 
-static void gemini_ethernet_port_remove(struct platform_device *pdev)
+static int gemini_ethernet_port_remove(struct platform_device *pdev)
 {
 	struct gemini_ethernet_port *port = platform_get_drvdata(pdev);
 
 	gemini_port_remove(port);
+
+	return 0;
 }
 
 static const struct of_device_id gemini_ethernet_port_of_match[] = {
@@ -2591,7 +2584,7 @@ MODULE_DEVICE_TABLE(of, gemini_ethernet_port_of_match);
 static struct platform_driver gemini_ethernet_port_driver = {
 	.driver = {
 		.name = "gemini-ethernet-port",
-		.of_match_table = gemini_ethernet_port_of_match,
+		.of_match_table = of_match_ptr(gemini_ethernet_port_of_match),
 	},
 	.probe = gemini_ethernet_port_probe,
 	.remove = gemini_ethernet_port_remove,
@@ -2636,12 +2629,14 @@ static int gemini_ethernet_probe(struct platform_device *pdev)
 	return devm_of_platform_populate(dev);
 }
 
-static void gemini_ethernet_remove(struct platform_device *pdev)
+static int gemini_ethernet_remove(struct platform_device *pdev)
 {
 	struct gemini_ethernet *geth = platform_get_drvdata(pdev);
 
 	geth_cleanup_freeq(geth);
 	geth->initialized = false;
+
+	return 0;
 }
 
 static const struct of_device_id gemini_ethernet_of_match[] = {
@@ -2655,7 +2650,7 @@ MODULE_DEVICE_TABLE(of, gemini_ethernet_of_match);
 static struct platform_driver gemini_ethernet_driver = {
 	.driver = {
 		.name = DRV_NAME,
-		.of_match_table = gemini_ethernet_of_match,
+		.of_match_table = of_match_ptr(gemini_ethernet_of_match),
 	},
 	.probe = gemini_ethernet_probe,
 	.remove = gemini_ethernet_remove,

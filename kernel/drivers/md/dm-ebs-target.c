@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2020 Red Hat GmbH
  *
@@ -242,7 +241,7 @@ static void __ebs_process_bios(struct work_struct *ws)
  * <offset>: offset in 512 bytes sectors into <dev_path>
  * <ebs>: emulated block size in units of 512 bytes exposed to the upper layer
  * [<ubs>]: underlying block size in units of 512 bytes imposed on the lower layer;
- *	    optional, if not supplied, retrieve logical block size from underlying device
+ * 	    optional, if not supplied, retrieve logical block size from underlying device
  */
 static int ebs_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -415,8 +414,7 @@ static void ebs_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int ebs_prepare_ioctl(struct dm_target *ti, struct block_device **bdev,
-			     unsigned int cmd, unsigned long arg, bool *forward)
+static int ebs_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
 	struct ebs_c *ec = ti->private;
 	struct dm_dev *dev = ec->dev;
@@ -435,7 +433,7 @@ static void ebs_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	limits->logical_block_size = to_bytes(ec->e_bs);
 	limits->physical_block_size = to_bytes(ec->u_bs);
 	limits->alignment_offset = limits->physical_block_size;
-	limits->io_min = limits->logical_block_size;
+	blk_limits_io_min(limits, limits->logical_block_size);
 }
 
 static int ebs_iterate_devices(struct dm_target *ti,
@@ -460,8 +458,25 @@ static struct target_type ebs_target = {
 	.prepare_ioctl	 = ebs_prepare_ioctl,
 	.iterate_devices = ebs_iterate_devices,
 };
-module_dm(ebs);
 
-MODULE_AUTHOR("Heinz Mauelshagen <dm-devel@lists.linux.dev>");
+static int __init dm_ebs_init(void)
+{
+	int r = dm_register_target(&ebs_target);
+
+	if (r < 0)
+		DMERR("register failed %d", r);
+
+	return r;
+}
+
+static void dm_ebs_exit(void)
+{
+	dm_unregister_target(&ebs_target);
+}
+
+module_init(dm_ebs_init);
+module_exit(dm_ebs_exit);
+
+MODULE_AUTHOR("Heinz Mauelshagen <dm-devel@redhat.com>");
 MODULE_DESCRIPTION(DM_NAME " emulated block size target");
 MODULE_LICENSE("GPL");

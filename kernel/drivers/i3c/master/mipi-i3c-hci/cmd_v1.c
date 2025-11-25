@@ -123,15 +123,17 @@ static enum hci_cmd_mode get_i3c_mode(struct i3c_hci *hci)
 {
 	struct i3c_bus *bus = i3c_master_get_bus(&hci->master);
 
-	if (bus->scl_rate.i3c > 8000000)
+	if (bus->scl_rate.i3c >= 12500000)
 		return MODE_I3C_SDR0;
-	if (bus->scl_rate.i3c > 6000000)
+	if (bus->scl_rate.i3c > 8000000)
 		return MODE_I3C_SDR1;
-	if (bus->scl_rate.i3c > 4000000)
+	if (bus->scl_rate.i3c > 6000000)
 		return MODE_I3C_SDR2;
-	if (bus->scl_rate.i3c > 2000000)
+	if (bus->scl_rate.i3c > 4000000)
 		return MODE_I3C_SDR3;
-	return MODE_I3C_SDR4;
+	if (bus->scl_rate.i3c > 2000000)
+		return MODE_I3C_SDR4;
+	return MODE_I3C_Fm_FmP;
 }
 
 static enum hci_cmd_mode get_i2c_mode(struct i3c_hci *hci)
@@ -296,7 +298,7 @@ static int hci_cmd_v1_daa(struct i3c_hci *hci)
 	unsigned int dcr, bcr;
 	DECLARE_COMPLETION_ONSTACK(done);
 
-	xfer = hci_alloc_xfer(1);
+	xfer = hci_alloc_xfer(2);
 	if (!xfer)
 		return -ENOMEM;
 
@@ -317,9 +319,7 @@ static int hci_cmd_v1_daa(struct i3c_hci *hci)
 			break;
 		next_addr = ret;
 
-		dev_dbg(&hci->master.dev,
-			"next_addr = 0x%02x, DAA using DAT %d",
-			next_addr, dat_idx);
+		DBG("next_addr = 0x%02x, DAA using DAT %d", next_addr, dat_idx);
 		mipi_i3c_hci_dat_v1.set_dynamic_addr(hci, dat_idx, next_addr);
 		mipi_i3c_hci_dct_index_reset(hci);
 
@@ -332,28 +332,25 @@ static int hci_cmd_v1_daa(struct i3c_hci *hci)
 			CMD_A0_DEV_COUNT(1) |
 			CMD_A0_ROC | CMD_A0_TOC;
 		xfer->cmd_desc[1] = 0;
-		xfer->completion = &done;
 		hci->io->queue_xfer(hci, xfer, 1);
 		if (!wait_for_completion_timeout(&done, HZ) &&
 		    hci->io->dequeue_xfer(hci, xfer, 1)) {
 			ret = -ETIME;
 			break;
 		}
-		if ((RESP_STATUS(xfer->response) == RESP_ERR_ADDR_HEADER ||
-		     RESP_STATUS(xfer->response) == RESP_ERR_NACK) &&
-		    RESP_DATA_LENGTH(xfer->response) == 1) {
+		if (RESP_STATUS(xfer[0].response) == RESP_ERR_NACK &&
+		    RESP_STATUS(xfer[0].response) == 1) {
 			ret = 0;  /* no more devices to be assigned */
 			break;
 		}
-		if (RESP_STATUS(xfer->response) != RESP_SUCCESS) {
+		if (RESP_STATUS(xfer[0].response) != RESP_SUCCESS) {
 			ret = -EIO;
 			break;
 		}
 
 		i3c_hci_dct_get_val(hci, 0, &pid, &dcr, &bcr);
-		dev_dbg(&hci->master.dev,
-			"assigned address %#x to device PID=0x%llx DCR=%#x BCR=%#x",
-			next_addr, pid, dcr, bcr);
+		DBG("assigned address %#x to device PID=0x%llx DCR=%#x BCR=%#x",
+		    next_addr, pid, dcr, bcr);
 
 		mipi_i3c_hci_dat_v1.free_entry(hci, dat_idx);
 		dat_idx = -1;

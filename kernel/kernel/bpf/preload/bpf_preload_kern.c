@@ -3,11 +3,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include "bpf_preload.h"
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#include "iterators/iterators.lskel-little-endian.h"
-#else
-#include "iterators/iterators.lskel-big-endian.h"
-#endif
+#include "iterators/iterators.lskel.h"
 
 static struct bpf_link *maps_link, *progs_link;
 static struct iterators_bpf *skel;
@@ -23,9 +19,9 @@ static void free_links_and_skel(void)
 
 static int preload(struct bpf_preload_info *obj)
 {
-	strscpy(obj[0].link_name, "maps.debug", sizeof(obj[0].link_name));
+	strlcpy(obj[0].link_name, "maps.debug", sizeof(obj[0].link_name));
 	obj[0].link = maps_link;
-	strscpy(obj[1].link_name, "progs.debug", sizeof(obj[1].link_name));
+	strlcpy(obj[1].link_name, "progs.debug", sizeof(obj[1].link_name));
 	obj[1].link = progs_link;
 	return 0;
 }
@@ -89,6 +85,4 @@ static void __exit fini(void)
 }
 late_initcall(load);
 module_exit(fini);
-MODULE_IMPORT_NS("BPF_INTERNAL");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Embedded BPF programs for introspection in bpffs");

@@ -9,11 +9,11 @@
 #define pr_fmt(fmt) "ACPI: AGDI: " fmt
 
 #include <linux/acpi.h>
+#include <linux/acpi_agdi.h>
 #include <linux/arm_sdei.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
-#include "init.h"
 
 struct agdi_data {
 	int sdei_event;
@@ -58,17 +58,14 @@ static int agdi_probe(struct platform_device *pdev)
 	return agdi_sdei_probe(pdev, adata);
 }
 
-static void agdi_remove(struct platform_device *pdev)
+static int agdi_remove(struct platform_device *pdev)
 {
 	struct agdi_data *adata = dev_get_platdata(&pdev->dev);
 	int err, i;
 
 	err = sdei_event_disable(adata->sdei_event);
-	if (err) {
-		dev_err(&pdev->dev, "Failed to disable sdei-event #%d (%pe)\n",
-			adata->sdei_event, ERR_PTR(err));
-		return;
-	}
+	if (err)
+		return err;
 
 	for (i = 0; i < 3; i++) {
 		err = sdei_event_unregister(adata->sdei_event);
@@ -78,9 +75,7 @@ static void agdi_remove(struct platform_device *pdev)
 		schedule();
 	}
 
-	if (err)
-		dev_err(&pdev->dev, "Failed to unregister sdei-event #%d (%pe)\n",
-			adata->sdei_event, ERR_PTR(err));
+	return err;
 }
 
 static struct platform_driver agdi_driver = {

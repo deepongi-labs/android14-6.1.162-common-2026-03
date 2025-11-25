@@ -12,7 +12,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
-#include <linux/platform_device.h>
 #include <linux/parser.h>
 #include <linux/suspend.h>
 
@@ -222,24 +221,14 @@ static const struct of_device_id sam9x60_ws_ids[] = {
 	{ /* sentinel */ }
 };
 
-static const struct of_device_id sama7_ws_ids[] = {
-	{ .compatible = "microchip,sama7d65-rtc",	.data = &ws_info[1] },
+static const struct of_device_id sama7g5_ws_ids[] = {
 	{ .compatible = "microchip,sama7g5-rtc",	.data = &ws_info[1] },
 	{ .compatible = "microchip,sama7g5-ohci",	.data = &ws_info[2] },
 	{ .compatible = "usb-ohci",			.data = &ws_info[2] },
 	{ .compatible = "atmel,at91sam9g45-ehci",	.data = &ws_info[2] },
 	{ .compatible = "usb-ehci",			.data = &ws_info[2] },
-	{ .compatible = "microchip,sama7d65-sdhci",	.data = &ws_info[3] },
 	{ .compatible = "microchip,sama7g5-sdhci",	.data = &ws_info[3] },
-	{ .compatible = "microchip,sama7d65-rtt",	.data = &ws_info[4] },
 	{ .compatible = "microchip,sama7g5-rtt",	.data = &ws_info[4] },
-	{ /* sentinel */ }
-};
-
-static const struct of_device_id sam9x7_ws_ids[] = {
-	{ .compatible = "microchip,sam9x7-rtc",		.data = &ws_info[1] },
-	{ .compatible = "microchip,sam9x7-rtt",		.data = &ws_info[4] },
-	{ .compatible = "microchip,sam9x7-gem",		.data = &ws_info[5] },
 	{ /* sentinel */ }
 };
 
@@ -647,11 +636,6 @@ static void at91_pm_suspend(suspend_state_t state)
 		at91_suspend_sram_fn = fncpy(at91_suspend_sram_fn,
 					     &at91_pm_suspend_in_sram,
 					     at91_pm_suspend_in_sram_sz);
-
-		if (IS_ENABLED(CONFIG_SOC_SAMA7D65)) {
-			/* SHDWC.SR */
-			readl(soc_pm.data.shdwc + 0x08);
-		}
 	} else {
 		at91_suspend_finish(0);
 	}
@@ -1070,8 +1054,7 @@ static int __init at91_pm_backup_init(void)
 	int ret = -ENODEV, located = 0;
 
 	if (!IS_ENABLED(CONFIG_SOC_SAMA5D2) &&
-	    !IS_ENABLED(CONFIG_SOC_SAMA7G5) &&
-	    !IS_ENABLED(CONFIG_SOC_SAMA7D65))
+	    !IS_ENABLED(CONFIG_SOC_SAMA7G5))
 		return -EPERM;
 
 	if (!at91_is_pm_mode_active(AT91_PM_BACKUP))
@@ -1129,7 +1112,6 @@ static void __init at91_pm_secure_init(void)
 	if (res.a0 == 0) {
 		pr_info("AT91: Secure PM: suspend mode set to %s\n",
 			pm_modes[suspend_mode].pattern);
-		soc_pm.data.mode = suspend_mode;
 		return;
 	}
 
@@ -1139,7 +1121,6 @@ static void __init at91_pm_secure_init(void)
 	res = sam_smccc_call(SAMA5_SMC_SIP_GET_SUSPEND_MODE, 0, 0);
 	if (res.a0 == 0) {
 		pr_warn("AT91: Secure PM: failed to get default mode\n");
-		soc_pm.data.mode = -1;
 		return;
 	}
 
@@ -1147,7 +1128,6 @@ static void __init at91_pm_secure_init(void)
 		pm_modes[suspend_mode].pattern);
 
 	soc_pm.data.suspend_mode = res.a1;
-	soc_pm.data.mode = soc_pm.data.suspend_mode;
 }
 static const struct of_device_id atmel_shdwc_ids[] = {
 	{ .compatible = "atmel,sama5d2-shdwc" },
@@ -1339,7 +1319,6 @@ struct pmc_info {
 	unsigned long uhp_udp_mask;
 	unsigned long mckr;
 	unsigned long version;
-	unsigned long mcks;
 };
 
 static const struct pmc_info pmc_infos[] __initconst = {
@@ -1364,21 +1343,15 @@ static const struct pmc_info pmc_infos[] __initconst = {
 		.version = AT91_PMC_V1,
 	},
 	{
-		.uhp_udp_mask = AT91SAM926x_PMC_UHP,
+		.uhp_udp_mask = AT91SAM926x_PMC_UHP | AT91SAM926x_PMC_UDP,
 		.mckr = 0x28,
 		.version = AT91_PMC_V2,
 	},
 	{
 		.mckr = 0x28,
 		.version = AT91_PMC_V2,
-		.mcks = 4,
 	},
-	{
-		.uhp_udp_mask = AT91SAM926x_PMC_UHP,
-		.mckr = 0x28,
-		.version = AT91_PMC_V2,
-		.mcks = 9,
-	},
+
 };
 
 static const struct of_device_id atmel_pmc_ids[] __initconst = {
@@ -1394,8 +1367,6 @@ static const struct of_device_id atmel_pmc_ids[] __initconst = {
 	{ .compatible = "atmel,sama5d4-pmc", .data = &pmc_infos[1] },
 	{ .compatible = "atmel,sama5d2-pmc", .data = &pmc_infos[1] },
 	{ .compatible = "microchip,sam9x60-pmc", .data = &pmc_infos[4] },
-	{ .compatible = "microchip,sam9x7-pmc", .data = &pmc_infos[4] },
-	{ .compatible = "microchip,sama7d65-pmc", .data = &pmc_infos[6] },
 	{ .compatible = "microchip,sama7g5-pmc", .data = &pmc_infos[5] },
 	{ /* sentinel */ },
 };
@@ -1466,7 +1437,6 @@ static void __init at91_pm_init(void (*pm_idle)(void))
 	soc_pm.data.uhp_udp_mask = pmc->uhp_udp_mask;
 	soc_pm.data.pmc_mckr_offset = pmc->mckr;
 	soc_pm.data.pmc_version = pmc->version;
-	soc_pm.data.pmc_mcks = pmc->mcks;
 
 	if (pm_idle)
 		arm_pm_idle = pm_idle;
@@ -1532,27 +1502,6 @@ void __init sam9x60_pm_init(void)
 	at91_pm_init(NULL);
 
 	soc_pm.ws_ids = sam9x60_ws_ids;
-	soc_pm.config_pmc_ws = at91_sam9x60_config_pmc_ws;
-}
-
-void __init sam9x7_pm_init(void)
-{
-	static const int modes[] __initconst = {
-		AT91_PM_STANDBY, AT91_PM_ULP0,
-	};
-	int ret;
-
-	if (!IS_ENABLED(CONFIG_SOC_SAM9X7))
-		return;
-
-	at91_pm_modes_validate(modes, ARRAY_SIZE(modes));
-	ret = at91_dt_ramc(false);
-	if (ret)
-		return;
-
-	at91_pm_init(NULL);
-
-	soc_pm.ws_ids = sam9x7_ws_ids;
 	soc_pm.config_pmc_ws = at91_sam9x60_config_pmc_ws;
 }
 
@@ -1690,7 +1639,7 @@ void __init sama7_pm_init(void)
 	at91_pm_modes_init(iomaps, ARRAY_SIZE(iomaps));
 	at91_pm_init(NULL);
 
-	soc_pm.ws_ids = sama7_ws_ids;
+	soc_pm.ws_ids = sama7g5_ws_ids;
 	soc_pm.config_pmc_ws = at91_sam9x60_config_pmc_ws;
 
 	soc_pm.sfrbu_regs.pswbu.key = (0x4BD20C << 8);

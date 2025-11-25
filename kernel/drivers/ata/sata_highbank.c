@@ -13,7 +13,7 @@
 #include <linux/io.h>
 #include <linux/spinlock.h>
 #include <linux/device.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/libata.h>
@@ -386,7 +386,7 @@ static int highbank_initialize_phys(struct device *dev, void __iomem *addr)
 static int ahci_highbank_hardreset(struct ata_link *link, unsigned int *class,
 				unsigned long deadline)
 {
-	static const unsigned int timing[] = { 5, 100, 500};
+	static const unsigned long timing[] = { 5, 100, 500};
 	struct ata_port *ap = link->ap;
 	struct ahci_port_priv *pp = ap->private_data;
 	struct ahci_host_priv *hpriv = ap->host->private_data;
@@ -428,7 +428,7 @@ static int ahci_highbank_hardreset(struct ata_link *link, unsigned int *class,
 
 static struct ata_port_operations ahci_highbank_ops = {
 	.inherits		= &ahci_ops,
-	.reset.hardreset	= ahci_highbank_hardreset,
+	.hardreset		= ahci_highbank_hardreset,
 	.transmit_led_message   = ecx_transmit_led_message,
 };
 
@@ -439,7 +439,7 @@ static const struct ata_port_info ahci_highbank_port_info = {
 	.port_ops       = &ahci_highbank_ops,
 };
 
-static const struct scsi_host_template ahci_highbank_platform_sht = {
+static struct scsi_host_template ahci_highbank_platform_sht = {
 	AHCI_SHT("sata_highbank"),
 };
 
@@ -616,11 +616,11 @@ static SIMPLE_DEV_PM_OPS(ahci_highbank_pm_ops,
 
 static struct platform_driver ahci_highbank_driver = {
 	.remove = ata_platform_remove_one,
-	.driver = {
-		.name = "highbank-ahci",
-		.of_match_table = ahci_of_match,
-		.pm = &ahci_highbank_pm_ops,
-	},
+        .driver = {
+                .name = "highbank-ahci",
+                .of_match_table = ahci_of_match,
+                .pm = &ahci_highbank_pm_ops,
+        },
 	.probe = ahci_highbank_probe,
 };
 

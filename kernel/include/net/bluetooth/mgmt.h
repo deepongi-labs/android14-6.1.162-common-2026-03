@@ -53,15 +53,10 @@ struct mgmt_hdr {
 } __packed;
 
 struct mgmt_tlv {
-	/* New members MUST be added within the __struct_group() macro below. */
-	__struct_group(mgmt_tlv_hdr, __hdr, __packed,
-		__le16 type;
-		__u8   length;
-	);
+	__le16 type;
+	__u8   length;
 	__u8   value[];
 } __packed;
-static_assert(offsetof(struct mgmt_tlv, value) == sizeof(struct mgmt_tlv_hdr),
-	      "struct member likely outside of __struct_group()");
 
 struct mgmt_addr_info {
 	bdaddr_t	bdaddr;
@@ -116,9 +111,6 @@ struct mgmt_rp_read_index_list {
 #define MGMT_SETTING_WIDEBAND_SPEECH	BIT(17)
 #define MGMT_SETTING_CIS_CENTRAL	BIT(18)
 #define MGMT_SETTING_CIS_PERIPHERAL	BIT(19)
-#define MGMT_SETTING_ISO_BROADCASTER	BIT(20)
-#define MGMT_SETTING_ISO_SYNC_RECEIVER	BIT(21)
-#define MGMT_SETTING_LL_PRIVACY		BIT(22)
 
 #define MGMT_OP_READ_INFO		0x0004
 #define MGMT_READ_INFO_SIZE		0
@@ -780,7 +772,7 @@ struct mgmt_adv_pattern {
 	__u8 ad_type;
 	__u8 offset;
 	__u8 length;
-	__u8 value[HCI_MAX_AD_LENGTH];
+	__u8 value[31];
 } __packed;
 
 #define MGMT_OP_ADD_ADV_PATTERNS_MONITOR	0x0052
@@ -853,7 +845,7 @@ struct mgmt_cp_set_mesh {
 	__le16 window;
 	__le16 period;
 	__u8   num_ad_types;
-	__u8   ad_types[] __counted_by(num_ad_types);
+	__u8   ad_types[];
 } __packed;
 #define MGMT_SET_MESH_RECEIVER_SIZE	6
 
@@ -883,16 +875,6 @@ struct mgmt_cp_mesh_send_cancel {
 	__u8  handle;
 } __packed;
 #define MGMT_MESH_SEND_CANCEL_SIZE	1
-
-#define MGMT_OP_HCI_CMD_SYNC		0x005B
-struct mgmt_cp_hci_cmd_sync {
-	__le16 opcode;
-	__u8   event;
-	__u8   timeout;
-	__le16 params_len;
-	__u8   params[];
-} __packed;
-#define MGMT_HCI_CMD_SYNC_SIZE		6
 
 #define MGMT_EV_CMD_COMPLETE		0x0001
 struct mgmt_ev_cmd_complete {

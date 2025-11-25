@@ -23,6 +23,8 @@
 #include <asm/stacktrace.h>
 #include <asm/unwind.h>
 
+int panic_on_unrecovered_nmi;
+int panic_on_io_nmi;
 static int die_counter;
 
 static struct pt_regs exec_summary_regs;
@@ -392,17 +394,22 @@ NOKPROBE_SYMBOL(oops_end);
 
 static void __die_header(const char *str, struct pt_regs *regs, long err)
 {
+	const char *pr = "";
+
 	/* Save the regs of the first oops for the executive summary later. */
 	if (!die_counter)
 		exec_summary_regs = *regs;
 
+	if (IS_ENABLED(CONFIG_PREEMPTION))
+		pr = IS_ENABLED(CONFIG_PREEMPT_RT) ? " PREEMPT_RT" : " PREEMPT";
+
 	printk(KERN_DEFAULT
-	       "Oops: %s: %04lx [#%d]%s%s%s%s\n", str, err & 0xffff,
-	       ++die_counter,
+	       "%s: %04lx [#%d]%s%s%s%s%s\n", str, err & 0xffff, ++die_counter,
+	       pr,
 	       IS_ENABLED(CONFIG_SMP)     ? " SMP"             : "",
 	       debug_pagealloc_enabled()  ? " DEBUG_PAGEALLOC" : "",
 	       IS_ENABLED(CONFIG_KASAN)   ? " KASAN"           : "",
-	       IS_ENABLED(CONFIG_MITIGATION_PAGE_TABLE_ISOLATION) ?
+	       IS_ENABLED(CONFIG_PAGE_TABLE_ISOLATION) ?
 	       (boot_cpu_has(X86_FEATURE_PTI) ? " PTI" : " NOPTI") : "");
 }
 NOKPROBE_SYMBOL(__die_header);

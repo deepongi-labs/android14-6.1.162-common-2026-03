@@ -84,10 +84,12 @@ err0:
 	return ret;
 }
 
-static void omap_ocp2scp_remove(struct platform_device *pdev)
+static int omap_ocp2scp_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 	device_for_each_child(&pdev->dev, NULL, ocp2scp_remove_devices);
+
+	return 0;
 }
 
 #ifdef CONFIG_OF

@@ -218,7 +218,7 @@ retry:
 #if 0
 	WARN_ON(!pte_young(*pte) || (is_write && !pte_dirty(*pte)));
 #endif
-
+	flush_tlb_page(vma, address);
 out:
 	mmap_read_unlock(mm);
 out_nosemaphore:
@@ -280,14 +280,12 @@ void fatal_sigsegv(void)
  * @sig:	the signal number
  * @unused_si:	the signal info struct; unused in this handler
  * @regs:	the ptrace register information
- * @mc:		the mcontext of the signal
  *
  * The handler first extracts the faultinfo from the UML ptrace regs struct.
  * If the userfault did not happen in an UML userspace process, bad_segv is called.
  * Otherwise the signal did happen in a cloned userspace process, handle it.
  */
-void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
-		  void *mc)
+void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
 {
 	struct faultinfo * fi = UPT_FAULTINFO(regs);
 
@@ -296,7 +294,7 @@ void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
 		bad_segv(*fi, UPT_IP(regs));
 		return;
 	}
-	segv(*fi, UPT_IP(regs), UPT_IS_USER(regs), regs, mc);
+	segv(*fi, UPT_IP(regs), UPT_IS_USER(regs), regs);
 }
 
 /*
@@ -306,8 +304,9 @@ void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
  * give us bad data!
  */
 unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user,
-		   struct uml_pt_regs *regs, void *mc)
+		   struct uml_pt_regs *regs)
 {
+	jmp_buf *catcher;
 	int si_code;
 	int err;
 	int is_write = FAULT_WRITE(fi);
@@ -316,30 +315,8 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user,
 	if (!is_user && regs)
 		current->thread.segv_regs = container_of(regs, struct pt_regs, regs);
 
-	if (!is_user && init_mm.context.sync_tlb_range_to) {
-		/*
-		 * Kernel has pending updates from set_ptes that were not
-		 * flushed yet. Syncing them should fix the pagefault (if not
-		 * we'll get here again and panic).
-		 */
-		err = um_tlb_sync(&init_mm);
-		if (err == -ENOMEM)
-			report_enomem();
-		if (err)
-			panic("Failed to sync kernel TLBs: %d", err);
-		goto out;
-	}
-	else if (current->pagefault_disabled) {
-		if (!mc) {
-			show_regs(container_of(regs, struct pt_regs, regs));
-			panic("Segfault with pagefaults disabled but no mcontext");
-		}
-		if (!current->thread.segv_continue) {
-			show_regs(container_of(regs, struct pt_regs, regs));
-			panic("Segfault without recovery target");
-		}
-		mc_set_rip(mc, current->thread.segv_continue);
-		current->thread.segv_continue = NULL;
+	if (!is_user && (address >= start_vm) && (address < end_vm)) {
+		flush_tlb_kernel_vm();
 		goto out;
 	}
 	else if (current->mm == NULL) {
@@ -365,8 +342,15 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user,
 		address = 0;
 	}
 
+	catcher = current->thread.fault_catcher;
 	if (!err)
 		goto out;
+	else if (catcher != NULL) {
+		current->thread.fault_addr = (void *) address;
+		UML_LONGJMP(catcher, 1);
+	}
+	else if (current->thread.fault_addr != NULL)
+		panic("fault_addr set but no fault catcher");
 	else if (!is_user && arch_fixup(ip, regs))
 		goto out;
 
@@ -394,8 +378,7 @@ out:
 	return 0;
 }
 
-void relay_signal(int sig, struct siginfo *si, struct uml_pt_regs *regs,
-		  void *mc)
+void relay_signal(int sig, struct siginfo *si, struct uml_pt_regs *regs)
 {
 	int code, err;
 	if (!UPT_IS_USER(regs)) {
@@ -423,8 +406,15 @@ void relay_signal(int sig, struct siginfo *si, struct uml_pt_regs *regs,
 	}
 }
 
-void winch(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
-	   void *mc)
+void bus_handler(int sig, struct siginfo *si, struct uml_pt_regs *regs)
+{
+	if (current->thread.fault_catcher != NULL)
+		UML_LONGJMP(current->thread.fault_catcher, 1);
+	else
+		relay_signal(sig, si, regs);
+}
+
+void winch(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
 {
 	do_IRQ(WINCH_IRQ, regs);
 }

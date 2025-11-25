@@ -30,8 +30,9 @@
 #include <trace/events/power.h>
 #include <linux/compiler.h>
 #include <linux/moduleparam.h>
-#include <linux/fs.h>
 #include <linux/wakeup_reason.h>
+#include <linux/workqueue.h>
+#include <trace/hooks/suspend.h>
 
 #include "power.h"
 
@@ -75,6 +76,25 @@ bool pm_suspend_default_s2idle(void)
 }
 EXPORT_SYMBOL_GPL(pm_suspend_default_s2idle);
 
+static bool suspend_fs_sync_queued;
+static DEFINE_SPINLOCK(suspend_fs_sync_lock);
+static DECLARE_COMPLETION(suspend_fs_sync_complete);
+
+/**
+ * suspend_abort_fs_sync - Abort fs_sync to abort suspend early
+ *
+ * This function aborts the fs_sync stage of suspend so that suspend itself can
+ * be aborted early.
+ */
+void suspend_abort_fs_sync(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&suspend_fs_sync_lock, flags);
+	complete(&suspend_fs_sync_complete);
+	spin_unlock_irqrestore(&suspend_fs_sync_lock, flags);
+}
+
 void s2idle_set_ops(const struct platform_s2idle_ops *ops)
 {
 	unsigned int sleep_flags;
@@ -93,22 +113,14 @@ static void s2idle_enter(void)
 {
 	trace_suspend_resume(TPS("machine_suspend"), PM_SUSPEND_TO_IDLE, true);
 
-	/*
-	 * The correctness of the code below depends on the number of online
-	 * CPUs being stable, but CPUs cannot be taken offline or put online
-	 * while it is running.
-	 *
-	 * The s2idle_lock must be acquired before the pending wakeup check to
-	 * prevent pm_system_wakeup() from running as a whole between that check
-	 * and the subsequent s2idle_state update in which case a wakeup event
-	 * would get lost.
-	 */
 	raw_spin_lock_irq(&s2idle_lock);
 	if (pm_wakeup_pending())
 		goto out;
 
 	s2idle_state = S2IDLE_STATE_ENTER;
 	raw_spin_unlock_irq(&s2idle_lock);
+
+	cpus_read_lock();
 
 	/* Push all the CPUs into the idle loop. */
 	wake_up_all_idle_cpus();
@@ -121,6 +133,8 @@ static void s2idle_enter(void)
 	 * consistent system state.
 	 */
 	wake_up_all_idle_cpus();
+
+	cpus_read_unlock();
 
 	raw_spin_lock_irq(&s2idle_lock);
 
@@ -378,8 +392,6 @@ static int suspend_prepare(suspend_state_t state)
 	if (error)
 		goto Restore;
 
-	if (filesystem_freeze_enabled)
-		filesystems_freeze();
 	trace_suspend_resume(TPS("freeze_processes"), 0, true);
 	error = suspend_freeze_processes();
 	trace_suspend_resume(TPS("freeze_processes"), 0, false);
@@ -387,8 +399,8 @@ static int suspend_prepare(suspend_state_t state)
 		return 0;
 
 	log_suspend_abort_reason("One or more tasks refusing to freeze");
+	suspend_stats.failed_freeze++;
 	dpm_save_failed_step(SUSPEND_FREEZE);
-	filesystems_thaw();
 	pm_notifier_call_chain(PM_POST_SUSPEND);
  Restore:
 	pm_restore_console();
@@ -405,6 +417,70 @@ void __weak arch_suspend_disable_irqs(void)
 void __weak arch_suspend_enable_irqs(void)
 {
 	local_irq_enable();
+}
+
+
+static bool pm_fs_abort;
+module_param(pm_fs_abort, bool, 0644);
+MODULE_PARM_DESC(pm_fs_abort,
+		 "Flag to enable abort during fs_sync phase of suspend");
+
+static void sync_filesystems_fn(struct work_struct *work)
+{
+	unsigned long flags;
+	ksys_sync_helper();
+
+	spin_lock_irqsave(&suspend_fs_sync_lock, flags);
+	suspend_fs_sync_queued = false;
+	complete(&suspend_fs_sync_complete);
+	spin_unlock_irqrestore(&suspend_fs_sync_lock, flags);
+}
+static DECLARE_WORK(sync_filesystems, sync_filesystems_fn);
+
+/**
+ * suspend_fs_sync_with_abort - Trigger fs_sync with ability to abort
+ *
+ * Return 0 on successful file system sync, otherwise returns -EBUSY if file
+ * system sync was aborted.
+ */
+static int suspend_fs_sync_with_abort(void)
+{
+	if (!pm_fs_abort) {
+		ksys_sync_helper();
+		return 0;
+	}
+	bool need_suspend_fs_sync_requeue;
+	unsigned long flags;
+
+Start_fs_sync:
+	spin_lock_irqsave(&suspend_fs_sync_lock, flags);
+	reinit_completion(&suspend_fs_sync_complete);
+	/*
+	 * Handle the case where a suspend immediately follows a previous
+	 * suspend that was aborted during fs_sync. In this case, wait for the
+	 * previous filesystem sync to finish. Then do another filesystem sync
+	 * so any subsequent filesystem changes are synced before suspending.
+	 */
+	if (suspend_fs_sync_queued) {
+		need_suspend_fs_sync_requeue = true;
+	} else {
+		need_suspend_fs_sync_requeue = false;
+		suspend_fs_sync_queued = true;
+		schedule_work(&sync_filesystems);
+	}
+	spin_unlock_irqrestore(&suspend_fs_sync_lock, flags);
+
+	/*
+	 * Completion is triggered by fs_sync finishing or a suspend abort
+	 * signal, whichever comes first
+	 */
+	wait_for_completion(&suspend_fs_sync_complete);
+	if (pm_wakeup_pending())
+		return -EBUSY;
+	if (need_suspend_fs_sync_requeue)
+		goto Start_fs_sync;
+
+	return 0;
 }
 
 /**
@@ -476,6 +552,7 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 			error = suspend_ops->enter(state);
 			trace_suspend_resume(TPS("machine_suspend"),
 				state, false);
+			trace_android_vh_early_resume_begin(NULL);
 		} else if (*wakeup) {
 			error = -EBUSY;
 		}
@@ -526,7 +603,7 @@ int suspend_devices_and_enter(suspend_state_t state)
 	if (error)
 		goto Close;
 
-	console_suspend_all();
+	suspend_console();
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
@@ -544,16 +621,18 @@ int suspend_devices_and_enter(suspend_state_t state)
 	} while (!error && !wakeup && platform_suspend_again(state));
 
  Resume_devices:
+	trace_android_vh_resume_begin(NULL);
 	suspend_test_start();
 	dpm_resume_end(PMSG_RESUME);
 	suspend_test_finish("resume devices");
-	trace_suspend_resume(TPS("console_resume_all"), state, true);
-	console_resume_all();
-	trace_suspend_resume(TPS("console_resume_all"), state, false);
+	trace_suspend_resume(TPS("resume_console"), state, true);
+	resume_console();
+	trace_suspend_resume(TPS("resume_console"), state, false);
 
  Close:
 	platform_resume_end(state);
 	pm_suspend_target_state = PM_SUSPEND_ON;
+	trace_android_vh_resume_end(NULL);
 	return error;
 
  Recover_platform:
@@ -570,7 +649,6 @@ int suspend_devices_and_enter(suspend_state_t state)
 static void suspend_finish(void)
 {
 	suspend_thaw_processes();
-	filesystems_thaw();
 	pm_notifier_call_chain(PM_POST_SUSPEND);
 	pm_restore_console();
 }
@@ -604,10 +682,13 @@ static int enter_state(suspend_state_t state)
 	if (state == PM_SUSPEND_TO_IDLE)
 		s2idle_begin();
 
+	pm_wakeup_clear(0);
 	if (sync_on_suspend_enabled) {
 		trace_suspend_resume(TPS("sync_filesystems"), 0, true);
-		ksys_sync_helper();
+		error = suspend_fs_sync_with_abort();
 		trace_suspend_resume(TPS("sync_filesystems"), 0, false);
+		if (error)
+			goto Unlock;
 	}
 
 	pm_pr_dbg("Preparing system for sleep (%s)\n", mem_sleep_labels[state]);
@@ -621,7 +702,9 @@ static int enter_state(suspend_state_t state)
 
 	trace_suspend_resume(TPS("suspend_enter"), state, false);
 	pm_pr_dbg("Suspending system (%s)\n", mem_sleep_labels[state]);
+	pm_restrict_gfp_mask();
 	error = suspend_devices_and_enter(state);
+	pm_restore_gfp_mask();
 
  Finish:
 	events_check_enabled = false;

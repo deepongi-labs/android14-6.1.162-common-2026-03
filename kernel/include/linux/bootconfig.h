@@ -10,7 +10,6 @@
 #ifdef __KERNEL__
 #include <linux/kernel.h>
 #include <linux/types.h>
-bool __init cmdline_has_extra_options(void);
 #else /* !__KERNEL__ */
 /*
  * NOTE: This is only for tools/bootconfig, because tools/bootconfig will
@@ -290,7 +289,7 @@ int __init xbc_get_info(int *node_size, size_t *data_size);
 /* XBC cleanup data structures */
 void __init _xbc_exit(bool early);
 
-static __always_inline void xbc_exit(void)
+static inline void xbc_exit(void)
 {
 	_xbc_exit(false);
 }

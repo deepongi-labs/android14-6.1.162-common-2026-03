@@ -256,7 +256,6 @@ static void tegra_dsi_early_unregister(struct drm_connector *connector)
 	struct tegra_dsi *dsi = to_dsi(output);
 
 	drm_debugfs_remove_files(dsi->debugfs_files, count,
-				 connector->debugfs_entry,
 				 connector->dev->primary);
 	kfree(dsi->debugfs_files);
 	dsi->debugfs_files = NULL;
@@ -812,7 +811,7 @@ static const struct drm_connector_funcs tegra_dsi_connector_funcs = {
 
 static enum drm_mode_status
 tegra_dsi_connector_mode_valid(struct drm_connector *connector,
-			       const struct drm_display_mode *mode)
+			       struct drm_display_mode *mode)
 {
 	return MODE_OK;
 }
@@ -912,15 +911,6 @@ static void tegra_dsi_encoder_enable(struct drm_encoder *encoder)
 	struct tegra_dsi_state *state;
 	u32 value;
 	int err;
-
-	/* If the bootloader enabled DSI it needs to be disabled
-	 * in order for the panel initialization commands to be
-	 * properly sent.
-	 */
-	value = tegra_dsi_readl(dsi, DSI_POWER_CONTROL);
-
-	if (value & DSI_POWER_CONTROL_ENABLE)
-		tegra_dsi_disable(dsi);
 
 	err = tegra_dsi_prepare(dsi);
 	if (err < 0) {
@@ -1564,6 +1554,7 @@ static int tegra_dsi_ganged_probe(struct tegra_dsi *dsi)
 static int tegra_dsi_probe(struct platform_device *pdev)
 {
 	struct tegra_dsi *dsi;
+	struct resource *regs;
 	int err;
 
 	dsi = devm_kzalloc(&pdev->dev, sizeof(*dsi), GFP_KERNEL);
@@ -1635,7 +1626,8 @@ static int tegra_dsi_probe(struct platform_device *pdev)
 		goto remove;
 	}
 
-	dsi->regs = devm_platform_ioremap_resource(pdev, 0);
+	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	dsi->regs = devm_ioremap_resource(&pdev->dev, regs);
 	if (IS_ERR(dsi->regs)) {
 		err = PTR_ERR(dsi->regs);
 		goto remove;
@@ -1682,18 +1674,26 @@ remove:
 	return err;
 }
 
-static void tegra_dsi_remove(struct platform_device *pdev)
+static int tegra_dsi_remove(struct platform_device *pdev)
 {
 	struct tegra_dsi *dsi = platform_get_drvdata(pdev);
+	int err;
 
 	pm_runtime_disable(&pdev->dev);
 
-	host1x_client_unregister(&dsi->client);
+	err = host1x_client_unregister(&dsi->client);
+	if (err < 0) {
+		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
+			err);
+		return err;
+	}
 
 	tegra_output_remove(&dsi->output);
 
 	mipi_dsi_host_unregister(&dsi->host);
 	tegra_mipi_free(dsi->mipi);
+
+	return 0;
 }
 
 static const struct of_device_id tegra_dsi_of_match[] = {

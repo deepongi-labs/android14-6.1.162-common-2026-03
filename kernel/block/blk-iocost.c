@@ -111,7 +111,7 @@
  * busy signal.
  *
  * As devices can have deep queues and be unfair in how the queued commands
- * are executed, solely depending on rq wait may not result in satisfactory
+ * are executed, soley depending on rq wait may not result in satisfactory
  * control quality.  For a better control quality, completion latency QoS
  * parameters can be configured so that the device is considered saturated
  * if N'th percentile completion latency rises above the set point.
@@ -560,6 +560,7 @@ struct ioc_now {
 	u64				now_ns;
 	u64				now;
 	u64				vnow;
+	u64				vrate;
 };
 
 struct iocg_wait {
@@ -648,7 +649,7 @@ static const struct ioc_params autop[] = {
  * vrate adjust percentages indexed by ioc->busy_level.  We adjust up on
  * vtime credit shortage and down on device saturation.
  */
-static const u32 vrate_adj_pct[] =
+static u32 vrate_adj_pct[] =
 	{ 0, 0, 0, 0,
 	  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -669,7 +670,7 @@ static struct ioc *q_to_ioc(struct request_queue *q)
 
 static const char __maybe_unused *ioc_name(struct ioc *ioc)
 {
-	struct gendisk *disk = ioc->rqos.disk;
+	struct gendisk *disk = ioc->rqos.q->disk;
 
 	if (!disk)
 		return "<unknown>";
@@ -800,11 +801,7 @@ static void ioc_refresh_period_us(struct ioc *ioc)
 	ioc_refresh_margins(ioc);
 }
 
-/*
- *  ioc->rqos.disk isn't initialized when this function is called from
- *  the init path.
- */
-static int ioc_autop_idx(struct ioc *ioc, struct gendisk *disk)
+static int ioc_autop_idx(struct ioc *ioc)
 {
 	int idx = ioc->autop_idx;
 	const struct ioc_params *p = &autop[idx];
@@ -812,11 +809,11 @@ static int ioc_autop_idx(struct ioc *ioc, struct gendisk *disk)
 	u64 now_ns;
 
 	/* rotational? */
-	if (!blk_queue_nonrot(disk->queue))
+	if (!blk_queue_nonrot(ioc->rqos.q))
 		return AUTOP_HDD;
 
 	/* handle SATA SSDs w/ broken NCQ */
-	if (blk_queue_depth(disk->queue) == 1)
+	if (blk_queue_depth(ioc->rqos.q) == 1)
 		return AUTOP_SSD_QD1;
 
 	/* use one of the normal ssd sets */
@@ -829,7 +826,7 @@ static int ioc_autop_idx(struct ioc *ioc, struct gendisk *disk)
 
 	/* step up/down based on the vrate */
 	vrate_pct = div64_u64(ioc->vtime_base_rate * 100, VTIME_PER_USEC);
-	now_ns = blk_time_get_ns();
+	now_ns = ktime_get_ns();
 
 	if (p->too_fast_vrate_pct && p->too_fast_vrate_pct <= vrate_pct) {
 		if (!ioc->autop_too_fast_at)
@@ -905,28 +902,21 @@ static void ioc_refresh_lcoefs(struct ioc *ioc)
 		    &c[LCOEF_WPAGE], &c[LCOEF_WSEQIO], &c[LCOEF_WRANDIO]);
 }
 
-/*
- * struct gendisk is required as an argument because ioc->rqos.disk
- * is not properly initialized when called from the init path.
- */
-static bool ioc_refresh_params_disk(struct ioc *ioc, bool force,
-				    struct gendisk *disk)
+static bool ioc_refresh_params(struct ioc *ioc, bool force)
 {
 	const struct ioc_params *p;
 	int idx;
 
 	lockdep_assert_held(&ioc->lock);
 
-	idx = ioc_autop_idx(ioc, disk);
+	idx = ioc_autop_idx(ioc);
 	p = &autop[idx];
 
 	if (idx == ioc->autop_idx && !force)
 		return false;
 
-	if (idx != ioc->autop_idx) {
+	if (idx != ioc->autop_idx)
 		atomic64_set(&ioc->vtime_rate, VTIME_PER_USEC);
-		ioc->vtime_base_rate = VTIME_PER_USEC;
-	}
 
 	ioc->autop_idx = idx;
 	ioc->autop_too_fast_at = 0;
@@ -942,15 +932,10 @@ static bool ioc_refresh_params_disk(struct ioc *ioc, bool force,
 
 	ioc->vrate_min = DIV64_U64_ROUND_UP((u64)ioc->params.qos[QOS_MIN] *
 					    VTIME_PER_USEC, MILLION);
-	ioc->vrate_max = DIV64_U64_ROUND_UP((u64)ioc->params.qos[QOS_MAX] *
-					    VTIME_PER_USEC, MILLION);
+	ioc->vrate_max = div64_u64((u64)ioc->params.qos[QOS_MAX] *
+				   VTIME_PER_USEC, MILLION);
 
 	return true;
-}
-
-static bool ioc_refresh_params(struct ioc *ioc, bool force)
-{
-	return ioc_refresh_params_disk(ioc, force, ioc->rqos.disk);
 }
 
 /*
@@ -999,7 +984,7 @@ static void ioc_adjust_base_vrate(struct ioc *ioc, u32 rq_wait_pct,
 
 	if (!ioc->busy_level || (ioc->busy_level < 0 && nr_lagging)) {
 		if (ioc->busy_level != prev_busy_level || nr_lagging)
-			trace_iocost_ioc_vrate_adj(ioc, vrate,
+			trace_iocost_ioc_vrate_adj(ioc, atomic64_read(&ioc->vtime_rate),
 						   missed_ppm, rq_wait_pct,
 						   nr_lagging, nr_shortages);
 
@@ -1042,11 +1027,10 @@ static void ioc_adjust_base_vrate(struct ioc *ioc, u32 rq_wait_pct,
 static void ioc_now(struct ioc *ioc, struct ioc_now *now)
 {
 	unsigned seq;
-	u64 vrate;
 
-	now->now_ns = blk_time_get_ns();
+	now->now_ns = ktime_get();
 	now->now = ktime_to_us(now->now_ns);
-	vrate = atomic64_read(&ioc->vtime_rate);
+	now->vrate = atomic64_read(&ioc->vtime_rate);
 
 	/*
 	 * The current vtime is
@@ -1059,7 +1043,7 @@ static void ioc_now(struct ioc *ioc, struct ioc_now *now)
 	do {
 		seq = read_seqcount_begin(&ioc->period_seqcount);
 		now->vnow = ioc->period_at_vtime +
-			(now->now - ioc->period_at) * vrate;
+			(now->now - ioc->period_at) * now->vrate;
 	} while (read_seqcount_retry(&ioc->period_seqcount, seq));
 }
 
@@ -1268,7 +1252,7 @@ static void weight_updated(struct ioc_gq *iocg, struct ioc_now *now)
 static bool iocg_activate(struct ioc_gq *iocg, struct ioc_now *now)
 {
 	struct ioc *ioc = iocg->ioc;
-	u64 __maybe_unused last_period, cur_period;
+	u64 last_period, cur_period;
 	u64 vtime, vtarget;
 	int i;
 
@@ -1446,11 +1430,8 @@ static void iocg_pay_debt(struct ioc_gq *iocg, u64 abs_vpay,
 	lockdep_assert_held(&iocg->ioc->lock);
 	lockdep_assert_held(&iocg->waitq.lock);
 
-	/*
-	 * make sure that nobody messed with @iocg. Check iocg->pd.online
-	 * to avoid warn when removing blkcg or disk.
-	 */
-	WARN_ON_ONCE(list_empty(&iocg->active_list) && iocg->pd.online);
+	/* make sure that nobody messed with @iocg */
+	WARN_ON_ONCE(list_empty(&iocg->active_list));
 	WARN_ON_ONCE(iocg->inuse > 1);
 
 	iocg->abs_vdebt -= min(abs_vpay, iocg->abs_vdebt);
@@ -2248,8 +2229,8 @@ static void ioc_timer_fn(struct timer_list *timer)
 	LIST_HEAD(surpluses);
 	int nr_debtors, nr_shortages = 0, nr_lagging = 0;
 	u64 usage_us_sum = 0;
-	u32 ppm_rthr;
-	u32 ppm_wthr;
+	u32 ppm_rthr = MILLION - ioc->params.qos[QOS_RPPM];
+	u32 ppm_wthr = MILLION - ioc->params.qos[QOS_WPPM];
 	u32 missed_ppm[2], rq_wait_pct;
 	u64 period_vtime;
 	int prev_busy_level;
@@ -2260,8 +2241,6 @@ static void ioc_timer_fn(struct timer_list *timer)
 	/* take care of active iocgs */
 	spin_lock_irq(&ioc->lock);
 
-	ppm_rthr = MILLION - ioc->params.qos[QOS_RPPM];
-	ppm_wthr = MILLION - ioc->params.qos[QOS_WPPM];
 	ioc_now(ioc, &now);
 
 	period_vtime = now.vnow - ioc->period_at_vtime;
@@ -2536,10 +2515,6 @@ static void calc_vtime_cost_builtin(struct bio *bio, struct ioc_gq *iocg,
 	u64 seek_pages = 0;
 	u64 cost = 0;
 
-	/* Can't calculate cost for empty bio */
-	if (!bio->bi_iter.bi_size)
-		goto out;
-
 	switch (bio_op(bio)) {
 	case REQ_OP_READ:
 		coef_seqio	= ioc->params.lcoefs[LCOEF_RSEQIO];
@@ -2688,7 +2663,7 @@ retry_lock:
 	if (use_debt) {
 		iocg_incur_debt(iocg, abs_cost, &now);
 		if (iocg_kick_delay(iocg, &now))
-			blkcg_schedule_throttle(rqos->disk,
+			blkcg_schedule_throttle(rqos->q->disk,
 					(bio->bi_opf & REQ_SWAP) == REQ_SWAP);
 		iocg_unlock(iocg, ioc_locked, &flags);
 		return;
@@ -2718,7 +2693,8 @@ retry_lock:
 	 * All waiters are on iocg->waitq and the wait states are
 	 * synchronized using waitq.lock.
 	 */
-	init_wait_func(&wait.wait, iocg_wake_fn);
+	init_waitqueue_func_entry(&wait.wait, iocg_wake_fn);
+	wait.wait.private = current;
 	wait.bio = bio;
 	wait.abs_cost = abs_cost;
 	wait.committed = false;	/* will be set true by waker */
@@ -2788,7 +2764,7 @@ static void ioc_rqos_merge(struct rq_qos *rqos, struct request *rq,
 	if (likely(!list_empty(&iocg->active_list))) {
 		iocg_incur_debt(iocg, abs_cost, &now);
 		if (iocg_kick_delay(iocg, &now))
-			blkcg_schedule_throttle(rqos->disk,
+			blkcg_schedule_throttle(rqos->q->disk,
 					(bio->bi_opf & REQ_SWAP) == REQ_SWAP);
 	} else {
 		iocg_commit_bio(iocg, bio, abs_cost, cost);
@@ -2829,7 +2805,7 @@ static void ioc_rqos_done(struct rq_qos *rqos, struct request *rq)
 		return;
 	}
 
-	on_q_ns = blk_time_get_ns() - rq->alloc_time_ns;
+	on_q_ns = ktime_get_ns() - rq->alloc_time_ns;
 	rq_wait_ns = rq->start_time_ns - rq->alloc_time_ns;
 	size_nsec = div64_u64(calc_size_vtime_cost(rq, ioc), VTIME_PER_NSEC);
 
@@ -2859,18 +2835,18 @@ static void ioc_rqos_exit(struct rq_qos *rqos)
 {
 	struct ioc *ioc = rqos_to_ioc(rqos);
 
-	blkcg_deactivate_policy(rqos->disk, &blkcg_policy_iocost);
+	blkcg_deactivate_policy(rqos->q, &blkcg_policy_iocost);
 
 	spin_lock_irq(&ioc->lock);
 	ioc->running = IOC_STOP;
 	spin_unlock_irq(&ioc->lock);
 
-	timer_shutdown_sync(&ioc->timer);
+	del_timer_sync(&ioc->timer);
 	free_percpu(ioc->pcpu_stat);
 	kfree(ioc);
 }
 
-static const struct rq_qos_ops ioc_rqos_ops = {
+static struct rq_qos_ops ioc_rqos_ops = {
 	.throttle = ioc_rqos_throttle,
 	.merge = ioc_rqos_merge,
 	.done_bio = ioc_rqos_done_bio,
@@ -2881,7 +2857,9 @@ static const struct rq_qos_ops ioc_rqos_ops = {
 
 static int blk_iocost_init(struct gendisk *disk)
 {
+	struct request_queue *q = disk->queue;
 	struct ioc *ioc;
+	struct rq_qos *rqos;
 	int i, cpu, ret;
 
 	ioc = kzalloc(sizeof(*ioc), GFP_KERNEL);
@@ -2904,6 +2882,11 @@ static int blk_iocost_init(struct gendisk *disk)
 		local64_set(&ccs->rq_wait_ns, 0);
 	}
 
+	rqos = &ioc->rqos;
+	rqos->id = RQ_QOS_COST;
+	rqos->ops = &ioc_rqos_ops;
+	rqos->q = q;
+
 	spin_lock_init(&ioc->lock);
 	timer_setup(&ioc->timer, ioc_timer_fn, 0);
 	INIT_LIST_HEAD(&ioc->active_iocgs);
@@ -2912,32 +2895,32 @@ static int blk_iocost_init(struct gendisk *disk)
 	ioc->vtime_base_rate = VTIME_PER_USEC;
 	atomic64_set(&ioc->vtime_rate, VTIME_PER_USEC);
 	seqcount_spinlock_init(&ioc->period_seqcount, &ioc->lock);
-	ioc->period_at = ktime_to_us(blk_time_get());
+	ioc->period_at = ktime_to_us(ktime_get());
 	atomic64_set(&ioc->cur_period, 0);
 	atomic_set(&ioc->hweight_gen, 0);
 
 	spin_lock_irq(&ioc->lock);
 	ioc->autop_idx = AUTOP_INVALID;
-	ioc_refresh_params_disk(ioc, true, disk);
+	ioc_refresh_params(ioc, true);
 	spin_unlock_irq(&ioc->lock);
 
 	/*
-	 * rqos must be added before activation to allow ioc_pd_init() to
+	 * rqos must be added before activation to allow iocg_pd_init() to
 	 * lookup the ioc from q. This means that the rqos methods may get
 	 * called before policy activation completion, can't assume that the
 	 * target bio has an iocg associated and need to test for NULL iocg.
 	 */
-	ret = rq_qos_add(&ioc->rqos, disk, RQ_QOS_COST, &ioc_rqos_ops);
+	ret = rq_qos_add(q, rqos);
 	if (ret)
 		goto err_free_ioc;
 
-	ret = blkcg_activate_policy(disk, &blkcg_policy_iocost);
+	ret = blkcg_activate_policy(q, &blkcg_policy_iocost);
 	if (ret)
 		goto err_del_qos;
 	return 0;
 
 err_del_qos:
-	rq_qos_del(&ioc->rqos);
+	rq_qos_del(q, rqos);
 err_free_ioc:
 	free_percpu(ioc->pcpu_stat);
 	kfree(ioc);
@@ -2961,14 +2944,13 @@ static void ioc_cpd_free(struct blkcg_policy_data *cpd)
 	kfree(container_of(cpd, struct ioc_cgrp, cpd));
 }
 
-static struct blkg_policy_data *ioc_pd_alloc(struct gendisk *disk,
-		struct blkcg *blkcg, gfp_t gfp)
+static struct blkg_policy_data *ioc_pd_alloc(gfp_t gfp, struct request_queue *q,
+					     struct blkcg *blkcg)
 {
 	int levels = blkcg->css.cgroup->level + 1;
 	struct ioc_gq *iocg;
 
-	iocg = kzalloc_node(struct_size(iocg, ancestors, levels), gfp,
-			    disk->node_id);
+	iocg = kzalloc_node(struct_size(iocg, ancestors, levels), gfp, q->node);
 	if (!iocg)
 		return NULL;
 
@@ -3003,7 +2985,8 @@ static void ioc_pd_init(struct blkg_policy_data *pd)
 	iocg->hweight_inuse = WEIGHT_ONE;
 
 	init_waitqueue_head(&iocg->waitq);
-	hrtimer_setup(&iocg->waitq_timer, iocg_waitq_timer_fn, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	hrtimer_init(&iocg->waitq_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	iocg->waitq_timer.function = iocg_waitq_timer_fn;
 
 	iocg->level = blkg->blkcg->css.cgroup->level;
 
@@ -3129,11 +3112,9 @@ static ssize_t ioc_weight_write(struct kernfs_open_file *of, char *buf,
 		return nbytes;
 	}
 
-	blkg_conf_init(&ctx, buf);
-
-	ret = blkg_conf_prep(blkcg, &blkcg_policy_iocost, &ctx);
+	ret = blkg_conf_prep(blkcg, &blkcg_policy_iocost, buf, &ctx);
 	if (ret)
-		goto err;
+		return ret;
 
 	iocg = blkg_to_iocg(ctx.blkg);
 
@@ -3152,14 +3133,12 @@ static ssize_t ioc_weight_write(struct kernfs_open_file *of, char *buf,
 	weight_updated(iocg, &now);
 	spin_unlock(&iocg->ioc->lock);
 
-	blkg_conf_exit(&ctx);
+	blkg_conf_finish(&ctx);
 	return nbytes;
 
 einval:
-	ret = -EINVAL;
-err:
-	blkg_conf_exit(&ctx);
-	return ret;
+	blkg_conf_finish(&ctx);
+	return -EINVAL;
 }
 
 static u64 ioc_qos_prfill(struct seq_file *sf, struct blkg_policy_data *pd,
@@ -3171,7 +3150,6 @@ static u64 ioc_qos_prfill(struct seq_file *sf, struct blkg_policy_data *pd,
 	if (!dname)
 		return 0;
 
-	spin_lock(&ioc->lock);
 	seq_printf(sf, "%s enable=%d ctrl=%s rpct=%u.%02u rlat=%u wpct=%u.%02u wlat=%u min=%u.%02u max=%u.%02u\n",
 		   dname, ioc->enabled, ioc->user_qos_params ? "user" : "auto",
 		   ioc->params.qos[QOS_RPPM] / 10000,
@@ -3184,7 +3162,6 @@ static u64 ioc_qos_prfill(struct seq_file *sf, struct blkg_policy_data *pd,
 		   ioc->params.qos[QOS_MIN] % 10000 / 100,
 		   ioc->params.qos[QOS_MAX] / 10000,
 		   ioc->params.qos[QOS_MAX] % 10000 / 100);
-	spin_unlock(&ioc->lock);
 	return 0;
 }
 
@@ -3216,30 +3193,19 @@ static const match_table_t qos_tokens = {
 static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 			     size_t nbytes, loff_t off)
 {
-	struct blkg_conf_ctx ctx;
+	struct block_device *bdev;
 	struct gendisk *disk;
 	struct ioc *ioc;
 	u32 qos[NR_QOS_PARAMS];
 	bool enable, user;
-	char *body, *p;
-	unsigned long memflags;
+	char *p;
 	int ret;
 
-	blkg_conf_init(&ctx, input);
+	bdev = blkcg_conf_open_bdev(&input);
+	if (IS_ERR(bdev))
+		return PTR_ERR(bdev);
 
-	memflags = blkg_conf_open_bdev_frozen(&ctx);
-	if (IS_ERR_VALUE(memflags)) {
-		ret = memflags;
-		goto err;
-	}
-
-	body = ctx.body;
-	disk = ctx.bdev->bd_disk;
-	if (!queue_is_mq(disk->queue)) {
-		ret = -EOPNOTSUPP;
-		goto err;
-	}
-
+	disk = bdev->bd_disk;
 	ioc = q_to_ioc(disk->queue);
 	if (!ioc) {
 		ret = blk_iocost_init(disk);
@@ -3248,14 +3214,13 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 		ioc = q_to_ioc(disk->queue);
 	}
 
-	blk_mq_quiesce_queue(disk->queue);
-
 	spin_lock_irq(&ioc->lock);
 	memcpy(qos, ioc->params.qos, sizeof(qos));
 	enable = ioc->enabled;
 	user = ioc->user_qos_params;
+	spin_unlock_irq(&ioc->lock);
 
-	while ((p = strsep(&body, " \t\n"))) {
+	while ((p = strsep(&input, " \t\n"))) {
 		substring_t args[MAX_OPT_ARGS];
 		char buf[32];
 		int tok;
@@ -3266,8 +3231,7 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 
 		switch (match_token(p, qos_ctrl_tokens, args)) {
 		case QOS_ENABLE:
-			if (match_u64(&args[0], &v))
-				goto einval;
+			match_u64(&args[0], &v);
 			enable = v;
 			continue;
 		case QOS_CTRL:
@@ -3321,12 +3285,13 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 	if (qos[QOS_MIN] > qos[QOS_MAX])
 		goto einval;
 
-	if (enable && !ioc->enabled) {
+	spin_lock_irq(&ioc->lock);
+
+	if (enable) {
 		blk_stat_enable_accounting(disk->queue);
 		blk_queue_flag_set(QUEUE_FLAG_RQ_ALLOC_TIME, disk->queue);
 		ioc->enabled = true;
-	} else if (!enable && ioc->enabled) {
-		blk_stat_disable_accounting(disk->queue);
+	} else {
 		blk_queue_flag_clear(QUEUE_FLAG_RQ_ALLOC_TIME, disk->queue);
 		ioc->enabled = false;
 	}
@@ -3341,21 +3306,12 @@ static ssize_t ioc_qos_write(struct kernfs_open_file *of, char *input,
 	ioc_refresh_params(ioc, true);
 	spin_unlock_irq(&ioc->lock);
 
-	if (enable)
-		wbt_disable_default(disk);
-	else
-		wbt_enable_default(disk);
-
-	blk_mq_unquiesce_queue(disk->queue);
-
-	blkg_conf_exit_frozen(&ctx, memflags);
+	blkdev_put_no_open(bdev);
 	return nbytes;
 einval:
-	spin_unlock_irq(&ioc->lock);
-	blk_mq_unquiesce_queue(disk->queue);
 	ret = -EINVAL;
 err:
-	blkg_conf_exit_frozen(&ctx, memflags);
+	blkdev_put_no_open(bdev);
 	return ret;
 }
 
@@ -3369,14 +3325,12 @@ static u64 ioc_cost_model_prfill(struct seq_file *sf,
 	if (!dname)
 		return 0;
 
-	spin_lock(&ioc->lock);
 	seq_printf(sf, "%s ctrl=%s model=linear "
 		   "rbps=%llu rseqiops=%llu rrandiops=%llu "
 		   "wbps=%llu wseqiops=%llu wrandiops=%llu\n",
 		   dname, ioc->user_cost_model ? "user" : "auto",
 		   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS], u[I_LCOEF_RRANDIOPS],
 		   u[I_LCOEF_WBPS], u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS]);
-	spin_unlock(&ioc->lock);
 	return 0;
 }
 
@@ -3408,44 +3362,31 @@ static const match_table_t i_lcoef_tokens = {
 static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 				    size_t nbytes, loff_t off)
 {
-	struct blkg_conf_ctx ctx;
-	struct request_queue *q;
-	unsigned int memflags;
+	struct block_device *bdev;
 	struct ioc *ioc;
 	u64 u[NR_I_LCOEFS];
 	bool user;
-	char *body, *p;
+	char *p;
 	int ret;
 
-	blkg_conf_init(&ctx, input);
+	bdev = blkcg_conf_open_bdev(&input);
+	if (IS_ERR(bdev))
+		return PTR_ERR(bdev);
 
-	ret = blkg_conf_open_bdev(&ctx);
-	if (ret)
-		goto err;
-
-	body = ctx.body;
-	q = bdev_get_queue(ctx.bdev);
-	if (!queue_is_mq(q)) {
-		ret = -EOPNOTSUPP;
-		goto err;
-	}
-
-	ioc = q_to_ioc(q);
+	ioc = q_to_ioc(bdev_get_queue(bdev));
 	if (!ioc) {
-		ret = blk_iocost_init(ctx.bdev->bd_disk);
+		ret = blk_iocost_init(bdev->bd_disk);
 		if (ret)
 			goto err;
-		ioc = q_to_ioc(q);
+		ioc = q_to_ioc(bdev_get_queue(bdev));
 	}
-
-	memflags = blk_mq_freeze_queue(q);
-	blk_mq_quiesce_queue(q);
 
 	spin_lock_irq(&ioc->lock);
 	memcpy(u, ioc->params.i_lcoefs, sizeof(u));
 	user = ioc->user_cost_model;
+	spin_unlock_irq(&ioc->lock);
 
-	while ((p = strsep(&body, " \t\n"))) {
+	while ((p = strsep(&input, " \t\n"))) {
 		substring_t args[MAX_OPT_ARGS];
 		char buf[32];
 		int tok;
@@ -3480,6 +3421,7 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 		user = true;
 	}
 
+	spin_lock_irq(&ioc->lock);
 	if (user) {
 		memcpy(ioc->params.i_lcoefs, u, sizeof(u));
 		ioc->user_cost_model = true;
@@ -3489,21 +3431,13 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 	ioc_refresh_params(ioc, true);
 	spin_unlock_irq(&ioc->lock);
 
-	blk_mq_unquiesce_queue(q);
-	blk_mq_unfreeze_queue(q, memflags);
-
-	blkg_conf_exit(&ctx);
+	blkdev_put_no_open(bdev);
 	return nbytes;
 
 einval:
-	spin_unlock_irq(&ioc->lock);
-
-	blk_mq_unquiesce_queue(q);
-	blk_mq_unfreeze_queue(q, memflags);
-
 	ret = -EINVAL;
 err:
-	blkg_conf_exit(&ctx);
+	blkdev_put_no_open(bdev);
 	return ret;
 }
 

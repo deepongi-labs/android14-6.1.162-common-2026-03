@@ -20,6 +20,7 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #include <linux/can/dev.h>
@@ -669,7 +670,7 @@ static void ifi_canfd_set_bittiming(struct net_device *ndev)
 {
 	struct ifi_canfd_priv *priv = netdev_priv(ndev);
 	const struct can_bittiming *bt = &priv->can.bittiming;
-	const struct can_bittiming *dbt = &priv->can.fd.data_bittiming;
+	const struct can_bittiming *dbt = &priv->can.data_bittiming;
 	u16 brp, sjw, tseg1, tseg2, tdc;
 
 	/* Configure bit timing */
@@ -1000,10 +1001,10 @@ static int ifi_canfd_plat_probe(struct platform_device *pdev)
 
 	priv->can.clock.freq = readl(addr + IFI_CANFD_CANCLOCK);
 
-	priv->can.bittiming_const = &ifi_canfd_bittiming_const;
-	priv->can.fd.data_bittiming_const = &ifi_canfd_bittiming_const;
-	priv->can.do_set_mode = ifi_canfd_set_mode;
-	priv->can.do_get_berr_counter = ifi_canfd_get_berr_counter;
+	priv->can.bittiming_const	= &ifi_canfd_bittiming_const;
+	priv->can.data_bittiming_const	= &ifi_canfd_bittiming_const;
+	priv->can.do_set_mode		= ifi_canfd_set_mode;
+	priv->can.do_get_berr_counter	= ifi_canfd_get_berr_counter;
 
 	/* IFI CANFD can do both Bosch FD and ISO FD */
 	priv->can.ctrlmode = CAN_CTRLMODE_FD;
@@ -1034,13 +1035,15 @@ err_reg:
 	return ret;
 }
 
-static void ifi_canfd_plat_remove(struct platform_device *pdev)
+static int ifi_canfd_plat_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	unregister_candev(ndev);
 	platform_set_drvdata(pdev, NULL);
 	free_candev(ndev);
+
+	return 0;
 }
 
 static const struct of_device_id ifi_canfd_of_table[] = {
@@ -1055,7 +1058,7 @@ static struct platform_driver ifi_canfd_plat_driver = {
 		.of_match_table	= ifi_canfd_of_table,
 	},
 	.probe	= ifi_canfd_plat_probe,
-	.remove = ifi_canfd_plat_remove,
+	.remove	= ifi_canfd_plat_remove,
 };
 
 module_platform_driver(ifi_canfd_plat_driver);

@@ -71,6 +71,10 @@ enum {
 #define MT6360_STRBTO_STEPUS		32000
 #define MT6360_STRBTO_MAXUS		2432000
 
+#define STATE_OFF			0
+#define STATE_KEEP			1
+#define STATE_ON			2
+
 struct mt6360_led {
 	union {
 		struct led_classdev isnk;
@@ -80,7 +84,7 @@ struct mt6360_led {
 	struct v4l2_flash *v4l2_flash;
 	struct mt6360_priv *priv;
 	u32 led_no;
-	enum led_default_state default_state;
+	u32 default_state;
 };
 
 struct mt6360_priv {
@@ -91,7 +95,7 @@ struct mt6360_priv {
 	unsigned int fled_torch_used;
 	unsigned int leds_active;
 	unsigned int leds_count;
-	struct mt6360_led leds[] __counted_by(leds_count);
+	struct mt6360_led leds[];
 };
 
 static int mt6360_mc_brightness_set(struct led_classdev *lcdev,
@@ -241,19 +245,9 @@ static int mt6360_strobe_set(struct led_classdev_flash *fl_cdev, bool state)
 	u32 enable_mask = MT6360_STROBEN_MASK | MT6360_FLCSEN_MASK(led->led_no);
 	u32 val = state ? MT6360_FLCSEN_MASK(led->led_no) : 0;
 	u32 prev = priv->fled_strobe_used, curr;
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&priv->lock);
-
-	/*
-	 * If the state of the upcoming change is the same as the current LED
-	 * device state, then skip the subsequent code to avoid conflict
-	 * with the flow of turning on LED torch mode in V4L2.
-	 */
-	if (state == !!(BIT(led->led_no) & prev)) {
-		dev_info(lcdev->dev, "No change in strobe state [0x%x]\n", prev);
-		goto unlock;
-	}
 
 	/*
 	 * Only one set of flash control logic, use the flag to avoid torch is
@@ -411,10 +405,10 @@ static int mt6360_isnk_init_default_state(struct mt6360_led *led)
 		level = LED_OFF;
 
 	switch (led->default_state) {
-	case LEDS_DEFSTATE_ON:
+	case STATE_ON:
 		led->isnk.brightness = led->isnk.max_brightness;
 		break;
-	case LEDS_DEFSTATE_KEEP:
+	case STATE_KEEP:
 		led->isnk.brightness = min(level, led->isnk.max_brightness);
 		break;
 	default:
@@ -449,10 +443,10 @@ static int mt6360_flash_init_default_state(struct mt6360_led *led)
 		level = LED_OFF;
 
 	switch (led->default_state) {
-	case LEDS_DEFSTATE_ON:
+	case STATE_ON:
 		flash->led_cdev.brightness = flash->led_cdev.max_brightness;
 		break;
-	case LEDS_DEFSTATE_KEEP:
+	case STATE_KEEP:
 		flash->led_cdev.brightness =
 			min(level, flash->led_cdev.max_brightness);
 		break;
@@ -769,6 +763,25 @@ static int mt6360_init_flash_properties(struct mt6360_led *led,
 	return 0;
 }
 
+static int mt6360_init_common_properties(struct mt6360_led *led,
+					 struct led_init_data *init_data)
+{
+	const char *const states[] = { "off", "keep", "on" };
+	const char *str;
+	int ret;
+
+	if (!fwnode_property_read_string(init_data->fwnode,
+					 "default-state", &str)) {
+		ret = match_string(states, ARRAY_SIZE(states), str);
+		if (ret < 0)
+			ret = STATE_OFF;
+
+		led->default_state = ret;
+	}
+
+	return 0;
+}
+
 static void mt6360_v4l2_flash_release(struct mt6360_priv *priv)
 {
 	int i;
@@ -784,6 +797,7 @@ static void mt6360_v4l2_flash_release(struct mt6360_priv *priv)
 static int mt6360_led_probe(struct platform_device *pdev)
 {
 	struct mt6360_priv *priv;
+	struct fwnode_handle *child;
 	size_t count;
 	int i = 0, ret;
 
@@ -810,7 +824,7 @@ static int mt6360_led_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	device_for_each_child_node_scoped(&pdev->dev, child) {
+	device_for_each_child_node(&pdev->dev, child) {
 		struct mt6360_led *led = priv->leds + i;
 		struct led_init_data init_data = { .fwnode = child, };
 		u32 reg, led_color;
@@ -841,7 +855,10 @@ static int mt6360_led_probe(struct platform_device *pdev)
 
 		led->led_no = reg;
 		led->priv = priv;
-		led->default_state = led_init_default_state_get(child);
+
+		ret = mt6360_init_common_properties(led, &init_data);
+		if (ret)
+			goto out_flash_release;
 
 		if (reg == MT6360_VIRTUAL_MULTICOLOR ||
 		    reg <= MT6360_LED_ISNKML)
@@ -867,11 +884,12 @@ out_flash_release:
 	return ret;
 }
 
-static void mt6360_led_remove(struct platform_device *pdev)
+static int mt6360_led_remove(struct platform_device *pdev)
 {
 	struct mt6360_priv *priv = platform_get_drvdata(pdev);
 
 	mt6360_v4l2_flash_release(priv);
+	return 0;
 }
 
 static const struct of_device_id __maybe_unused mt6360_led_of_id[] = {

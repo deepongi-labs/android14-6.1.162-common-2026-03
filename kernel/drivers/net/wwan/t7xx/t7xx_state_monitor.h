@@ -38,12 +38,10 @@ enum t7xx_fsm_state {
 enum t7xx_fsm_event_state {
 	FSM_EVENT_INVALID,
 	FSM_EVENT_MD_HS2,
-	FSM_EVENT_AP_HS2,
 	FSM_EVENT_MD_EX,
 	FSM_EVENT_MD_EX_REC_OK,
 	FSM_EVENT_MD_EX_PASS,
 	FSM_EVENT_MD_HS2_EXIT,
-	FSM_EVENT_AP_HS2_EXIT,
 	FSM_EVENT_MAX
 };
 
@@ -96,14 +94,13 @@ struct t7xx_fsm_ctl {
 	bool			exp_flg;
 	spinlock_t		notifier_lock;		/* Protects notifier list */
 	struct list_head	notifier_list;
-	u32			status;			/* Device boot stage */
 };
 
 struct t7xx_fsm_event {
 	struct list_head	entry;
 	enum t7xx_fsm_event_state event_id;
 	unsigned int		length;
-	unsigned char		data[] __counted_by(length);
+	unsigned char		data[];
 };
 
 struct t7xx_fsm_command {

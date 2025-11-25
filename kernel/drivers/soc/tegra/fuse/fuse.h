@@ -32,10 +32,6 @@ struct tegra_fuse_soc {
 
 	const struct nvmem_cell_lookup *lookups;
 	unsigned int num_lookups;
-	const struct nvmem_cell_info *cells;
-	unsigned int num_cells;
-	const struct nvmem_keepout *keepouts;
-	unsigned int num_keepouts;
 
 	const struct attribute_group *soc_attr_group;
 
@@ -69,7 +65,6 @@ struct tegra_fuse {
 
 void tegra_init_revision(void);
 void tegra_init_apbmisc(void);
-void tegra_acpi_init_apbmisc(void);
 
 u32 __init tegra_fuse_read_spare(unsigned int spare);
 u32 __init tegra_fuse_read_early(unsigned int offset);
@@ -124,8 +119,7 @@ extern const struct tegra_fuse_soc tegra186_fuse_soc;
 #endif
 
 #if IS_ENABLED(CONFIG_ARCH_TEGRA_194_SOC) || \
-    IS_ENABLED(CONFIG_ARCH_TEGRA_234_SOC) || \
-    IS_ENABLED(CONFIG_ARCH_TEGRA_241_SOC)
+    IS_ENABLED(CONFIG_ARCH_TEGRA_234_SOC)
 extern const struct attribute_group tegra194_soc_attr_group;
 #endif
 
@@ -135,10 +129,6 @@ extern const struct tegra_fuse_soc tegra194_fuse_soc;
 
 #ifdef CONFIG_ARCH_TEGRA_234_SOC
 extern const struct tegra_fuse_soc tegra234_fuse_soc;
-#endif
-
-#ifdef CONFIG_ARCH_TEGRA_241_SOC
-extern const struct tegra_fuse_soc tegra241_fuse_soc;
 #endif
 
 #endif

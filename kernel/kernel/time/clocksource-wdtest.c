@@ -22,7 +22,6 @@
 #include "tick-internal.h"
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Clocksource watchdog unit test");
 MODULE_AUTHOR("Paul E. McKenney <paulmck@kernel.org>");
 
 static int holdoff = IS_BUILTIN(CONFIG_TEST_CLOCKSOURCE_WATCHDOG) ? 10 : 0;
@@ -137,8 +136,7 @@ static int wdtest_func(void *arg)
 	udelay(1);
 	j2 = clocksource_wdtest_ktime.read(&clocksource_wdtest_ktime);
 	pr_info("--- tsc-like times: %lu - %lu = %lu.\n", j2, j1, j2 - j1);
-	WARN_ONCE(time_before(j2, j1 + NSEC_PER_USEC),
-		  "Expected at least 1000ns, got %lu.\n", j2 - j1);
+	WARN_ON_ONCE(time_before(j2, j1 + NSEC_PER_USEC));
 
 	/* Verify tsc-like stability with various numbers of errors injected. */
 	max_retries = clocksource_get_max_watchdog_retry();

@@ -8,7 +8,6 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <net/tls.h>
-#include <trace/events/sock.h>
 
 static bool sk_msg_try_coalesce_ok(struct sk_msg *msg, int elem_first_coalesce)
 {
@@ -293,7 +292,7 @@ out:
 	/* If we trim data a full sg elem before curr pointer update
 	 * copybreak and current so that any future copy operations
 	 * start at new copy location.
-	 * However trimmed data that has not yet been used in a copy op
+	 * However trimed data that has not yet been used in a copy op
 	 * does not require an update.
 	 */
 	if (!msg->sg.size) {
@@ -369,8 +368,8 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			     struct sk_msg *msg, u32 bytes)
 {
 	int ret = -ENOSPC, i = msg->sg.curr;
-	u32 copy, buf_size, copied = 0;
 	struct scatterlist *sge;
+	u32 copy, buf_size;
 	void *to;
 
 	do {
@@ -397,7 +396,6 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			goto out;
 		}
 		bytes -= copy;
-		copied += copy;
 		if (!bytes)
 			break;
 		msg->sg.copybreak = 0;
@@ -405,7 +403,7 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 	} while (i != msg->sg.end);
 out:
 	msg->sg.curr = i;
-	return (ret < 0) ? ret : copied;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(sk_msg_memcopy_from_iter);
 
@@ -656,13 +654,6 @@ static void sk_psock_backlog(struct work_struct *work)
 	bool ingress;
 	int ret;
 
-	/* If sk is quickly removed from the map and then added back, the old
-	 * psock should not be scheduled, because there are now two psocks
-	 * pointing to the same sk.
-	 */
-	if (!sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
-		return;
-
 	/* Increment the psock refcnt to synchronize with close(fd) path in
 	 * sock_map_close(), ensuring we wait for backlog thread completion
 	 * before sk_socket freed. If refcnt increment fails, it indicates
@@ -856,8 +847,6 @@ static void sk_psock_destroy(struct work_struct *work)
 
 	if (psock->sk_redir)
 		sock_put(psock->sk_redir);
-	if (psock->sk_pair)
-		sock_put(psock->sk_pair);
 	sock_put(psock->sk);
 	kfree(psock);
 }
@@ -876,7 +865,7 @@ void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 	sk_psock_stop(psock);
 
 	INIT_RCU_WORK(&psock->rwork, sk_psock_destroy);
-	queue_rcu_work(system_percpu_wq, &psock->rwork);
+	queue_rcu_work(system_wq, &psock->rwork);
 }
 EXPORT_SYMBOL_GPL(sk_psock_drop);
 
@@ -1138,8 +1127,6 @@ static void sk_psock_strp_data_ready(struct sock *sk)
 {
 	struct sk_psock *psock;
 
-	trace_sk_data_ready(sk);
-
 	rcu_read_lock();
 	psock = sk_psock(sk);
 	if (likely(psock)) {
@@ -1244,17 +1231,11 @@ out:
 static void sk_psock_verdict_data_ready(struct sock *sk)
 {
 	struct socket *sock = sk->sk_socket;
-	const struct proto_ops *ops;
 	int copied;
 
-	trace_sk_data_ready(sk);
-
-	if (unlikely(!sock))
+	if (unlikely(!sock || !sock->ops || !sock->ops->read_skb))
 		return;
-	ops = READ_ONCE(sock->ops);
-	if (!ops || !ops->read_skb)
-		return;
-	copied = ops->read_skb(sk, sk_psock_verdict_recv);
+	copied = sock->ops->read_skb(sk, sk_psock_verdict_recv);
 	if (copied >= 0) {
 		struct sk_psock *psock;
 

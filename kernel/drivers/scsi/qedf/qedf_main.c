@@ -781,7 +781,7 @@ static int qedf_eh_abort(struct scsi_cmnd *sc_cmd)
 		goto drop_rdata_kref;
 	}
 
-	rc = fc_block_rport(rport);
+	rc = fc_block_scsi_eh(sc_cmd);
 	if (rc)
 		goto drop_rdata_kref;
 
@@ -865,19 +865,18 @@ out:
 
 static int qedf_eh_target_reset(struct scsi_cmnd *sc_cmd)
 {
-	struct scsi_target *starget = scsi_target(sc_cmd->device);
-	struct fc_rport *rport = starget_to_rport(starget);
-
-	QEDF_ERR(NULL, "TARGET RESET Issued...");
-	return qedf_initiate_tmf(rport, 0, FCP_TMF_TGT_RESET);
+	QEDF_ERR(NULL, "%d:0:%d:%lld: TARGET RESET Issued...",
+		 sc_cmd->device->host->host_no, sc_cmd->device->id,
+		 sc_cmd->device->lun);
+	return qedf_initiate_tmf(sc_cmd, FCP_TMF_TGT_RESET);
 }
 
 static int qedf_eh_device_reset(struct scsi_cmnd *sc_cmd)
 {
-	struct fc_rport *rport = starget_to_rport(scsi_target(sc_cmd->device));
-
-	QEDF_ERR(NULL, "LUN RESET Issued...\n");
-	return qedf_initiate_tmf(rport, sc_cmd->device->lun, FCP_TMF_LUN_RESET);
+	QEDF_ERR(NULL, "%d:0:%d:%lld: LUN RESET Issued... ",
+		 sc_cmd->device->host->host_no, sc_cmd->device->id,
+		 sc_cmd->device->lun);
+	return qedf_initiate_tmf(sc_cmd, FCP_TMF_LUN_RESET);
 }
 
 bool qedf_wait_for_upload(struct qedf_ctx *qedf)
@@ -982,8 +981,7 @@ static int qedf_eh_host_reset(struct scsi_cmnd *sc_cmd)
 	return SUCCESS;
 }
 
-static int qedf_sdev_configure(struct scsi_device *sdev,
-			       struct queue_limits *lim)
+static int qedf_slave_configure(struct scsi_device *sdev)
 {
 	if (qedf_queue_depth) {
 		scsi_change_queue_depth(sdev, qedf_queue_depth);
@@ -992,7 +990,7 @@ static int qedf_sdev_configure(struct scsi_device *sdev,
 	return 0;
 }
 
-static const struct scsi_host_template qedf_host_template = {
+static struct scsi_host_template qedf_host_template = {
 	.module 	= THIS_MODULE,
 	.name 		= QEDF_MODULE_NAME,
 	.this_id 	= -1,
@@ -1004,7 +1002,7 @@ static const struct scsi_host_template qedf_host_template = {
 	.eh_device_reset_handler = qedf_eh_device_reset, /* lun reset */
 	.eh_target_reset_handler = qedf_eh_target_reset, /* target reset */
 	.eh_host_reset_handler  = qedf_eh_host_reset,
-	.sdev_configure	= qedf_sdev_configure,
+	.slave_configure	= qedf_slave_configure,
 	.dma_boundary = QED_HW_DMA_BOUNDARY,
 	.sg_tablesize = QEDF_MAX_BDS_PER_CMD,
 	.can_queue = FCOE_PARAMS_NUM_TASKS,
@@ -2237,6 +2235,7 @@ static bool qedf_process_completions(struct qedf_fastpath *fp)
 	u16 prod_idx;
 	struct fcoe_cqe *cqe;
 	struct qedf_io_work *io_work;
+	int num_handled = 0;
 	unsigned int cpu;
 	struct qedf_ioreq *io_req = NULL;
 	u16 xid;
@@ -2259,6 +2258,7 @@ static bool qedf_process_completions(struct qedf_fastpath *fp)
 
 	while (new_cqes) {
 		fp->completions++;
+		num_handled++;
 		cqe = &que->cq[que->cq_cons_idx];
 
 		comp_type = (cqe->cqe_data >> FCOE_CQE_CQE_TYPE_SHIFT) &
@@ -2287,7 +2287,7 @@ static bool qedf_process_completions(struct qedf_fastpath *fp)
 		 * on.
 		 */
 		if (!io_req)
-			/* If there is not io_req associated with this CQE
+			/* If there is not io_req assocated with this CQE
 			 * just queue it on CPU 0
 			 */
 			cpu = 0;
@@ -2968,6 +2968,7 @@ static int qedf_alloc_bdq(struct qedf_ctx *qedf)
 	int i;
 	struct scsi_bd *pbl;
 	u64 *list;
+	dma_addr_t page;
 
 	/* Alloc dma memory for BDQ buffers */
 	for (i = 0; i < QEDF_BDQ_SIZE; i++) {
@@ -3028,9 +3029,11 @@ static int qedf_alloc_bdq(struct qedf_ctx *qedf)
 	qedf->bdq_pbl_list_num_entries = qedf->bdq_pbl_mem_size /
 	    QEDF_PAGE_SIZE;
 	list = (u64 *)qedf->bdq_pbl_list;
+	page = qedf->bdq_pbl_list_dma;
 	for (i = 0; i < qedf->bdq_pbl_list_num_entries; i++) {
 		*list = qedf->bdq_pbl_dma;
 		list++;
+		page += QEDF_PAGE_SIZE;
 	}
 
 	return 0;
@@ -3374,8 +3377,9 @@ retry_probe:
 	QEDF_INFO(&(qedf->dbg_ctx), QEDF_LOG_INFO, "qedf->io_mempool=%p.\n",
 	    qedf->io_mempool);
 
-	qedf->link_update_wq = alloc_workqueue("qedf_%u_link", WQ_MEM_RECLAIM,
-					       1, qedf->lport->host->host_no);
+	sprintf(host_buf, "qedf_%u_link",
+	    qedf->lport->host->host_no);
+	qedf->link_update_wq = create_workqueue(host_buf);
 	INIT_DELAYED_WORK(&qedf->link_update, qedf_handle_link_update);
 	INIT_DELAYED_WORK(&qedf->link_recovery, qedf_link_recovery);
 	INIT_DELAYED_WORK(&qedf->grcdump_work, qedf_wq_grcdump);
@@ -3480,7 +3484,7 @@ retry_probe:
 	slowpath_params.drv_minor = QEDF_DRIVER_MINOR_VER;
 	slowpath_params.drv_rev = QEDF_DRIVER_REV_VER;
 	slowpath_params.drv_eng = QEDF_DRIVER_ENG_VER;
-	strscpy(slowpath_params.name, "qedf", sizeof(slowpath_params.name));
+	strncpy(slowpath_params.name, "qedf", QED_DRV_VER_STR_SIZE);
 	rc = qed_ops->common->slowpath_start(qedf->cdev, &slowpath_params);
 	if (rc) {
 		QEDF_ERR(&(qedf->dbg_ctx), "Cannot start slowpath.\n");
@@ -3585,8 +3589,9 @@ retry_probe:
 	ether_addr_copy(params.ll2_mac_address, qedf->mac);
 
 	/* Start LL2 processing thread */
-	qedf->ll2_recv_wq = alloc_workqueue("qedf_%d_ll2", WQ_MEM_RECLAIM, 1,
-					    host->host_no);
+	snprintf(host_buf, 20, "qedf_%d_ll2", host->host_no);
+	qedf->ll2_recv_wq =
+		create_workqueue(host_buf);
 	if (!qedf->ll2_recv_wq) {
 		QEDF_ERR(&(qedf->dbg_ctx), "Failed to LL2 workqueue.\n");
 		rc = -ENOMEM;
@@ -3627,8 +3632,9 @@ retry_probe:
 		}
 	}
 
-	qedf->timer_work_queue = alloc_workqueue("qedf_%u_timer",
-				WQ_MEM_RECLAIM, 1, qedf->lport->host->host_no);
+	sprintf(host_buf, "qedf_%u_timer", qedf->lport->host->host_no);
+	qedf->timer_work_queue =
+		create_workqueue(host_buf);
 	if (!qedf->timer_work_queue) {
 		QEDF_ERR(&(qedf->dbg_ctx), "Failed to start timer "
 			  "workqueue.\n");
@@ -3640,8 +3646,7 @@ retry_probe:
 	if (mode != QEDF_MODE_RECOVERY) {
 		sprintf(host_buf, "qedf_%u_dpc",
 		    qedf->lport->host->host_no);
-		qedf->dpc_wq =
-			alloc_workqueue("%s", WQ_MEM_RECLAIM, 1, host_buf);
+		qedf->dpc_wq = create_workqueue(host_buf);
 	}
 	INIT_DELAYED_WORK(&qedf->recovery_work, qedf_recovery_handler);
 
@@ -4020,6 +4025,11 @@ void qedf_stag_change_work(struct work_struct *work)
 	struct qedf_ctx *qedf =
 	    container_of(work, struct qedf_ctx, stag_work.work);
 
+	if (!qedf) {
+		QEDF_ERR(&qedf->dbg_ctx, "qedf is NULL");
+		return;
+	}
+
 	if (test_bit(QEDF_IN_RECOVERY, &qedf->flags)) {
 		QEDF_ERR(&qedf->dbg_ctx,
 			 "Already is in recovery, hence not calling software context reset.\n");
@@ -4177,7 +4187,7 @@ static int __init qedf_init(void)
 		goto err3;
 	}
 
-	qedf_io_wq = alloc_workqueue("%s", WQ_MEM_RECLAIM, 1, "qedf_io_wq");
+	qedf_io_wq = create_workqueue("qedf_io_wq");
 	if (!qedf_io_wq) {
 		QEDF_ERR(NULL, "Could not create qedf_io_wq.\n");
 		goto err4;

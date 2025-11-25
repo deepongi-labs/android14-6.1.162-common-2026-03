@@ -90,7 +90,6 @@ module_param(IA_RX_BUF, int, 0);
 module_param(IA_RX_BUF_SZ, int, 0);
 module_param(IADebugFlag, uint, 0644);
 
-MODULE_DESCRIPTION("Driver for Interphase ATM PCI NICs");
 MODULE_LICENSE("GPL");
 
 /**************************** IA_LIB **********************************/
@@ -3283,7 +3282,7 @@ static void __exit ia_module_exit(void)
 {
 	pci_unregister_driver(&ia_driver);
 
-	timer_delete_sync(&ia_timer);
+	del_timer_sync(&ia_timer);
 }
 
 module_init(ia_module_init);

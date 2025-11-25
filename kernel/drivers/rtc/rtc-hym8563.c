@@ -285,19 +285,14 @@ static unsigned long hym8563_clkout_recalc_rate(struct clk_hw *hw,
 	return clkout_rates[ret];
 }
 
-static int hym8563_clkout_determine_rate(struct clk_hw *hw,
-					 struct clk_rate_request *req)
+static long hym8563_clkout_round_rate(struct clk_hw *hw, unsigned long rate,
+				      unsigned long *prate)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(clkout_rates); i++)
-		if (clkout_rates[i] <= req->rate) {
-			req->rate = clkout_rates[i];
-
-			return 0;
-		}
-
-	req->rate = clkout_rates[0];
+		if (clkout_rates[i] <= rate)
+			return clkout_rates[i];
 
 	return 0;
 }
@@ -368,7 +363,7 @@ static const struct clk_ops hym8563_clkout_ops = {
 	.unprepare = hym8563_clkout_unprepare,
 	.is_prepared = hym8563_clkout_is_prepared,
 	.recalc_rate = hym8563_clkout_recalc_rate,
-	.determine_rate = hym8563_clkout_determine_rate,
+	.round_rate = hym8563_clkout_round_rate,
 	.set_rate = hym8563_clkout_set_rate,
 };
 
@@ -523,14 +518,9 @@ static int hym8563_probe(struct i2c_client *client)
 	}
 
 	if (client->irq > 0) {
-		unsigned long irqflags = IRQF_TRIGGER_LOW;
-
-		if (dev_fwnode(&client->dev))
-			irqflags = 0;
-
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
 						NULL, hym8563_irq,
-						irqflags | IRQF_ONESHOT,
+						IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 						client->name, hym8563);
 		if (ret < 0) {
 			dev_err(&client->dev, "irq %d request failed, %d\n",
@@ -564,8 +554,8 @@ static int hym8563_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id hym8563_id[] = {
-	{ "hym8563" },
-	{}
+	{ "hym8563", 0 },
+	{},
 };
 MODULE_DEVICE_TABLE(i2c, hym8563_id);
 
@@ -581,7 +571,7 @@ static struct i2c_driver hym8563_driver = {
 		.pm	= &hym8563_pm_ops,
 		.of_match_table	= hym8563_dt_idtable,
 	},
-	.probe		= hym8563_probe,
+	.probe_new	= hym8563_probe,
 	.id_table	= hym8563_id,
 };
 

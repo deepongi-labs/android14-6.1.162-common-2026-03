@@ -11,8 +11,7 @@
 #include <linux/iommu.h>
 #include <linux/interconnect.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_opp.h>
 #include <linux/pm_runtime.h>
@@ -1025,8 +1024,7 @@ static void tegra_cursor_atomic_disable(struct drm_plane *plane,
 	tegra_dc_writel(dc, value, DC_DISP_DISP_WIN_OPTIONS);
 }
 
-static int tegra_cursor_atomic_async_check(struct drm_plane *plane, struct drm_atomic_state *state,
-					   bool flip)
+static int tegra_cursor_atomic_async_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_crtc_state *crtc_state;
@@ -1754,15 +1752,8 @@ static void tegra_dc_early_unregister(struct drm_crtc *crtc)
 	unsigned int count = ARRAY_SIZE(debugfs_files);
 	struct drm_minor *minor = crtc->dev->primary;
 	struct tegra_dc *dc = to_tegra_dc(crtc);
-	struct dentry *root;
 
-#ifdef CONFIG_DEBUG_FS
-	root = crtc->debugfs_entry;
-#else
-	root = NULL;
-#endif
-
-	drm_debugfs_remove_files(dc->debugfs_files, count, root, minor);
+	drm_debugfs_remove_files(dc->debugfs_files, count, minor);
 	kfree(dc->debugfs_files);
 	dc->debugfs_files = NULL;
 }
@@ -2397,6 +2388,7 @@ static int tegra_crtc_calculate_memory_bandwidth(struct drm_crtc *crtc,
 	const struct tegra_plane_state *tegra_state;
 	const struct drm_plane_state *plane_state;
 	struct tegra_dc *dc = to_tegra_dc(crtc);
+	const struct drm_crtc_state *old_state;
 	struct drm_crtc_state *new_state;
 	struct tegra_plane *tegra;
 	struct drm_plane *plane;
@@ -2411,6 +2403,7 @@ static int tegra_crtc_calculate_memory_bandwidth(struct drm_crtc *crtc,
 		return 0;
 
 	new_state = drm_atomic_get_new_crtc_state(state, crtc);
+	old_state = drm_atomic_get_old_crtc_state(state, crtc);
 
 	/*
 	 * For overlapping planes pixel's data is fetched for each plane at
@@ -3277,15 +3270,27 @@ disable_pm:
 	return err;
 }
 
-static void tegra_dc_remove(struct platform_device *pdev)
+static int tegra_dc_remove(struct platform_device *pdev)
 {
 	struct tegra_dc *dc = platform_get_drvdata(pdev);
+	int err;
 
-	host1x_client_unregister(&dc->client);
+	err = host1x_client_unregister(&dc->client);
+	if (err < 0) {
+		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
+			err);
+		return err;
+	}
 
-	tegra_dc_rgb_remove(dc);
+	err = tegra_dc_rgb_remove(dc);
+	if (err < 0) {
+		dev_err(&pdev->dev, "failed to remove RGB output: %d\n", err);
+		return err;
+	}
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 struct platform_driver tegra_dc_driver = {

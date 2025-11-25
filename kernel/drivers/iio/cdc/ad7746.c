@@ -16,7 +16,7 @@
 #include <linux/stat.h>
 #include <linux/sysfs.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -285,7 +285,8 @@ static int ad7746_select_channel(struct iio_dev *indio_dev,
 		if (ret < 0)
 			return ret;
 
-		chip->capdac_set = chan->channel;
+		if (chip->capdac_set != chan->channel)
+			chip->capdac_set = chan->channel;
 		break;
 	case IIO_VOLTAGE:
 	case IIO_TEMP:
@@ -716,9 +717,9 @@ static const struct iio_info ad7746_info = {
 	.write_raw = ad7746_write_raw,
 };
 
-static int ad7746_probe(struct i2c_client *client)
+static int ad7746_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct device *dev = &client->dev;
 	struct ad7746_chip_info *chip;
 	struct iio_dev *indio_dev;
@@ -792,7 +793,7 @@ static const struct i2c_device_id ad7746_id[] = {
 	{ "ad7745", 7745 },
 	{ "ad7746", 7746 },
 	{ "ad7747", 7747 },
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, ad7746_id);
 
@@ -800,7 +801,7 @@ static const struct of_device_id ad7746_of_match[] = {
 	{ .compatible = "adi,ad7745" },
 	{ .compatible = "adi,ad7746" },
 	{ .compatible = "adi,ad7747" },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, ad7746_of_match);
 

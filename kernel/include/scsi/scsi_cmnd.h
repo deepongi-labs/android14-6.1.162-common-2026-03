@@ -10,6 +10,7 @@
 #include <linux/timer.h>
 #include <linux/scatterlist.h>
 #include <scsi/scsi_device.h>
+#include <linux/android_kabi.h>
 
 struct Scsi_Host;
 
@@ -52,14 +53,12 @@ struct scsi_pointer {
 #define SCMD_TAGGED		(1 << 0)
 #define SCMD_INITIALIZED	(1 << 1)
 #define SCMD_LAST		(1 << 2)
-/*
- * libata uses SCSI EH to fetch sense data for successful commands.
- * SCSI EH should not overwrite scmd->result when SCMD_FORCE_EH_SUCCESS is set.
- */
-#define SCMD_FORCE_EH_SUCCESS	(1 << 3)
 #define SCMD_FAIL_IF_RECOVERING	(1 << 4)
+/* If set, retry a passthrough command in case of a unit attention. */
+#define SCMD_RETRY_PASSTHROUGH	(1 << 5)
 /* flags preserved across unprep / reprep */
-#define SCMD_PRESERVED_FLAGS	(SCMD_INITIALIZED | SCMD_FAIL_IF_RECOVERING)
+#define SCMD_PRESERVED_FLAGS	\
+	(SCMD_INITIALIZED | SCMD_FAIL_IF_RECOVERING | SCMD_RETRY_PASSTHROUGH)
 
 /* for scmd->state */
 #define SCMD_STATE_COMPLETE	0
@@ -141,6 +140,11 @@ struct scsi_cmnd {
 					 * to be at an address < 16Mb). */
 
 	int result;		/* Status code from lower level driver */
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 /* Variant of blk_mq_rq_from_pdu() that verifies the type of its argument. */
@@ -353,8 +357,6 @@ static inline u8 get_host_byte(struct scsi_cmnd *cmd)
 
 /**
  * scsi_msg_to_host_byte() - translate message byte
- * @cmd: the SCSI command
- * @msg: the SCSI parallel message byte to translate
  *
  * Translate the SCSI parallel message byte to a matching
  * host byte setting. A message of COMMAND_COMPLETE indicates

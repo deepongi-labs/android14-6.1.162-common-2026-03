@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/bio.h>
+#include <linux/dma-direction.h>
 #include <linux/crc7.h>
 #include <linux/crc-itu-t.h>
 #include <linux/scatterlist.h>
@@ -26,7 +27,7 @@
 #include <linux/spi/spi.h>
 #include <linux/spi/mmc_spi.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 
 /* NOTES:
@@ -506,7 +507,10 @@ mmc_spi_command_send(struct mmc_spi_host *host,
  * so we explicitly initialize it to all ones on RX paths.
  */
 static void
-mmc_spi_setup_data_message(struct mmc_spi_host *host, bool multiple, bool write)
+mmc_spi_setup_data_message(
+	struct mmc_spi_host	*host,
+	bool			multiple,
+	enum dma_data_direction	direction)
 {
 	struct spi_transfer	*t;
 	struct scratch		*scratch = host->data;
@@ -516,7 +520,7 @@ mmc_spi_setup_data_message(struct mmc_spi_host *host, bool multiple, bool write)
 	/* for reads, readblock() skips 0xff bytes before finding
 	 * the token; for writes, this transfer issues that token.
 	 */
-	if (write) {
+	if (direction == DMA_TO_DEVICE) {
 		t = &host->token;
 		memset(t, 0, sizeof(*t));
 		t->len = 1;
@@ -540,7 +544,7 @@ mmc_spi_setup_data_message(struct mmc_spi_host *host, bool multiple, bool write)
 	t = &host->crc;
 	memset(t, 0, sizeof(*t));
 	t->len = 2;
-	if (write) {
+	if (direction == DMA_TO_DEVICE) {
 		/* the actual CRC may get written later */
 		t->tx_buf = &scratch->crc_val;
 	} else {
@@ -563,10 +567,10 @@ mmc_spi_setup_data_message(struct mmc_spi_host *host, bool multiple, bool write)
 	 * the next token (next data block, or STOP_TRAN).  We can try to
 	 * minimize I/O ops by using a single read to collect end-of-busy.
 	 */
-	if (write) {
+	if (multiple || direction == DMA_TO_DEVICE) {
 		t = &host->early_status;
 		memset(t, 0, sizeof(*t));
-		t->len = sizeof(scratch->status);
+		t->len = (direction == DMA_TO_DEVICE) ? sizeof(scratch->status) : 1;
 		t->tx_buf = host->ones;
 		t->rx_buf = scratch->status;
 		t->cs_change = 1;
@@ -770,15 +774,15 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 {
 	struct spi_device	*spi = host->spi;
 	struct spi_transfer	*t;
+	enum dma_data_direction	direction = mmc_get_dma_dir(data);
 	struct scatterlist	*sg;
 	unsigned		n_sg;
 	bool			multiple = (data->blocks > 1);
-	bool			write = (data->flags & MMC_DATA_WRITE);
-	const char		*write_or_read = write ? "write" : "read";
+	const char		*write_or_read = (direction == DMA_TO_DEVICE) ? "write" : "read";
 	u32			clock_rate;
 	unsigned long		timeout;
 
-	mmc_spi_setup_data_message(host, multiple, write);
+	mmc_spi_setup_data_message(host, multiple, direction);
 	t = &host->t;
 
 	if (t->speed_hz)
@@ -800,7 +804,7 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 
 		/* allow pio too; we don't allow highmem */
 		kmap_addr = kmap(sg_page(sg));
-		if (write)
+		if (direction == DMA_TO_DEVICE)
 			t->tx_buf = kmap_addr + sg->offset;
 		else
 			t->rx_buf = kmap_addr + sg->offset;
@@ -811,7 +815,7 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 
 			dev_dbg(&spi->dev, "    %s block, %d bytes\n", write_or_read, t->len);
 
-			if (write)
+			if (direction == DMA_TO_DEVICE)
 				status = mmc_spi_writeblock(host, t, timeout);
 			else
 				status = mmc_spi_readblock(host, t, timeout);
@@ -826,9 +830,7 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 		}
 
 		/* discard mappings */
-		if (write)
-			/* nothing to do */;
-		else
+		if (direction == DMA_FROM_DEVICE)
 			flush_dcache_page(sg_page(sg));
 		kunmap(sg_page(sg));
 
@@ -845,7 +847,7 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 	 * that can affect the STOP_TRAN logic.   Complete (and current)
 	 * MMC specs should sort that out before Linux starts using CMD23.
 	 */
-	if (write && multiple) {
+	if (direction == DMA_TO_DEVICE && multiple) {
 		struct scratch	*scratch = host->data;
 		int		tmp;
 		const unsigned	statlen = sizeof(scratch->status);
@@ -930,7 +932,7 @@ static void mmc_spi_request(struct mmc_host *mmc, struct mmc_request *mrq)
 #endif
 
 	/* request exclusive bus access */
-	spi_bus_lock(host->spi->controller);
+	spi_bus_lock(host->spi->master);
 
 crc_recover:
 	/* issue command; then optionally data and stop */
@@ -962,7 +964,7 @@ crc_recover:
 	}
 
 	/* release the bus */
-	spi_bus_unlock(host->spi->controller);
+	spi_bus_unlock(host->spi->master);
 
 	mmc_request_done(host->mmc, mrq);
 }
@@ -1152,7 +1154,7 @@ static int mmc_spi_probe(struct spi_device *spi)
 	/* We rely on full duplex transfers, mostly to reduce
 	 * per-transfer overheads (by making fewer transfers).
 	 */
-	if (spi->controller->flags & SPI_CONTROLLER_HALF_DUPLEX)
+	if (spi->master->flags & SPI_MASTER_HALF_DUPLEX)
 		return -EINVAL;
 
 	/* MMC and SD specs only seem to care that sampling is on the
@@ -1185,7 +1187,7 @@ static int mmc_spi_probe(struct spi_device *spi)
 		goto nomem;
 	memset(ones, 0xff, MMC_SPI_BLOCKSIZE);
 
-	mmc = devm_mmc_alloc_host(&spi->dev, sizeof(*host));
+	mmc = mmc_alloc_host(sizeof(*host), &spi->dev);
 	if (!mmc)
 		goto nomem;
 
@@ -1205,10 +1207,7 @@ static int mmc_spi_probe(struct spi_device *spi)
 	 * that's the only reason not to use a few MHz for f_min (until
 	 * the upper layer reads the target frequency from the CSD).
 	 */
-	if (spi->controller->min_speed_hz > 400000)
-		dev_warn(&spi->dev,"Controller unable to reduce bus clock to 400 KHz\n");
-
-	mmc->f_min = max(spi->controller->min_speed_hz, 400000);
+	mmc->f_min = 400000;
 	mmc->f_max = spi->max_speed_hz;
 
 	host = mmc_priv(mmc);
@@ -1305,6 +1304,7 @@ fail_glue_init:
 	kfree(host->data);
 fail_nobuf1:
 	mmc_spi_put_pdata(spi);
+	mmc_free_host(mmc);
 nomem:
 	kfree(ones);
 	return status;
@@ -1327,6 +1327,7 @@ static void mmc_spi_remove(struct spi_device *spi)
 
 	spi->max_speed_hz = mmc->f_max;
 	mmc_spi_put_pdata(spi);
+	mmc_free_host(mmc);
 }
 
 static const struct spi_device_id mmc_spi_dev_ids[] = {

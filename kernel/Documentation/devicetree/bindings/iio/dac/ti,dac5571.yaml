@@ -21,7 +21,6 @@ properties:
       - ti,dac5573
       - ti,dac6573
       - ti,dac7573
-      - ti,dac081c081
       - ti,dac121c081
 
   reg:
@@ -47,7 +46,7 @@ examples:
 
         dac@4c {
             compatible = "ti,dac5571";
-            reg = <0x4c>;
+            reg = <0x4C>;
             vref-supply = <&vdd_supply>;
         };
     };

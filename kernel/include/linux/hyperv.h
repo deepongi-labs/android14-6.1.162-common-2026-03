@@ -24,7 +24,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/interrupt.h>
 #include <linux/reciprocal_div.h>
-#include <hyperv/hvhdk.h>
+#include <asm/hyperv-tlfs.h>
 
 #define MAX_PAGE_BUFFER_COUNT				32
 #define MAX_MULTIPAGE_BUFFER_COUNT			32 /* 128K */
@@ -368,7 +368,20 @@ struct vmtransfer_page_packet_header {
 	u8  sender_owns_set;
 	u8 reserved;
 	u32 range_cnt;
-	struct vmtransfer_page_range ranges[];
+	struct vmtransfer_page_range ranges[1];
+} __packed;
+
+struct vmgpadl_packet_header {
+	struct vmpacket_descriptor d;
+	u32 gpadl;
+	u32 reserved;
+} __packed;
+
+struct vmadd_remove_transfer_page_set {
+	struct vmpacket_descriptor d;
+	u32 gpadl;
+	u16 xfer_pageset_id;
+	u16 reserved;
 } __packed;
 
 /*
@@ -382,6 +395,30 @@ struct gpa_range {
 };
 
 /*
+ * This is the format for an Establish Gpadl packet, which contains a handle by
+ * which this GPADL will be known and a set of GPA ranges associated with it.
+ * This can be converted to a MDL by the guest OS.  If there are multiple GPA
+ * ranges, then the resulting MDL will be "chained," representing multiple VA
+ * ranges.
+ */
+struct vmestablish_gpadl {
+	struct vmpacket_descriptor d;
+	u32 gpadl;
+	u32 range_cnt;
+	struct gpa_range range[1];
+} __packed;
+
+/*
+ * This is the format for a Teardown Gpadl packet, which indicates that the
+ * GPADL handle in the Establish Gpadl packet will never be referenced again.
+ */
+struct vmteardown_gpadl {
+	struct vmpacket_descriptor d;
+	u32 gpadl;
+	u32 reserved;	/* for alignment to a 8-byte boundary */
+} __packed;
+
+/*
  * This is the format for a GPA-Direct packet, which contains a set of GPA
  * ranges, in addition to commands and/or data.
  */
@@ -391,6 +428,25 @@ struct vmdata_gpa_direct {
 	u32 range_cnt;
 	struct gpa_range range[1];
 } __packed;
+
+/* This is the format for a Additional Data Packet. */
+struct vmadditional_data {
+	struct vmpacket_descriptor d;
+	u64 total_bytes;
+	u32 offset;
+	u32 byte_cnt;
+	unsigned char data[1];
+} __packed;
+
+union vmpacket_largest_possible_header {
+	struct vmpacket_descriptor simple_hdr;
+	struct vmtransfer_page_packet_header xfer_page_hdr;
+	struct vmgpadl_packet_header gpadl_hdr;
+	struct vmadd_remove_transfer_page_set add_rm_xfer_page_hdr;
+	struct vmestablish_gpadl establish_gpadl_hdr;
+	struct vmteardown_gpadl teardown_gpadl_hdr;
+	struct vmdata_gpa_direct data_gpa_direct_hdr;
+};
 
 #define VMPACKET_DATA_START_ADDRESS(__packet)	\
 	(void *)(((unsigned char *)__packet) +	\
@@ -629,8 +685,8 @@ struct vmbus_channel_initiate_contact {
 		u64 interrupt_page;
 		struct {
 			u8	msg_sint;
-			u8	msg_vtl;
-			u8	reserved[6];
+			u8	padding1[3];
+			u32	padding2;
 		};
 	};
 	u64 monitor_page1;
@@ -705,6 +761,20 @@ struct vmbus_channel_msginfo {
 	 * It will contain at minimum the VMBUS_CHANNEL_MESSAGE_HEADER header
 	 */
 	unsigned char msg[];
+};
+
+struct vmbus_close_msg {
+	struct vmbus_channel_msginfo info;
+	struct vmbus_channel_close_channel msg;
+};
+
+/* Define connection identifier type. */
+union hv_connection_id {
+	u32 asu32;
+	struct {
+		u32 id:24;
+		u32 reserved:8;
+	} u;
 };
 
 enum vmbus_device_type {
@@ -795,7 +865,7 @@ struct vmbus_channel {
 	struct hv_ring_buffer_info outbound;	/* send to parent */
 	struct hv_ring_buffer_info inbound;	/* receive from parent */
 
-	struct vmbus_channel_close_channel close_msg;
+	struct vmbus_close_msg close_msg;
 
 	/* Statistics */
 	u64	interrupts;	/* Host to Guest interrupts */
@@ -922,7 +992,7 @@ struct vmbus_channel {
 	 * mechanism improves throughput by:
 	 *
 	 * A) Making the host more efficient - each time it wakes up,
-	 *    potentially it will process more number of packets. The
+	 *    potentially it will process morev number of packets. The
 	 *    monitor latency allows a batch to build up.
 	 * B) By deferring the hypercall to signal, we will also minimize
 	 *    the interrupts.
@@ -997,12 +1067,6 @@ struct vmbus_channel {
 
 	/* The max size of a packet on this channel */
 	u32 max_pkt_size;
-
-	/* function to mmap ring buffer memory to the channel's sysfs ring attribute */
-	int (*mmap_ring_buffer)(struct vmbus_channel *channel, struct vm_area_struct *vma);
-
-	/* boolean to control visibility of sysfs for ring buffer */
-	bool ring_sysfs_visible;
 };
 
 #define lock_requestor(channel, flags)					\
@@ -1191,6 +1255,9 @@ extern int vmbus_recvpacket_raw(struct vmbus_channel *channel,
 				     u32 *buffer_actual_len,
 				     u64 *requestid);
 
+
+extern void vmbus_ontimer(unsigned long data);
+
 /* Base driver object */
 struct hv_driver {
 	const char *name;
@@ -1222,7 +1289,7 @@ struct hv_driver {
 	} dynids;
 
 	int (*probe)(struct hv_device *, const struct hv_vmbus_device_id *);
-	void (*remove)(struct hv_device *dev);
+	int (*remove)(struct hv_device *);
 	void (*shutdown)(struct hv_device *);
 
 	int (*suspend)(struct hv_device *);
@@ -1258,8 +1325,15 @@ struct hv_device {
 };
 
 
-#define device_to_hv_device(d)	container_of_const(d, struct hv_device, device)
-#define drv_to_hv_drv(d)	container_of_const(d, struct hv_driver, driver)
+static inline struct hv_device *device_to_hv_device(struct device *d)
+{
+	return container_of(d, struct hv_device, device);
+}
+
+static inline struct hv_driver *drv_to_hv_drv(struct device_driver *d)
+{
+	return container_of(d, struct hv_driver, driver);
+}
 
 static inline void hv_set_drvdata(struct hv_device *dev, void *data)
 {
@@ -1270,8 +1344,6 @@ static inline void *hv_get_drvdata(struct hv_device *dev)
 {
 	return dev_get_drvdata(&dev->device);
 }
-
-struct device *hv_get_vmbus_root_device(void);
 
 struct hv_ring_buffer_debug_info {
 	u32 current_interrupt_mask;
@@ -1601,7 +1673,6 @@ int vmbus_send_tl_connect_request(const guid_t *shv_guest_servie_id,
 				  const guid_t *shv_host_servie_id);
 int vmbus_send_modifychannel(struct vmbus_channel *channel, u32 target_vp);
 void vmbus_set_event(struct vmbus_channel *channel);
-int vmbus_channel_set_cpu(struct vmbus_channel *channel, u32 target_cpu);
 
 /* Get the start of the ring buffer. */
 static inline void *

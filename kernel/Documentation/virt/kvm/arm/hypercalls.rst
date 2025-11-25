@@ -17,7 +17,7 @@ Specific Hypervisor Service Call" range with a UID of
 guest using the standard "Call UID" function for the service range in
 order to determine that the KVM/arm64-specific hypercalls are available.
 
-``ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID``
+``ARM_SMCCC_KVM_FUNC_FEATURES``
 ---------------------------------------------
 
 Provides a discovery mechanism for other KVM/arm64 hypercalls.
@@ -40,7 +40,7 @@ Provides a discovery mechanism for other KVM/arm64 hypercalls.
 |                     | (uint32) | R3 | Bitmap of available function numbers 96-127 |
 +---------------------+----------+----+---------------------------------------------+
 
-``ARM_SMCCC_VENDOR_HYP_KVM_PTP_FUNC_ID``
+``ARM_SMCCC_KVM_FUNC_PTP``
 ----------------------------------------
 
 See ptp_kvm.rst
@@ -48,10 +48,10 @@ See ptp_kvm.rst
 ``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``
 ----------------------------------
 
-Query the memory protection parameters for a pKVM protected virtual machine.
+Query the memory protection parameters for a protected virtual machine.
 
 +---------------------+-------------------------------------------------------------+
-| Presence:           | Optional; pKVM protected guests only.                       |
+| Presence:           | Optional; protected guests only.                            |
 +---------------------+-------------------------------------------------------------+
 | Calling convention: | HVC64                                                       |
 +---------------------+----------+--------------------------------------------------+
@@ -75,7 +75,7 @@ permissions. The size of the region is equal to the memory protection granule
 advertised by ``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``.
 
 +---------------------+-------------------------------------------------------------+
-| Presence:           | Optional; pKVM protected guests only.                       |
+| Presence:           | Optional; protected guests only.                            |
 +---------------------+-------------------------------------------------------------+
 | Calling convention: | HVC64                                                       |
 +---------------------+----------+--------------------------------------------------+
@@ -100,7 +100,7 @@ with ``ARM_SMCCC_KVM_FUNC_MEM_SHARE``. The size of the region is equal to the
 memory protection granule advertised by ``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``.
 
 +---------------------+-------------------------------------------------------------+
-| Presence:           | Optional; pKVM protected guests only.                       |
+| Presence:           | Optional; protected guests only.                            |
 +---------------------+-------------------------------------------------------------+
 | Calling convention: | HVC64                                                       |
 +---------------------+----------+--------------------------------------------------+
@@ -117,22 +117,25 @@ memory protection granule advertised by ``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``.
 |                     |          |    | ``INVALID_PARAMETER (-3)``                  |
 +---------------------+----------+----+---------------------------------------------+
 
-``ARM_SMCCC_KVM_FUNC_MMIO_GUARD``
-----------------------------------
+``ARM_SMCCC_KVM_FUNC_MEM_RELINQUISH``
+--------------------------------------
 
-Request that a given memory region is handled as MMIO by the hypervisor,
-allowing accesses to this region to be emulated by the KVM host. The size of the
+Cooperatively relinquish ownership of a memory region. The size of the
 region is equal to the memory protection granule advertised by
-``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``.
+``ARM_SMCCC_KVM_FUNC_HYP_MEMINFO``. If this hypercall is advertised
+then it is mandatory to call it before freeing memory via, for
+example, virtio balloon. If the caller is a protected VM, it is
+guaranteed that the memory region will be completely cleared before
+becoming visible to another VM.
 
 +---------------------+-------------------------------------------------------------+
-| Presence:           | Optional; pKVM protected guests only.                       |
+| Presence:           | Optional.                                                   |
 +---------------------+-------------------------------------------------------------+
 | Calling convention: | HVC64                                                       |
 +---------------------+----------+--------------------------------------------------+
-| Function ID:        | (uint32) | 0xC6000007                                       |
+| Function ID:        | (uint32) | 0xC6000009                                       |
 +---------------------+----------+----+---------------------------------------------+
-| Arguments:          | (uint64) | R1 | Base IPA of MMIO memory region              |
+| Arguments:          | (uint64) | R1 | Base IPA of memory region to relinquish     |
 |                     +----------+----+---------------------------------------------+
 |                     | (uint64) | R2 | Reserved / Must be zero                     |
 |                     +----------+----+---------------------------------------------+
@@ -143,61 +146,7 @@ region is equal to the memory protection granule advertised by
 |                     |          |    | ``INVALID_PARAMETER (-3)``                  |
 +---------------------+----------+----+---------------------------------------------+
 
-``ARM_SMCCC_VENDOR_HYP_KVM_DISCOVER_IMPL_VER_FUNC_ID``
--------------------------------------------------------
-Request the target CPU implementation version information and the number of target
-implementations for the Guest VM.
+``ARM_SMCCC_KVM_FUNC_MMIO_GUARD_*``
+-----------------------------------
 
-+---------------------+-------------------------------------------------------------+
-| Presence:           | Optional;  KVM/ARM64 Guests only                            |
-+---------------------+-------------------------------------------------------------+
-| Calling convention: | HVC64                                                       |
-+---------------------+----------+--------------------------------------------------+
-| Function ID:        | (uint32) | 0xC6000040                                       |
-+---------------------+----------+--------------------------------------------------+
-| Arguments:          | None                                                        |
-+---------------------+----------+----+---------------------------------------------+
-| Return Values:      | (int64)  | R0 | ``SUCCESS (0)``                             |
-|                     |          |    +---------------------------------------------+
-|                     |          |    | ``NOT_SUPPORTED (-1)``                      |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R1 | Bits [63:32] Reserved/Must be zero          |
-|                     |          |    +---------------------------------------------+
-|                     |          |    | Bits [31:16] Major version                  |
-|                     |          |    +---------------------------------------------+
-|                     |          |    | Bits [15:0] Minor version                   |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R2 | Number of target implementations            |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R3 | Reserved / Must be zero                     |
-+---------------------+----------+----+---------------------------------------------+
-
-``ARM_SMCCC_VENDOR_HYP_KVM_DISCOVER_IMPL_CPUS_FUNC_ID``
--------------------------------------------------------
-
-Request the target CPU implementation information for the Guest VM. The Guest kernel
-will use this information to enable the associated errata.
-
-+---------------------+-------------------------------------------------------------+
-| Presence:           | Optional;  KVM/ARM64 Guests only                            |
-+---------------------+-------------------------------------------------------------+
-| Calling convention: | HVC64                                                       |
-+---------------------+----------+--------------------------------------------------+
-| Function ID:        | (uint32) | 0xC6000041                                       |
-+---------------------+----------+----+---------------------------------------------+
-| Arguments:          | (uint64) | R1 | selected implementation index               |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R2 | Reserved / Must be zero                     |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R3 | Reserved / Must be zero                     |
-+---------------------+----------+----+---------------------------------------------+
-| Return Values:      | (int64)  | R0 | ``SUCCESS (0)``                             |
-|                     |          |    +---------------------------------------------+
-|                     |          |    | ``INVALID_PARAMETER (-3)``                  |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R1 | MIDR_EL1 of the selected implementation     |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R2 | REVIDR_EL1 of the selected implementation   |
-|                     +----------+----+---------------------------------------------+
-|                     | (uint64) | R3 | AIDR_EL1  of the selected implementation    |
-+---------------------+----------+----+---------------------------------------------+
+See mmio-guard.rst

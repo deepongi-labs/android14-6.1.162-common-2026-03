@@ -32,7 +32,7 @@
  */
 #define H_KERN_VIRT_START	ASM_CONST(0xc0003d0000000000)
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 #define H_PTE_TABLE_SIZE	(sizeof(pte_t) << H_PTE_INDEX_SIZE)
 #define H_PMD_TABLE_SIZE	(sizeof(pmd_t) << H_PMD_INDEX_SIZE)
 #define H_PUD_TABLE_SIZE	(sizeof(pud_t) << H_PUD_INDEX_SIZE)
@@ -73,6 +73,21 @@
  */
 #define remap_4k_pfn(vma, addr, pfn, prot)	\
 	remap_pfn_range((vma), (addr), (pfn), PAGE_SIZE, (prot))
+
+#ifdef CONFIG_HUGETLB_PAGE
+static inline int hash__hugepd_ok(hugepd_t hpd)
+{
+	unsigned long hpdval = hpd_val(hpd);
+	/*
+	 * if it is not a pte and have hugepd shift mask
+	 * set, then it is a hugepd directory pointer
+	 */
+	if (!(hpdval & _PAGE_PTE) && (hpdval & _PAGE_PRESENT) &&
+	    ((hpdval & HUGEPD_SHIFT_MASK) != 0))
+		return true;
+	return false;
+}
+#endif
 
 /*
  * With 4K page size the real_pte machinery is all nops.
@@ -149,6 +164,12 @@ static inline int hash__pmd_trans_huge(pmd_t pmd)
 	return 0;
 }
 
+static inline int hash__pmd_same(pmd_t pmd_a, pmd_t pmd_b)
+{
+	BUG();
+	return 0;
+}
+
 static inline pmd_t hash__pmd_mkhuge(pmd_t pmd)
 {
 	BUG();
@@ -168,6 +189,12 @@ extern pmd_t hash__pmdp_huge_get_and_clear(struct mm_struct *mm,
 extern int hash__has_transparent_hugepage(void);
 #endif
 
-#endif /* !__ASSEMBLER__ */
+static inline pmd_t hash__pmd_mkdevmap(pmd_t pmd)
+{
+	BUG();
+	return pmd;
+}
+
+#endif /* !__ASSEMBLY__ */
 
 #endif /* _ASM_POWERPC_BOOK3S_64_HASH_4K_H */

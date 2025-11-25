@@ -29,8 +29,10 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
-#include <include/vdso/time64.h>
 #include "../kselftest.h"
+
+#define NSEC_PER_SEC 1000000000LL
+#define USEC_PER_SEC 1000000LL
 
 #define ADJ_SETOFFSET 0x0100
 
@@ -100,12 +102,8 @@ long outofrange_freq[NUM_FREQ_OUTOFRANGE] = {
 	 1000 * SHIFTED_PPM,
 };
 
-#ifndef LONG_MAX
 #define LONG_MAX (~0UL>>1)
-#endif
-#ifndef LONG_MIN
 #define LONG_MIN (-LONG_MAX - 1)
-#endif
 
 long invalid_freq[NUM_FREQ_INVALID] = {
 	LONG_MAX,
@@ -264,16 +262,16 @@ int validate_set_offset(void)
 	if (set_offset(-NSEC_PER_SEC - 1, 1))
 		return -1;
 
-	if (set_offset(5LL * NSEC_PER_SEC, 1))
+	if (set_offset(5 * NSEC_PER_SEC, 1))
 		return -1;
 
-	if (set_offset(-5LL * NSEC_PER_SEC, 1))
+	if (set_offset(-5 * NSEC_PER_SEC, 1))
 		return -1;
 
-	if (set_offset(5LL * NSEC_PER_SEC + NSEC_PER_SEC / 2, 1))
+	if (set_offset(5 * NSEC_PER_SEC + NSEC_PER_SEC / 2, 1))
 		return -1;
 
-	if (set_offset(-5LL * NSEC_PER_SEC - NSEC_PER_SEC / 2, 1))
+	if (set_offset(-5 * NSEC_PER_SEC - NSEC_PER_SEC / 2, 1))
 		return -1;
 
 	if (set_offset(USEC_PER_SEC - 1, 0))
@@ -322,10 +320,10 @@ int validate_set_offset(void)
 int main(int argc, char **argv)
 {
 	if (validate_freq())
-		ksft_exit_fail();
+		return ksft_exit_fail();
 
 	if (validate_set_offset())
-		ksft_exit_fail();
+		return ksft_exit_fail();
 
-	ksft_exit_pass();
+	return ksft_exit_pass();
 }

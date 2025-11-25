@@ -13,7 +13,6 @@
 #include <asm/insn.h>
 #include <asm/insn-eval.h>
 #include <asm/ldt.h>
-#include <asm/msr.h>
 #include <asm/vm86.h>
 
 #undef pr_fmt
@@ -632,21 +631,14 @@ static bool get_desc(struct desc_struct *out, unsigned short sel)
 		/* Bits [15:3] contain the index of the desired entry. */
 		sel >>= 3;
 
-		/*
-		 * If we're not in a valid context with a real (not just lazy)
-		 * user mm, then don't even try.
-		 */
-		if (!nmi_uaccess_okay())
-			return false;
-
-		mutex_lock(&current->mm->context.lock);
-		ldt = current->mm->context.ldt;
+		mutex_lock(&current->active_mm->context.lock);
+		ldt = current->active_mm->context.ldt;
 		if (ldt && sel < ldt->nr_entries) {
 			*out = ldt->entries[sel];
 			success = true;
 		}
 
-		mutex_unlock(&current->mm->context.lock);
+		mutex_unlock(&current->active_mm->context.lock);
 
 		return success;
 	}
@@ -710,16 +702,16 @@ unsigned long insn_get_seg_base(struct pt_regs *regs, int seg_reg_idx)
 		unsigned long base;
 
 		if (seg_reg_idx == INAT_SEG_REG_FS) {
-			rdmsrq(MSR_FS_BASE, base);
+			rdmsrl(MSR_FS_BASE, base);
 		} else if (seg_reg_idx == INAT_SEG_REG_GS) {
 			/*
 			 * swapgs was called at the kernel entry point. Thus,
 			 * MSR_KERNEL_GS_BASE will have the user-space GS base.
 			 */
 			if (user_mode(regs))
-				rdmsrq(MSR_KERNEL_GS_BASE, base);
+				rdmsrl(MSR_KERNEL_GS_BASE, base);
 			else
-				rdmsrq(MSR_GS_BASE, base);
+				rdmsrl(MSR_GS_BASE, base);
 		} else {
 			base = 0;
 		}
@@ -1137,15 +1129,15 @@ static int get_eff_addr_modrm_16(struct insn *insn, struct pt_regs *regs,
  * get_eff_addr_sib() - Obtain referenced effective address via SIB
  * @insn:	Instruction. Must be valid.
  * @regs:	Register values as seen when entering kernel mode
- * @base_offset: Obtained operand offset, in pt_regs, associated with segment
+ * @regoff:	Obtained operand offset, in pt_regs, associated with segment
  * @eff_addr:	Obtained effective address
  *
  * Obtain the effective address referenced by the SIB byte of @insn. After
  * identifying the registers involved in the indexed, register-indirect memory
  * reference, its value is obtained from the operands in @regs. The computed
  * address is stored @eff_addr. Also, the register operand that indicates the
- * associated segment is stored in @base_offset; this parameter can later be
- * used to determine such segment.
+ * associated segment is stored in @regoff, this parameter can later be used to
+ * determine such segment.
  *
  * Returns:
  *
@@ -1603,16 +1595,16 @@ bool insn_decode_from_regs(struct insn *insn, struct pt_regs *regs,
  * Returns:
  *
  * Type of the instruction. Size of the memory operand is stored in
- * @bytes. If decode failed, INSN_MMIO_DECODE_FAILED returned.
+ * @bytes. If decode failed, MMIO_DECODE_FAILED returned.
  */
-enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
+enum mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 {
-	enum insn_mmio_type type = INSN_MMIO_DECODE_FAILED;
+	enum mmio_type type = MMIO_DECODE_FAILED;
 
 	*bytes = 0;
 
 	if (insn_get_opcode(insn))
-		return INSN_MMIO_DECODE_FAILED;
+		return MMIO_DECODE_FAILED;
 
 	switch (insn->opcode.bytes[0]) {
 	case 0x88: /* MOV m8,r8 */
@@ -1621,7 +1613,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 	case 0x89: /* MOV m16/m32/m64, r16/m32/m64 */
 		if (!*bytes)
 			*bytes = insn->opnd_bytes;
-		type = INSN_MMIO_WRITE;
+		type = MMIO_WRITE;
 		break;
 
 	case 0xc6: /* MOV m8, imm8 */
@@ -1630,7 +1622,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 	case 0xc7: /* MOV m16/m32/m64, imm16/imm32/imm64 */
 		if (!*bytes)
 			*bytes = insn->opnd_bytes;
-		type = INSN_MMIO_WRITE_IMM;
+		type = MMIO_WRITE_IMM;
 		break;
 
 	case 0x8a: /* MOV r8, m8 */
@@ -1639,7 +1631,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 	case 0x8b: /* MOV r16/r32/r64, m16/m32/m64 */
 		if (!*bytes)
 			*bytes = insn->opnd_bytes;
-		type = INSN_MMIO_READ;
+		type = MMIO_READ;
 		break;
 
 	case 0xa4: /* MOVS m8, m8 */
@@ -1648,7 +1640,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 	case 0xa5: /* MOVS m16/m32/m64, m16/m32/m64 */
 		if (!*bytes)
 			*bytes = insn->opnd_bytes;
-		type = INSN_MMIO_MOVS;
+		type = MMIO_MOVS;
 		break;
 
 	case 0x0f: /* Two-byte instruction */
@@ -1659,7 +1651,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 		case 0xb7: /* MOVZX r32/r64, m16 */
 			if (!*bytes)
 				*bytes = 2;
-			type = INSN_MMIO_READ_ZERO_EXTEND;
+			type = MMIO_READ_ZERO_EXTEND;
 			break;
 
 		case 0xbe: /* MOVSX r16/r32/r64, m8 */
@@ -1668,7 +1660,7 @@ enum insn_mmio_type insn_decode_mmio(struct insn *insn, int *bytes)
 		case 0xbf: /* MOVSX r32/r64, m16 */
 			if (!*bytes)
 				*bytes = 2;
-			type = INSN_MMIO_READ_SIGN_EXTEND;
+			type = MMIO_READ_SIGN_EXTEND;
 			break;
 		}
 		break;

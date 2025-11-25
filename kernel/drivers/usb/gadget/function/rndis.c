@@ -31,7 +31,7 @@
 
 #include <asm/io.h>
 #include <asm/byteorder.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include "u_rndis.h"
 

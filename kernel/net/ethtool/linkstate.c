@@ -3,7 +3,6 @@
 #include "netlink.h"
 #include "common.h"
 #include <linux/phy.h>
-#include <linux/phylib_stubs.h>
 
 struct linkstate_req_info {
 	struct ethnl_req_info		base;
@@ -14,7 +13,6 @@ struct linkstate_reply_data {
 	int					link;
 	int					sqi;
 	int					sqi_max;
-	struct ethtool_link_ext_stats		link_stats;
 	bool					link_ext_state_provided;
 	struct ethtool_link_ext_state_info	ethtool_link_ext_state_info;
 };
@@ -24,11 +22,12 @@ struct linkstate_reply_data {
 
 const struct nla_policy ethnl_linkstate_get_policy[] = {
 	[ETHTOOL_A_LINKSTATE_HEADER]		=
-		NLA_POLICY_NESTED(ethnl_header_policy_stats),
+		NLA_POLICY_NESTED(ethnl_header_policy),
 };
 
-static int linkstate_get_sqi(struct phy_device *phydev)
+static int linkstate_get_sqi(struct net_device *dev)
 {
+	struct phy_device *phydev = dev->phydev;
 	int ret;
 
 	if (!phydev)
@@ -46,8 +45,9 @@ static int linkstate_get_sqi(struct phy_device *phydev)
 	return ret;
 }
 
-static int linkstate_get_sqi_max(struct phy_device *phydev)
+static int linkstate_get_sqi_max(struct net_device *dev)
 {
+	struct phy_device *phydev = dev->phydev;
 	int ret;
 
 	if (!phydev)
@@ -95,32 +95,23 @@ static int linkstate_get_link_ext_state(struct net_device *dev,
 
 static int linkstate_prepare_data(const struct ethnl_req_info *req_base,
 				  struct ethnl_reply_data *reply_base,
-				  const struct genl_info *info)
+				  struct genl_info *info)
 {
 	struct linkstate_reply_data *data = LINKSTATE_REPDATA(reply_base);
 	struct net_device *dev = reply_base->dev;
-	struct nlattr **tb = info->attrs;
-	struct phy_device *phydev;
 	int ret;
-
-	phydev = ethnl_req_get_phydev(req_base, tb, ETHTOOL_A_LINKSTATE_HEADER,
-				      info->extack);
-	if (IS_ERR(phydev)) {
-		ret = PTR_ERR(phydev);
-		goto out;
-	}
 
 	ret = ethnl_ops_begin(dev);
 	if (ret < 0)
 		return ret;
 	data->link = __ethtool_get_link(dev);
 
-	ret = linkstate_get_sqi(phydev);
+	ret = linkstate_get_sqi(dev);
 	if (linkstate_sqi_critical_error(ret))
 		goto out;
 	data->sqi = ret;
 
-	ret = linkstate_get_sqi_max(phydev);
+	ret = linkstate_get_sqi_max(dev);
 	if (linkstate_sqi_critical_error(ret))
 		goto out;
 	data->sqi_max = ret;
@@ -129,19 +120,6 @@ static int linkstate_prepare_data(const struct ethnl_req_info *req_base,
 		ret = linkstate_get_link_ext_state(dev, data);
 		if (ret < 0 && ret != -EOPNOTSUPP && ret != -ENODATA)
 			goto out;
-	}
-
-	ethtool_stats_init((u64 *)&data->link_stats,
-			   sizeof(data->link_stats) / 8);
-
-	if (req_base->flags & ETHTOOL_FLAG_STATS) {
-		if (phydev)
-			phy_ethtool_get_link_ext_stats(phydev,
-						       &data->link_stats);
-
-		if (dev->ethtool_ops->get_link_ext_stats)
-			dev->ethtool_ops->get_link_ext_stats(dev,
-							     &data->link_stats);
 	}
 
 	ret = 0;
@@ -169,9 +147,6 @@ static int linkstate_reply_size(const struct ethnl_req_info *req_base,
 
 	if (data->ethtool_link_ext_state_info.__link_ext_substate)
 		len += nla_total_size(sizeof(u8)); /* LINKSTATE_EXT_SUBSTATE */
-
-	if (data->link_stats.link_down_events != ETHTOOL_STAT_NOT_SET)
-		len += nla_total_size(sizeof(u32));
 
 	return len;
 }
@@ -205,11 +180,6 @@ static int linkstate_fill_reply(struct sk_buff *skb,
 			       data->ethtool_link_ext_state_info.__link_ext_substate))
 			return -EMSGSIZE;
 	}
-
-	if (data->link_stats.link_down_events != ETHTOOL_STAT_NOT_SET)
-		if (nla_put_u32(skb, ETHTOOL_A_LINKSTATE_EXT_DOWN_CNT,
-				data->link_stats.link_down_events))
-			return -EMSGSIZE;
 
 	return 0;
 }

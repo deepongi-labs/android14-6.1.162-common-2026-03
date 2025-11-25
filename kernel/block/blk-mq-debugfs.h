@@ -17,6 +17,8 @@ struct blk_mq_debugfs_attr {
 	const struct seq_operations *seq_ops;
 };
 
+void blk_mq_debugfs_init(void);
+
 int __blk_mq_debugfs_rq_show(struct seq_file *m, struct request *rq);
 int blk_mq_debugfs_rq_show(struct seq_file *m, void *v);
 
@@ -36,6 +38,10 @@ void blk_mq_debugfs_unregister_sched_hctx(struct blk_mq_hw_ctx *hctx);
 void blk_mq_debugfs_register_rqos(struct rq_qos *rqos);
 void blk_mq_debugfs_unregister_rqos(struct rq_qos *rqos);
 #else
+static inline void blk_mq_debugfs_init(void)
+{
+}
+
 static inline void blk_mq_debugfs_register(struct request_queue *q)
 {
 }
@@ -83,10 +89,10 @@ static inline void blk_mq_debugfs_unregister_rqos(struct rq_qos *rqos)
 }
 #endif
 
-#if defined(CONFIG_BLK_DEV_ZONED) && defined(CONFIG_BLK_DEBUG_FS)
-int queue_zone_wplugs_show(void *data, struct seq_file *m);
+#ifdef CONFIG_BLK_DEBUG_FS_ZONED
+int queue_zone_wlock_show(void *data, struct seq_file *m);
 #else
-static inline int queue_zone_wplugs_show(void *data, struct seq_file *m)
+static inline int queue_zone_wlock_show(void *data, struct seq_file *m)
 {
 	return 0;
 }

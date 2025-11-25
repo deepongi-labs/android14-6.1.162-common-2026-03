@@ -30,12 +30,17 @@
 #include <linux/mount.h>
 #include <linux/pseudo_fs.h>
 
+#ifndef __GENKSYMS__
+#include <trace/events/kmem.h>
+#endif
+#include <trace/hooks/dmabuf.h>
+
 #include <uapi/linux/dma-buf.h>
 #include <uapi/linux/magic.h>
 
 #include "dma-buf-sysfs-stats.h"
 
-static inline int is_dma_buf_file(struct file *);
+DEFINE_STATIC_KEY_TRUE(dmabuf_accounting_key);
 
 static DEFINE_MUTEX(dmabuf_list_mutex);
 static LIST_HEAD(dmabuf_list);
@@ -56,6 +61,39 @@ static void __dma_buf_list_del(struct dma_buf *dmabuf)
 	list_del(&dmabuf->list_node);
 	mutex_unlock(&dmabuf_list_mutex);
 }
+
+/**
+ * dma_buf_get_each - Helps in traversing the db_list and calls the
+ * callback function which can extract required info out of each
+ * dmabuf.
+ * The db_list needs to be locked to prevent the db_list from being
+ * dynamically updated during the traversal process.
+ *
+ * @callback: [in]   Handle for each dmabuf buffer in db_list.
+ * @private:  [in]   User-defined, used to pass in when callback is
+ *                   called.
+ *
+ * Returns 0 on success, otherwise returns a non-zero value for
+ * mutex_lock_interruptible or callback.
+ */
+int dma_buf_get_each(int (*callback)(const struct dma_buf *dmabuf,
+		     void *private), void *private)
+{
+	struct dma_buf *buf;
+	int ret = mutex_lock_interruptible(&dmabuf_list_mutex);
+
+	if (ret)
+		return ret;
+
+	list_for_each_entry(buf, &dmabuf_list, list_node) {
+		ret = callback(buf, private);
+		if (ret)
+			break;
+	}
+	mutex_unlock(&dmabuf_list_mutex);
+	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(dma_buf_get_each, MINIDUMP);
 
 /**
  * dma_buf_iter_begin - begin iteration through global list of all DMA buffers
@@ -80,7 +118,7 @@ struct dma_buf *dma_buf_iter_begin(void)
 	 */
 	mutex_lock(&dmabuf_list_mutex);
 	list_for_each_entry(dmabuf, &dmabuf_list, list_node) {
-		if (file_ref_get(&dmabuf->file->f_ref)) {
+		if (atomic_long_inc_not_zero(&dmabuf->file->f_count)) {
 			ret = dmabuf;
 			break;
 		}
@@ -88,7 +126,6 @@ struct dma_buf *dma_buf_iter_begin(void)
 	mutex_unlock(&dmabuf_list_mutex);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_iter_begin, "DMA_BUF");
 
 /**
  * dma_buf_iter_next - continue iteration through global list of all DMA buffers
@@ -115,7 +152,7 @@ struct dma_buf *dma_buf_iter_next(struct dma_buf *dmabuf)
 	mutex_lock(&dmabuf_list_mutex);
 	dma_buf_put(dmabuf);
 	list_for_each_entry_continue(dmabuf, &dmabuf_list, list_node) {
-		if (file_ref_get(&dmabuf->file->f_ref)) {
+		if (atomic_long_inc_not_zero(&dmabuf->file->f_count)) {
 			ret = dmabuf;
 			break;
 		}
@@ -123,18 +160,17 @@ struct dma_buf *dma_buf_iter_next(struct dma_buf *dmabuf)
 	mutex_unlock(&dmabuf_list_mutex);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_iter_next, "DMA_BUF");
 
 static char *dmabuffs_dname(struct dentry *dentry, char *buffer, int buflen)
 {
 	struct dma_buf *dmabuf;
 	char name[DMA_BUF_NAME_LEN];
-	ssize_t ret = 0;
+	size_t ret = 0;
 
 	dmabuf = dentry->d_fsdata;
 	spin_lock(&dmabuf->name_lock);
 	if (dmabuf->name)
-		ret = strscpy(name, dmabuf->name, sizeof(name));
+		ret = strlcpy(name, dmabuf->name, DMA_BUF_NAME_LEN);
 	spin_unlock(&dmabuf->name_lock);
 
 	return dynamic_dname(buffer, buflen, "/%s:%s",
@@ -163,6 +199,9 @@ static void dma_buf_release(struct dentry *dentry)
 
 	if (dmabuf->resv == (struct dma_resv *)&dmabuf[1])
 		dma_resv_fini(dmabuf->resv);
+
+	if (atomic64_read(&dmabuf->nr_task_refs))
+		pr_alert("destroying dmabuf with non-zero task refs\n");
 
 	WARN_ON(!list_empty(&dmabuf->attachments));
 	module_put(dmabuf->owner);
@@ -204,9 +243,405 @@ static struct file_system_type dma_buf_fs_type = {
 	.kill_sb = kill_anon_super,
 };
 
+struct task_dma_buf_record_preload {
+	local_lock_t lock;
+	size_t size;
+	struct list_head list;
+};
+
+static DEFINE_PER_CPU(struct task_dma_buf_record_preload, dmabuf_rec_reloads);
+
+static struct kmem_cache *task_dmabuf_record_cachep;
+
+static void __init init_task_dmabuf_record_pool(void)
+{
+	int cpu;
+
+	task_dmabuf_record_cachep = kmem_cache_create("task_dmabuf_record",
+			sizeof(struct task_dma_buf_record), 0,
+			SLAB_PANIC | SLAB_ACCOUNT, NULL);
+
+	for_each_possible_cpu(cpu) {
+		struct task_dma_buf_record_preload *preload;
+
+		preload = &per_cpu(dmabuf_rec_reloads, cpu);
+		local_lock_init(&preload->lock);
+		INIT_LIST_HEAD(&preload->list);
+		preload->size = 0;
+	}
+}
+
+/*
+ * Load up this CPU's task_dma_buf_record_preload list with requested number of
+ * records. On success, returns true, with preemption disabled. On error,
+ * return false with preemption not disabled.
+ */
+static bool task_dmabuf_records_preload(size_t count)
+{
+	struct task_dma_buf_record_preload *preload;
+
+	local_lock(&dmabuf_rec_reloads.lock);
+	preload = this_cpu_ptr(&dmabuf_rec_reloads);
+	while (preload->size < count) {
+		struct task_dma_buf_record *rec;
+
+		local_unlock(&dmabuf_rec_reloads.lock);
+		rec = kmem_cache_alloc(task_dmabuf_record_cachep, GFP_KERNEL);
+		if (!rec)
+			return false;
+
+		local_lock(&dmabuf_rec_reloads.lock);
+		preload = this_cpu_ptr(&dmabuf_rec_reloads);
+		if (preload->size < count) {
+			list_add(&rec->node, &preload->list);
+			preload->size++;
+		} else {
+			kmem_cache_free(task_dmabuf_record_cachep, rec);
+		}
+	}
+
+	return true;
+}
+
+static inline void task_dmabuf_records_preload_end(void)
+{
+	local_unlock(&dmabuf_rec_reloads.lock);
+}
+
+static struct task_dma_buf_record *alloc_task_dmabuf_record(void)
+{
+	struct task_dma_buf_record_preload *preload;
+	struct task_dma_buf_record *rec = NULL;
+
+	lockdep_assert_held(this_cpu_ptr(&dmabuf_rec_reloads.lock));
+	preload = this_cpu_ptr(&dmabuf_rec_reloads);
+	if (preload->size > 0) {
+		rec = list_first_entry(&preload->list, typeof(*rec), node);
+		list_del(&rec->node);
+		preload->size--;
+	}
+
+	return rec;
+}
+
+#define MAX_PCP_POOL_SIZE 32
+
+static void free_task_dmabuf_record(struct task_dma_buf_record *rec)
+{
+	struct task_dma_buf_record_preload *preload;
+
+	local_lock(&dmabuf_rec_reloads.lock);
+	preload = this_cpu_ptr(&dmabuf_rec_reloads);
+	if (preload->size < MAX_PCP_POOL_SIZE) {
+		list_add(&rec->node, &preload->list);
+		preload->size++;
+	} else {
+		kmem_cache_free(task_dmabuf_record_cachep, rec);
+	}
+	local_unlock(&dmabuf_rec_reloads.lock);
+}
+
+static void trim_task_dmabuf_records_locked(void)
+{
+	struct task_dma_buf_record_preload *preload;
+
+	lockdep_assert_held(this_cpu_ptr(&dmabuf_rec_reloads.lock));
+	preload = this_cpu_ptr(&dmabuf_rec_reloads);
+	while (preload->size > MAX_PCP_POOL_SIZE) {
+		struct task_dma_buf_record *rec;
+
+		rec = list_first_entry(&preload->list, typeof(*rec), node);
+		list_del(&rec->node);
+		preload->size--;
+		kmem_cache_free(task_dmabuf_record_cachep, rec);
+	}
+}
+
+static void trim_task_dmabuf_records(void)
+{
+	local_lock(&dmabuf_rec_reloads.lock);
+	trim_task_dmabuf_records_locked();
+	local_unlock(&dmabuf_rec_reloads.lock);
+}
+
+static struct task_dma_buf_record *find_task_dmabuf_record(
+		struct task_dma_buf_info *dmabuf_info, struct dma_buf *dmabuf)
+{
+	struct task_dma_buf_record *rec;
+
+	lockdep_assert_held(&dmabuf_info->lock);
+
+	list_for_each_entry(rec, &dmabuf_info->dmabufs, node)
+		if (dmabuf == rec->dmabuf)
+			return rec;
+
+	return NULL;
+}
+
+static void add_task_dmabuf_record(struct task_dma_buf_info *dmabuf_info,
+				   struct dma_buf *dmabuf,
+				   struct task_dma_buf_record *rec)
+{
+	lockdep_assert_held(&dmabuf_info->lock);
+
+	rec->dmabuf = dmabuf;
+	rec->refcnt = 1;
+	list_add(&rec->node, &dmabuf_info->dmabufs);
+	dmabuf_info->dmabuf_count++;
+	dmabuf_info->rss += dmabuf->size;
+	if (dmabuf_info->rss > dmabuf_info->rss_hwm)
+		dmabuf_info->rss_hwm = dmabuf_info->rss;
+	trace_dmabuf_rss_stat(dmabuf_info->rss, dmabuf->size, dmabuf);
+	atomic64_inc(&dmabuf->nr_task_refs);
+}
+
+/**
+ * dma_buf_account_task - Account a dmabuf to a task
+ * @dmabuf:	[in]	pointer to dma_buf
+ * @task:	[in]	pointer to task_struct
+ *
+ * When a process obtains a dmabuf file descriptor, or maps a dmabuf, this
+ * function attributes the provided @dmabuf to the @task. The first time @dmabuf
+ * is attributed to @task, the buffer's size is added to the @task's dmabuf RSS.
+ *
+ * Return:
+ * * 0 on success
+ * * A negative error code upon error
+ */
+int dma_buf_account_task(struct dma_buf *dmabuf, struct task_struct *task)
+{
+	struct task_dma_buf_info *dmabuf_info = task->dmabuf_info;
+	struct task_dma_buf_record *rec;
+
+	if (!static_key_enabled(&dmabuf_accounting_key))
+		return 0;
+
+	if (!dmabuf_info)
+		return 0;
+
+	if (!task_dmabuf_records_preload(1))
+		return -ENOMEM;
+
+	spin_lock(&dmabuf_info->lock);
+	rec = find_task_dmabuf_record(dmabuf_info, dmabuf);
+	if (rec) {
+		++rec->refcnt;
+		trim_task_dmabuf_records_locked();
+	} else {
+		rec = alloc_task_dmabuf_record();
+		WARN_ON(!rec);
+		add_task_dmabuf_record(dmabuf_info, dmabuf, rec);
+	}
+	spin_unlock(&dmabuf_info->lock);
+	task_dmabuf_records_preload_end();
+
+	return 0;
+}
+
+/**
+ * dma_buf_unaccount_task - Unaccount a dmabuf from a task
+ * @dmabuf:	[in]	pointer to dma_buf
+ * @task:	[in]	pointer to task_struct
+ *
+ * When a process closes a dmabuf file descriptor, or unmaps a dmabuf, this
+ * function removes the provided @dmabuf attribution from the @task. When all
+ * references to @dmabuf are removed from @task, the buffer's size is removed
+ * from the task's dmabuf RSS.
+ */
+void dma_buf_unaccount_task(struct dma_buf *dmabuf, struct task_struct *task)
+{
+	struct task_dma_buf_info *dmabuf_info = task->dmabuf_info;
+	struct task_dma_buf_record *rec;
+
+	if (!static_key_enabled(&dmabuf_accounting_key))
+		return;
+
+	if (!dmabuf_info)
+		return;
+
+	spin_lock(&dmabuf_info->lock);
+	rec = find_task_dmabuf_record(dmabuf_info, dmabuf);
+	if (rec) {
+		if (--rec->refcnt == 0) {
+			list_del(&rec->node);
+			dmabuf_info->dmabuf_count--;
+			dmabuf_info->rss -= dmabuf->size;
+			trace_dmabuf_rss_stat(dmabuf_info->rss, -dmabuf->size, dmabuf);
+			atomic64_dec(&dmabuf->nr_task_refs);
+		} else {
+			rec = NULL;
+		}
+	} else {
+		pr_err("Could not find dmabuf %lu in unaccount for task %d\n",
+		       file_inode(dmabuf->file)->i_ino, task_pid_nr(task));
+	}
+	spin_unlock(&dmabuf_info->lock);
+	if (rec)
+		free_task_dmabuf_record(rec);
+}
+
+static struct task_dma_buf_info *alloc_task_dma_buf_info(void)
+{
+	struct task_dma_buf_info *dmabuf_info;
+
+	dmabuf_info = kzalloc(sizeof(*dmabuf_info), GFP_KERNEL);
+	if (!dmabuf_info)
+		return NULL;
+
+	refcount_set(&dmabuf_info->refcnt, 1);
+	spin_lock_init(&dmabuf_info->lock);
+	INIT_LIST_HEAD(&dmabuf_info->dmabufs);
+
+	return dmabuf_info;
+}
+
+static struct task_dma_buf_info *dup_dma_buf_info(struct task_dma_buf_info *from)
+{
+	struct task_dma_buf_info *to;
+	struct task_dma_buf_record *from_rec, *to_rec;
+	unsigned int count;
+	int retries = 0;
+
+	/* Allocate now before locked section below. */
+	to = alloc_task_dma_buf_info();
+	if (!to)
+		return NULL;
+
+	/* Read required count racily, before obtaining dmabuf_info->lock */
+	count = READ_ONCE(from->dmabuf_count);
+	if (!task_dmabuf_records_preload(count))
+		goto err_list_copy;
+
+retry:
+	spin_lock(&from->lock);
+	if (from->dmabuf_count > count) {
+		/* We don't have enough reserved records, allocate more */
+		count = from->dmabuf_count;
+
+		spin_unlock(&from->lock);
+		task_dmabuf_records_preload_end();
+		if (!task_dmabuf_records_preload(count))
+			goto err_list_copy;
+
+		/* Limit the number of retries to avoid live-lock */
+		if (retries++ > 5) {
+			task_dmabuf_records_preload_end();
+			goto err_list_copy;
+		}
+
+		goto retry;
+	}
+
+	/* All required records are reserved */
+	list_for_each_entry(from_rec, &from->dmabufs, node) {
+		to_rec = alloc_task_dmabuf_record();
+		WARN_ON(!to_rec);
+		to_rec->dmabuf = from_rec->dmabuf;
+		to_rec->refcnt = from_rec->refcnt;
+		list_add(&to_rec->node, &to->dmabufs);
+		atomic64_inc(&to_rec->dmabuf->nr_task_refs);
+	}
+	to->dmabuf_count = from->dmabuf_count;
+	to->rss = from->rss;
+	to->rss_hwm = to->rss;
+	spin_unlock(&from->lock);
+
+	trim_task_dmabuf_records_locked();
+	task_dmabuf_records_preload_end();
+
+	return to;
+
+err_list_copy:
+	trim_task_dmabuf_records();
+	kfree(to);
+
+	return NULL;
+}
+
+int copy_dmabuf_info(u64 clone_flags, struct task_struct *task)
+{
+	struct task_dma_buf_info *parent_dmabuf_info = current->dmabuf_info;
+	struct task_dma_buf_info *child_dmabuf_info;
+	bool share_vm = clone_flags & CLONE_VM;
+	bool share_fs = clone_flags & CLONE_FILES;
+
+	if (!static_key_enabled(&dmabuf_accounting_key))
+		return 0;
+
+	/* kthreads are not supported */
+	if (task->flags & PF_KTHREAD) {
+		task->dmabuf_info = NULL;
+		return 0;
+	}
+
+	/*
+	 * Non-kthread direct descendants of pid 0 are roots of their own task_dma_buf_info trees,
+	 * even if they want to partially share with pid 0. Init does this. We assume no dmabuf
+	 * sharing will actually occur through pid 0.
+	 */
+	if (unlikely(!task_pid_nr(current))) {
+		task->dmabuf_info = alloc_task_dma_buf_info();
+		if (!task->dmabuf_info)
+			return -ENOMEM;
+
+		return 0;
+	}
+
+	/*
+	 * Partial sharing is not supported.
+	 * Children of such tasks are also not supported.
+	 */
+	if (share_vm != share_fs || !parent_dmabuf_info) {
+		task->dmabuf_info = NULL;
+		return 0;
+	}
+
+	/*
+	 * Full sharing: Both MM and FD references to dmabufs are shared with
+	 * the parent, so they can both share the same dmabuf_info.
+	 */
+	if (share_vm && share_fs) {
+		refcount_inc(&parent_dmabuf_info->refcnt);
+		task->dmabuf_info = parent_dmabuf_info;
+		return 0;
+	}
+
+	/*
+	 * No sharing: Both MM and FD references to dmabufs are duplicated in the child. We
+	 * duplicate the dmabuf accounting info into the child as well here.
+	 */
+	child_dmabuf_info = dup_dma_buf_info(parent_dmabuf_info);
+	if (!child_dmabuf_info)
+		return -ENOMEM;
+
+	task->dmabuf_info = child_dmabuf_info;
+
+	return 0;
+}
+
+void put_dmabuf_info(struct task_struct *task)
+{
+	if (!task->dmabuf_info)
+		return;
+
+	if (!refcount_dec_and_test(&task->dmabuf_info->refcnt))
+		return;
+
+	if (task->dmabuf_info->rss)
+		pr_alert("destroying task with non-zero dmabuf rss %lu\n", task->dmabuf_info->rss);
+
+	if (!list_empty(&task->dmabuf_info->dmabufs) || task->dmabuf_info->dmabuf_count > 0)
+		pr_alert("destroying task with non-empty dmabuf list %u\n",
+			 task->dmabuf_info->dmabuf_count);
+
+	kfree(task->dmabuf_info);
+}
+
 static int dma_buf_mmap_internal(struct file *file, struct vm_area_struct *vma)
 {
 	struct dma_buf *dmabuf;
+	bool ignore_bounds = false;
+	int ret;
 
 	if (!is_dma_buf_file(file))
 		return -EINVAL;
@@ -217,12 +652,22 @@ static int dma_buf_mmap_internal(struct file *file, struct vm_area_struct *vma)
 	if (!dmabuf->ops->mmap)
 		return -EINVAL;
 
+	trace_android_vh_ignore_dmabuf_vmap_bounds(dmabuf, &ignore_bounds);
+
 	/* check for overflowing the buffer's size */
-	if (vma->vm_pgoff + vma_pages(vma) >
-	    dmabuf->size >> PAGE_SHIFT)
+	if ((vma->vm_pgoff + vma_pages(vma) >
+	    dmabuf->size >> PAGE_SHIFT) && !ignore_bounds)
 		return -EINVAL;
 
-	return dmabuf->ops->mmap(dmabuf, vma);
+	ret = dmabuf->ops->mmap(dmabuf, vma);
+	if (!ret) {
+		int err = dma_buf_account_task(dmabuf, current);
+
+		if (err)
+			pr_err("dmabuf accounting failed during mmap operation, err %d\n", err);
+	}
+
+	return ret;
 }
 
 static loff_t dma_buf_llseek(struct file *file, loff_t offset, int whence)
@@ -236,9 +681,8 @@ static loff_t dma_buf_llseek(struct file *file, loff_t offset, int whence)
 	dmabuf = file->private_data;
 
 	/* only support discovering the end of the buffer,
-	 * but also allow SEEK_SET to maintain the idiomatic
-	 * SEEK_END(0), SEEK_CUR(0) pattern.
-	 */
+	   but also allow SEEK_SET to maintain the idiomatic
+	   SEEK_END(0), SEEK_CUR(0) pattern */
 	if (whence == SEEK_END)
 		base = dmabuf->size;
 	else if (whence == SEEK_SET)
@@ -381,6 +825,16 @@ static __poll_t dma_buf_poll(struct file *file, poll_table *poll)
 	return events;
 }
 
+static long _dma_buf_set_name(struct dma_buf *dmabuf, const char *name)
+{
+	spin_lock(&dmabuf->name_lock);
+	kfree(dmabuf->name);
+	dmabuf->name = name;
+	spin_unlock(&dmabuf->name_lock);
+
+	return 0;
+}
+
 /**
  * dma_buf_set_name - Set a name to a specific dma_buf to track the usage.
  * It could support changing the name of the dma-buf if the same
@@ -394,19 +848,35 @@ static __poll_t dma_buf_poll(struct file *file, poll_table *poll)
  * devices, return -EBUSY.
  *
  */
-static long dma_buf_set_name(struct dma_buf *dmabuf, const char __user *buf)
+long dma_buf_set_name(struct dma_buf *dmabuf, const char *name)
+{
+	long ret = 0;
+	char *buf = kstrndup(name, DMA_BUF_NAME_LEN, GFP_KERNEL);
+
+	if (!buf)
+		return -ENOMEM;
+
+	ret = _dma_buf_set_name(dmabuf, buf);
+	if (ret)
+		kfree(buf);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(dma_buf_set_name);
+
+static long dma_buf_set_name_user(struct dma_buf *dmabuf, const char __user *buf)
 {
 	char *name = strndup_user(buf, DMA_BUF_NAME_LEN);
+	long ret = 0;
 
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
-	spin_lock(&dmabuf->name_lock);
-	kfree(dmabuf->name);
-	dmabuf->name = name;
-	spin_unlock(&dmabuf->name_lock);
+	ret = _dma_buf_set_name(dmabuf, name);
+	if (ret)
+		kfree(name);
 
-	return 0;
+	return ret;
 }
 
 #if IS_ENABLED(CONFIG_SYNC_FILE)
@@ -555,7 +1025,7 @@ static long dma_buf_ioctl(struct file *file,
 
 	case DMA_BUF_SET_NAME_A:
 	case DMA_BUF_SET_NAME_B:
-		return dma_buf_set_name(dmabuf, (const char __user *)arg);
+		return dma_buf_set_name_user(dmabuf, (const char __user *)arg);
 
 #if IS_ENABLED(CONFIG_SYNC_FILE)
 	case DMA_BUF_IOCTL_EXPORT_SYNC_FILE:
@@ -583,6 +1053,13 @@ static void dma_buf_show_fdinfo(struct seq_file *m, struct file *file)
 	spin_unlock(&dmabuf->name_lock);
 }
 
+static int dma_buf_flush(struct file *file, fl_owner_t id)
+{
+	/* When dmabuf FD is closed we should unaccount it */
+	dma_buf_unaccount_task(file->private_data, current);
+	return 0;
+}
+
 static const struct file_operations dma_buf_fops = {
 	.release	= dma_buf_file_release,
 	.mmap		= dma_buf_mmap_internal,
@@ -591,15 +1068,17 @@ static const struct file_operations dma_buf_fops = {
 	.unlocked_ioctl	= dma_buf_ioctl,
 	.compat_ioctl	= compat_ptr_ioctl,
 	.show_fdinfo	= dma_buf_show_fdinfo,
+	.flush		= dma_buf_flush,
 };
 
 /*
  * is_dma_buf_file - Check if struct file* is associated with dma_buf
  */
-static inline int is_dma_buf_file(struct file *file)
+int is_dma_buf_file(struct file *file)
 {
 	return file->f_op == &dma_buf_fops;
 }
+EXPORT_SYMBOL_NS_GPL(is_dma_buf_file, DMA_BUF);
 
 static struct file *dma_buf_getfile(size_t size, int flags)
 {
@@ -619,7 +1098,7 @@ static struct file *dma_buf_getfile(size_t size, int flags)
 	 * Override ->i_ino with the unique and dmabuffs specific
 	 * value.
 	 */
-	inode->i_ino = atomic64_inc_return(&dmabuf_inode);
+	inode->i_ino = atomic64_add_return(1, &dmabuf_inode);
 	flags &= O_ACCMODE | O_NONBLOCK;
 	file = alloc_file_pseudo(inode, dma_buf_mnt, "dmabuf",
 				 flags, &dma_buf_fops);
@@ -696,6 +1175,10 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 		    || !exp_info->ops->release))
 		return ERR_PTR(-EINVAL);
 
+	if (WARN_ON(exp_info->ops->cache_sgt_mapping &&
+		    (exp_info->ops->pin || exp_info->ops->unpin)))
+		return ERR_PTR(-EINVAL);
+
 	if (WARN_ON(!exp_info->ops->pin != !exp_info->ops->unpin))
 		return ERR_PTR(-EINVAL);
 
@@ -728,6 +1211,7 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	init_waitqueue_head(&dmabuf->poll);
 	dmabuf->cb_in.poll = dmabuf->cb_out.poll = &dmabuf->poll;
 	dmabuf->cb_in.active = dmabuf->cb_out.active = 0;
+	mutex_init(&dmabuf->lock);
 	INIT_LIST_HEAD(&dmabuf->attachments);
 
 	if (!resv) {
@@ -737,9 +1221,7 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 		dmabuf->resv = resv;
 	}
 
-	ret = dma_buf_stats_setup(dmabuf, file);
-	if (ret)
-		goto err_dmabuf;
+	atomic64_set(&dmabuf->nr_task_refs, 0);
 
 	file->private_data = dmabuf;
 	file->f_path.dentry->d_fsdata = dmabuf;
@@ -747,9 +1229,19 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 
 	__dma_buf_list_add(dmabuf);
 
+	ret = dma_buf_stats_setup(dmabuf, file);
+	if (ret)
+		goto err_sysfs;
+
 	return dmabuf;
 
-err_dmabuf:
+err_sysfs:
+	mutex_lock(&dmabuf_list_mutex);
+	list_del(&dmabuf->list_node);
+	mutex_unlock(&dmabuf_list_mutex);
+	dmabuf->file = NULL;
+	file->f_path.dentry->d_fsdata = NULL;
+	file->private_data = NULL;
 	if (!resv)
 		dma_resv_fini(dmabuf->resv);
 	kfree(dmabuf);
@@ -759,7 +1251,7 @@ err_module:
 	module_put(exp_info->owner);
 	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_export, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_export, DMA_BUF);
 
 /**
  * dma_buf_fd - returns a file descriptor for the given struct dma_buf
@@ -783,7 +1275,7 @@ int dma_buf_fd(struct dma_buf *dmabuf, int flags)
 
 	return fd;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_fd, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_fd, DMA_BUF);
 
 /**
  * dma_buf_get - returns the struct dma_buf related to an fd
@@ -809,7 +1301,7 @@ struct dma_buf *dma_buf_get(int fd)
 
 	return file->private_data;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_get, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_get, DMA_BUF);
 
 /**
  * dma_buf_put - decreases refcount of the buffer
@@ -828,7 +1320,7 @@ void dma_buf_put(struct dma_buf *dmabuf)
 
 	fput(dmabuf->file);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_put, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_put, DMA_BUF);
 
 static void mangle_sg_table(struct sg_table *sg_table)
 {
@@ -838,92 +1330,37 @@ static void mangle_sg_table(struct sg_table *sg_table)
 
 	/* To catch abuse of the underlying struct page by importers mix
 	 * up the bits, but take care to preserve the low SG_ bits to
-	 * not corrupt the sgt. The mixing is undone on unmap
-	 * before passing the sgt back to the exporter.
-	 */
+	 * not corrupt the sgt. The mixing is undone in __unmap_dma_buf
+	 * before passing the sgt back to the exporter. */
 	for_each_sgtable_sg(sg_table, sg, i)
 		sg->page_link ^= ~0xffUL;
 #endif
 
 }
-
-static inline bool
-dma_buf_attachment_is_dynamic(struct dma_buf_attachment *attach)
+static struct sg_table * __map_dma_buf(struct dma_buf_attachment *attach,
+				       enum dma_data_direction direction)
 {
-	return !!attach->importer_ops;
-}
+	struct sg_table *sg_table;
+	signed long ret;
 
-static bool
-dma_buf_pin_on_map(struct dma_buf_attachment *attach)
-{
-	return attach->dmabuf->ops->pin &&
-		(!dma_buf_attachment_is_dynamic(attach) ||
-		 !IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY));
-}
+	sg_table = attach->dmabuf->ops->map_dma_buf(attach, direction);
+	if (IS_ERR_OR_NULL(sg_table))
+		return sg_table;
 
-/**
- * DOC: locking convention
- *
- * In order to avoid deadlock situations between dma-buf exports and importers,
- * all dma-buf API users must follow the common dma-buf locking convention.
- *
- * Convention for importers
- *
- * 1. Importers must hold the dma-buf reservation lock when calling these
- *    functions:
- *
- *     - dma_buf_pin()
- *     - dma_buf_unpin()
- *     - dma_buf_map_attachment()
- *     - dma_buf_unmap_attachment()
- *     - dma_buf_vmap()
- *     - dma_buf_vunmap()
- *
- * 2. Importers must not hold the dma-buf reservation lock when calling these
- *    functions:
- *
- *     - dma_buf_attach()
- *     - dma_buf_dynamic_attach()
- *     - dma_buf_detach()
- *     - dma_buf_export()
- *     - dma_buf_fd()
- *     - dma_buf_get()
- *     - dma_buf_put()
- *     - dma_buf_mmap()
- *     - dma_buf_begin_cpu_access()
- *     - dma_buf_end_cpu_access()
- *     - dma_buf_map_attachment_unlocked()
- *     - dma_buf_unmap_attachment_unlocked()
- *     - dma_buf_vmap_unlocked()
- *     - dma_buf_vunmap_unlocked()
- *
- * Convention for exporters
- *
- * 1. These &dma_buf_ops callbacks are invoked with unlocked dma-buf
- *    reservation and exporter can take the lock:
- *
- *     - &dma_buf_ops.attach()
- *     - &dma_buf_ops.detach()
- *     - &dma_buf_ops.release()
- *     - &dma_buf_ops.begin_cpu_access()
- *     - &dma_buf_ops.end_cpu_access()
- *     - &dma_buf_ops.mmap()
- *
- * 2. These &dma_buf_ops callbacks are invoked with locked dma-buf
- *    reservation and exporter can't take the lock:
- *
- *     - &dma_buf_ops.pin()
- *     - &dma_buf_ops.unpin()
- *     - &dma_buf_ops.map_dma_buf()
- *     - &dma_buf_ops.unmap_dma_buf()
- *     - &dma_buf_ops.vmap()
- *     - &dma_buf_ops.vunmap()
- *
- * 3. Exporters must hold the dma-buf reservation lock when calling these
- *    functions:
- *
- *     - dma_buf_move_notify()
- */
+	if (!dma_buf_attachment_is_dynamic(attach)) {
+		ret = dma_resv_wait_timeout(attach->dmabuf->resv,
+					    DMA_RESV_USAGE_KERNEL, true,
+					    MAX_SCHEDULE_TIMEOUT);
+		if (ret < 0) {
+			attach->dmabuf->ops->unmap_dma_buf(attach, sg_table,
+							   direction);
+			return ERR_PTR(ret);
+		}
+	}
+
+	mangle_sg_table(sg_table);
+	return sg_table;
+}
 
 /**
  * dma_buf_dynamic_attach - Add the device to dma_buf's attachments list
@@ -981,13 +1418,52 @@ dma_buf_dynamic_attach(struct dma_buf *dmabuf, struct device *dev,
 	list_add(&attach->node, &dmabuf->attachments);
 	dma_resv_unlock(dmabuf->resv);
 
+	/* When either the importer or the exporter can't handle dynamic
+	 * mappings we cache the mapping here to avoid issues with the
+	 * reservation object lock.
+	 */
+	if (dma_buf_attachment_is_dynamic(attach) !=
+	    dma_buf_is_dynamic(dmabuf)) {
+		struct sg_table *sgt;
+
+		if (dma_buf_is_dynamic(attach->dmabuf)) {
+			dma_resv_lock(attach->dmabuf->resv, NULL);
+			ret = dmabuf->ops->pin(attach);
+			if (ret)
+				goto err_unlock;
+		}
+
+		sgt = __map_dma_buf(attach, DMA_BIDIRECTIONAL);
+		if (!sgt)
+			sgt = ERR_PTR(-ENOMEM);
+		if (IS_ERR(sgt)) {
+			ret = PTR_ERR(sgt);
+			goto err_unpin;
+		}
+		if (dma_buf_is_dynamic(attach->dmabuf))
+			dma_resv_unlock(attach->dmabuf->resv);
+		attach->sgt = sgt;
+		attach->dir = DMA_BIDIRECTIONAL;
+	}
+
 	return attach;
 
 err_attach:
 	kfree(attach);
 	return ERR_PTR(ret);
+
+err_unpin:
+	if (dma_buf_is_dynamic(attach->dmabuf))
+		dmabuf->ops->unpin(attach);
+
+err_unlock:
+	if (dma_buf_is_dynamic(attach->dmabuf))
+		dma_resv_unlock(attach->dmabuf->resv);
+
+	dma_buf_detach(dmabuf, attach);
+	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_dynamic_attach, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_dynamic_attach, DMA_BUF);
 
 /**
  * dma_buf_attach - Wrapper for dma_buf_dynamic_attach
@@ -1002,7 +1478,17 @@ struct dma_buf_attachment *dma_buf_attach(struct dma_buf *dmabuf,
 {
 	return dma_buf_dynamic_attach(dmabuf, dev, NULL, NULL);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_attach, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_attach, DMA_BUF);
+
+static void __unmap_dma_buf(struct dma_buf_attachment *attach,
+			    struct sg_table *sg_table,
+			    enum dma_data_direction direction)
+{
+	/* uses XOR, hence this unmangles */
+	mangle_sg_table(sg_table);
+
+	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table, direction);
+}
 
 /**
  * dma_buf_detach - Remove the given attachment from dmabuf's attachments list
@@ -1015,19 +1501,30 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_attach, "DMA_BUF");
  */
 void dma_buf_detach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach)
 {
-	if (WARN_ON(!dmabuf || !attach || dmabuf != attach->dmabuf))
+	if (WARN_ON(!dmabuf || !attach))
 		return;
+
+	if (attach->sgt) {
+		if (dma_buf_is_dynamic(attach->dmabuf))
+			dma_resv_lock(attach->dmabuf->resv, NULL);
+
+		__unmap_dma_buf(attach, attach->sgt, attach->dir);
+
+		if (dma_buf_is_dynamic(attach->dmabuf)) {
+			dmabuf->ops->unpin(attach);
+			dma_resv_unlock(attach->dmabuf->resv);
+		}
+	}
 
 	dma_resv_lock(dmabuf->resv, NULL);
 	list_del(&attach->node);
 	dma_resv_unlock(dmabuf->resv);
-
 	if (dmabuf->ops->detach)
 		dmabuf->ops->detach(dmabuf, attach);
 
 	kfree(attach);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_detach, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_detach, DMA_BUF);
 
 /**
  * dma_buf_pin - Lock down the DMA-buf
@@ -1048,7 +1545,7 @@ int dma_buf_pin(struct dma_buf_attachment *attach)
 	struct dma_buf *dmabuf = attach->dmabuf;
 	int ret = 0;
 
-	WARN_ON(!attach->importer_ops);
+	WARN_ON(!dma_buf_attachment_is_dynamic(attach));
 
 	dma_resv_assert_held(dmabuf->resv);
 
@@ -1057,7 +1554,7 @@ int dma_buf_pin(struct dma_buf_attachment *attach)
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_pin, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_pin, DMA_BUF);
 
 /**
  * dma_buf_unpin - Unpin a DMA-buf
@@ -1071,14 +1568,14 @@ void dma_buf_unpin(struct dma_buf_attachment *attach)
 {
 	struct dma_buf *dmabuf = attach->dmabuf;
 
-	WARN_ON(!attach->importer_ops);
+	WARN_ON(!dma_buf_attachment_is_dynamic(attach));
 
 	dma_resv_assert_held(dmabuf->resv);
 
 	if (dmabuf->ops->unpin)
 		dmabuf->ops->unpin(attach);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_unpin, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_unpin, DMA_BUF);
 
 /**
  * dma_buf_map_attachment - Returns the scatterlist table of the attachment;
@@ -1105,46 +1602,52 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 					enum dma_data_direction direction)
 {
 	struct sg_table *sg_table;
-	signed long ret;
+	int r;
 
 	might_sleep();
 
 	if (WARN_ON(!attach || !attach->dmabuf))
 		return ERR_PTR(-EINVAL);
 
-	dma_resv_assert_held(attach->dmabuf->resv);
+	if (dma_buf_attachment_is_dynamic(attach))
+		dma_resv_assert_held(attach->dmabuf->resv);
 
-	if (dma_buf_pin_on_map(attach)) {
-		ret = attach->dmabuf->ops->pin(attach);
+	if (attach->sgt) {
 		/*
-		 * Catch exporters making buffers inaccessible even when
-		 * attachments preventing that exist.
+		 * Two mappings with different directions for the same
+		 * attachment are not allowed.
 		 */
-		WARN_ON_ONCE(ret == -EBUSY);
-		if (ret)
-			return ERR_PTR(ret);
+		if (attach->dir != direction &&
+		    attach->dir != DMA_BIDIRECTIONAL)
+			return ERR_PTR(-EBUSY);
+
+		return attach->sgt;
 	}
 
-	sg_table = attach->dmabuf->ops->map_dma_buf(attach, direction);
+	if (dma_buf_is_dynamic(attach->dmabuf)) {
+		dma_resv_assert_held(attach->dmabuf->resv);
+		if (!IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY)) {
+			r = attach->dmabuf->ops->pin(attach);
+			if (r)
+				return ERR_PTR(r);
+		}
+	}
+
+	sg_table = __map_dma_buf(attach, direction);
 	if (!sg_table)
 		sg_table = ERR_PTR(-ENOMEM);
-	if (IS_ERR(sg_table))
-		goto error_unpin;
 
-	/*
-	 * Importers with static attachments don't wait for fences.
-	 */
-	if (!dma_buf_attachment_is_dynamic(attach)) {
-		ret = dma_resv_wait_timeout(attach->dmabuf->resv,
-					    DMA_RESV_USAGE_KERNEL, true,
-					    MAX_SCHEDULE_TIMEOUT);
-		if (ret < 0)
-			goto error_unmap;
+	if (IS_ERR(sg_table) && dma_buf_is_dynamic(attach->dmabuf) &&
+	     !IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY))
+		attach->dmabuf->ops->unpin(attach);
+
+	if (!IS_ERR(sg_table) && attach->dmabuf->ops->cache_sgt_mapping) {
+		attach->sgt = sg_table;
+		attach->dir = direction;
 	}
-	mangle_sg_table(sg_table);
 
 #ifdef CONFIG_DMA_API_DEBUG
-	{
+	if (!IS_ERR(sg_table)) {
 		struct scatterlist *sg;
 		u64 addr;
 		int len;
@@ -1161,18 +1664,8 @@ struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach,
 	}
 #endif /* CONFIG_DMA_API_DEBUG */
 	return sg_table;
-
-error_unmap:
-	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table, direction);
-	sg_table = ERR_PTR(ret);
-
-error_unpin:
-	if (dma_buf_pin_on_map(attach))
-		attach->dmabuf->ops->unpin(attach);
-
-	return sg_table;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment, DMA_BUF);
 
 /**
  * dma_buf_map_attachment_unlocked - Returns the scatterlist table of the attachment;
@@ -1200,7 +1693,7 @@ dma_buf_map_attachment_unlocked(struct dma_buf_attachment *attach,
 
 	return sg_table;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_map_attachment_unlocked, DMA_BUF);
 
 /**
  * dma_buf_unmap_attachment - unmaps and decreases usecount of the buffer;might
@@ -1221,15 +1714,22 @@ void dma_buf_unmap_attachment(struct dma_buf_attachment *attach,
 	if (WARN_ON(!attach || !attach->dmabuf || !sg_table))
 		return;
 
-	dma_resv_assert_held(attach->dmabuf->resv);
+	if (dma_buf_attachment_is_dynamic(attach))
+		dma_resv_assert_held(attach->dmabuf->resv);
 
-	mangle_sg_table(sg_table);
-	attach->dmabuf->ops->unmap_dma_buf(attach, sg_table, direction);
+	if (attach->sgt == sg_table)
+		return;
 
-	if (dma_buf_pin_on_map(attach))
-		attach->dmabuf->ops->unpin(attach);
+	if (dma_buf_is_dynamic(attach->dmabuf))
+		dma_resv_assert_held(attach->dmabuf->resv);
+
+	__unmap_dma_buf(attach, sg_table, direction);
+
+	if (dma_buf_is_dynamic(attach->dmabuf) &&
+	    !IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY))
+		dma_buf_unpin(attach);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment, DMA_BUF);
 
 /**
  * dma_buf_unmap_attachment_unlocked - unmaps and decreases usecount of the buffer;might
@@ -1254,14 +1754,14 @@ void dma_buf_unmap_attachment_unlocked(struct dma_buf_attachment *attach,
 	dma_buf_unmap_attachment(attach, sg_table, direction);
 	dma_resv_unlock(attach->dmabuf->resv);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_unmap_attachment_unlocked, DMA_BUF);
 
 /**
  * dma_buf_move_notify - notify attachments that DMA-buf is moving
  *
  * @dmabuf:	[in]	buffer which is moving
  *
- * Informs all attachments that they need to destroy and recreate all their
+ * Informs all attachmenst that they need to destroy and recreated all their
  * mappings.
  */
 void dma_buf_move_notify(struct dma_buf *dmabuf)
@@ -1274,16 +1774,16 @@ void dma_buf_move_notify(struct dma_buf *dmabuf)
 		if (attach->importer_ops)
 			attach->importer_ops->move_notify(attach);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_move_notify, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_move_notify, DMA_BUF);
 
 /**
  * DOC: cpu access
  *
- * There are multiple reasons for supporting CPU access to a dma buffer object:
+ * There are mutliple reasons for supporting CPU access to a dma buffer object:
  *
  * - Fallback operations in the kernel, for example when a device is connected
  *   over USB and the kernel needs to shuffle the data around first before
- *   sending it away. Cache coherency is handled by bracketing any transactions
+ *   sending it away. Cache coherency is handled by braketing any transactions
  *   with calls to dma_buf_begin_cpu_access() and dma_buf_end_cpu_access()
  *   access.
  *
@@ -1291,12 +1791,10 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_move_notify, "DMA_BUF");
  *   vmap interface is introduced. Note that on very old 32-bit architectures
  *   vmalloc space might be limited and result in vmap calls failing.
  *
- *   Interfaces:
+ *   Interfaces::
  *
- *   .. code-block:: c
- *
- *     void *dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map)
- *     void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map)
+ *      void \*dma_buf_vmap(struct dma_buf \*dmabuf, struct iosys_map \*map)
+ *      void dma_buf_vunmap(struct dma_buf \*dmabuf, struct iosys_map \*map)
  *
  *   The vmap call can fail if there is no vmap support in the exporter, or if
  *   it runs out of vmalloc space. Note that the dma-buf layer keeps a reference
@@ -1312,7 +1810,7 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_move_notify, "DMA_BUF");
  *   replace ION buffers mmap support was needed.
  *
  *   There is no special interfaces, userspace simply calls mmap on the dma-buf
- *   fd. But like for CPU access there's a need to bracket the actual access,
+ *   fd. But like for CPU access there's a need to braket the actual access,
  *   which is handled by the ioctl (DMA_BUF_IOCTL_SYNC). Note that
  *   DMA_BUF_IOCTL_SYNC can fail with -EAGAIN or -EINTR, in which case it must
  *   be restarted.
@@ -1353,11 +1851,10 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_move_notify, "DMA_BUF");
  *   enough, since adding interfaces to intercept pagefaults and allow pte
  *   shootdowns would increase the complexity quite a bit.
  *
- *   Interface:
+ *   Interface::
  *
- *   .. code-block:: c
- *
- *     int dma_buf_mmap(struct dma_buf *, struct vm_area_struct *, unsigned long);
+ *      int dma_buf_mmap(struct dma_buf \*, struct vm_area_struct \*,
+ *		       unsigned long);
  *
  *   If the importing subsystem simply provides a special-purpose mmap call to
  *   set up a mapping in userspace, calling do_mmap with &dma_buf.file will
@@ -1387,10 +1884,10 @@ static int __dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
  * preparations. Coherency is only guaranteed in the specified range for the
  * specified access direction.
  * @dmabuf:	[in]	buffer to prepare cpu access for.
- * @direction:	[in]	direction of access.
+ * @direction:	[in]	length of range for cpu access.
  *
  * After the cpu access is complete the caller should call
- * dma_buf_end_cpu_access(). Only when cpu access is bracketed by both calls is
+ * dma_buf_end_cpu_access(). Only when cpu access is braketed by both calls is
  * it guaranteed to be coherent with other DMA access.
  *
  * This function will also wait for any DMA transactions tracked through
@@ -1422,7 +1919,7 @@ int dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_begin_cpu_access, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_begin_cpu_access, DMA_BUF);
 
 int dma_buf_begin_cpu_access_partial(struct dma_buf *dmabuf,
 				     enum dma_data_direction direction,
@@ -1454,7 +1951,7 @@ EXPORT_SYMBOL_GPL(dma_buf_begin_cpu_access_partial);
  * actions. Coherency is only guaranteed in the specified range for the
  * specified access direction.
  * @dmabuf:	[in]	buffer to complete cpu access for.
- * @direction:	[in]	direction of access.
+ * @direction:	[in]	length of range for cpu access.
  *
  * This terminates CPU access started with dma_buf_begin_cpu_access().
  *
@@ -1474,7 +1971,7 @@ int dma_buf_end_cpu_access(struct dma_buf *dmabuf,
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_end_cpu_access, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_end_cpu_access, DMA_BUF);
 
 int dma_buf_end_cpu_access_partial(struct dma_buf *dmabuf,
 				   enum dma_data_direction direction,
@@ -1509,6 +2006,8 @@ EXPORT_SYMBOL_GPL(dma_buf_end_cpu_access_partial);
 int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 		 unsigned long pgoff)
 {
+	int ret;
+
 	if (WARN_ON(!dmabuf || !vma))
 		return -EINVAL;
 
@@ -1529,9 +2028,17 @@ int dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma,
 	vma_set_file(vma, dmabuf->file);
 	vma->vm_pgoff = pgoff;
 
-	return dmabuf->ops->mmap(dmabuf, vma);
+	ret = dmabuf->ops->mmap(dmabuf, vma);
+	if (!ret) {
+		int err = dma_buf_account_task(dmabuf, current);
+
+		if (err)
+			pr_err("dmabuf accounting failed during mmap operation, err %d\n", err);
+	}
+
+	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_mmap, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_mmap, DMA_BUF);
 
 /**
  * dma_buf_vmap - Create virtual mapping for the buffer object into kernel
@@ -1552,66 +2059,40 @@ EXPORT_SYMBOL_NS_GPL(dma_buf_mmap, "DMA_BUF");
 int dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map)
 {
 	struct iosys_map ptr;
-	int ret;
+	int ret = 0;
 
 	iosys_map_clear(map);
 
 	if (WARN_ON(!dmabuf))
 		return -EINVAL;
 
-	dma_resv_assert_held(dmabuf->resv);
-
 	if (!dmabuf->ops->vmap)
 		return -EINVAL;
 
+	mutex_lock(&dmabuf->lock);
 	if (dmabuf->vmapping_counter) {
 		dmabuf->vmapping_counter++;
 		BUG_ON(iosys_map_is_null(&dmabuf->vmap_ptr));
 		*map = dmabuf->vmap_ptr;
-		return 0;
+		goto out_unlock;
 	}
 
 	BUG_ON(iosys_map_is_set(&dmabuf->vmap_ptr));
 
 	ret = dmabuf->ops->vmap(dmabuf, &ptr);
 	if (WARN_ON_ONCE(ret))
-		return ret;
+		goto out_unlock;
 
 	dmabuf->vmap_ptr = ptr;
 	dmabuf->vmapping_counter = 1;
 
 	*map = dmabuf->vmap_ptr;
 
-	return 0;
-}
-EXPORT_SYMBOL_NS_GPL(dma_buf_vmap, "DMA_BUF");
-
-/**
- * dma_buf_vmap_unlocked - Create virtual mapping for the buffer object into kernel
- * address space. Same restrictions as for vmap and friends apply.
- * @dmabuf:	[in]	buffer to vmap
- * @map:	[out]	returns the vmap pointer
- *
- * Unlocked version of dma_buf_vmap()
- *
- * Returns 0 on success, or a negative errno code otherwise.
- */
-int dma_buf_vmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
-{
-	int ret;
-
-	iosys_map_clear(map);
-
-	if (WARN_ON(!dmabuf))
-		return -EINVAL;
-
-	dma_resv_lock(dmabuf->resv, NULL);
-	ret = dma_buf_vmap(dmabuf, map);
-	dma_resv_unlock(dmabuf->resv);
-
+out_unlock:
+	mutex_unlock(&dmabuf->lock);
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_vmap_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_vmap, DMA_BUF);
 
 /**
  * dma_buf_vunmap - Unmap a vmap obtained by dma_buf_vmap.
@@ -1623,35 +2104,19 @@ void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map)
 	if (WARN_ON(!dmabuf))
 		return;
 
-	dma_resv_assert_held(dmabuf->resv);
-
 	BUG_ON(iosys_map_is_null(&dmabuf->vmap_ptr));
 	BUG_ON(dmabuf->vmapping_counter == 0);
 	BUG_ON(!iosys_map_is_equal(&dmabuf->vmap_ptr, map));
 
+	mutex_lock(&dmabuf->lock);
 	if (--dmabuf->vmapping_counter == 0) {
 		if (dmabuf->ops->vunmap)
 			dmabuf->ops->vunmap(dmabuf, map);
 		iosys_map_clear(&dmabuf->vmap_ptr);
 	}
+	mutex_unlock(&dmabuf->lock);
 }
-EXPORT_SYMBOL_NS_GPL(dma_buf_vunmap, "DMA_BUF");
-
-/**
- * dma_buf_vunmap_unlocked - Unmap a vmap obtained by dma_buf_vmap.
- * @dmabuf:	[in]	buffer to vunmap
- * @map:	[in]	vmap pointer to vunmap
- */
-void dma_buf_vunmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
-{
-	if (WARN_ON(!dmabuf))
-		return;
-
-	dma_resv_lock(dmabuf->resv, NULL);
-	dma_buf_vunmap(dmabuf, map);
-	dma_resv_unlock(dmabuf->resv);
-}
-EXPORT_SYMBOL_NS_GPL(dma_buf_vunmap_unlocked, "DMA_BUF");
+EXPORT_SYMBOL_NS_GPL(dma_buf_vunmap, DMA_BUF);
 
 int dma_buf_get_flags(struct dma_buf *dmabuf, unsigned long *flags)
 {
@@ -1745,7 +2210,7 @@ static int dma_buf_init_debugfs(void)
 
 	dma_buf_debugfs_dir = d;
 
-	d = debugfs_create_file("bufinfo", 0444, dma_buf_debugfs_dir,
+	d = debugfs_create_file("bufinfo", S_IRUGO, dma_buf_debugfs_dir,
 				NULL, &dma_buf_debug_fops);
 	if (IS_ERR(d)) {
 		pr_debug("dma_buf: debugfs: failed to create node bufinfo\n");
@@ -1771,6 +2236,24 @@ static inline void dma_buf_uninit_debugfs(void)
 }
 #endif
 
+static int __init setup_early_dmabuf_accounting(char *str)
+{
+	bool enable;
+
+	if (kstrtobool(str, &enable))
+		return -EINVAL;
+
+	if (enable != static_key_enabled(&dmabuf_accounting_key)) {
+		if (enable)
+			static_branch_enable(&dmabuf_accounting_key);
+		else
+			static_branch_disable(&dmabuf_accounting_key);
+	}
+
+	return 0;
+}
+early_param("dmabuf_accounting", setup_early_dmabuf_accounting);
+
 static int __init dma_buf_init(void)
 {
 	int ret;
@@ -1783,6 +2266,7 @@ static int __init dma_buf_init(void)
 	if (IS_ERR(dma_buf_mnt))
 		return PTR_ERR(dma_buf_mnt);
 
+	init_task_dmabuf_record_pool();
 	dma_buf_init_debugfs();
 	return 0;
 }

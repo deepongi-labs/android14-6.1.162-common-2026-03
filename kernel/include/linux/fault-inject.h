@@ -2,17 +2,12 @@
 #ifndef _LINUX_FAULT_INJECT_H
 #define _LINUX_FAULT_INJECT_H
 
-#include <linux/err.h>
-#include <linux/types.h>
-
-struct dentry;
-struct kmem_cache;
-
 #ifdef CONFIG_FAULT_INJECTION
 
-#include <linux/atomic.h>
-#include <linux/configfs.h>
+#include <linux/types.h>
+#include <linux/debugfs.h>
 #include <linux/ratelimit.h>
+#include <linux/atomic.h>
 
 /*
  * For explanation of the elements of this struct, see
@@ -55,28 +50,6 @@ int setup_fault_attr(struct fault_attr *attr, char *str);
 bool should_fail_ex(struct fault_attr *attr, ssize_t size, int flags);
 bool should_fail(struct fault_attr *attr, ssize_t size);
 
-#else /* CONFIG_FAULT_INJECTION */
-
-struct fault_attr {
-};
-
-#define DECLARE_FAULT_ATTR(name) struct fault_attr name = {}
-
-static inline int setup_fault_attr(struct fault_attr *attr, char *str)
-{
-	return 0; /* Note: 0 means error for __setup() handlers! */
-}
-static inline bool should_fail_ex(struct fault_attr *attr, ssize_t size, int flags)
-{
-	return false;
-}
-static inline bool should_fail(struct fault_attr *attr, ssize_t size)
-{
-	return false;
-}
-
-#endif /* CONFIG_FAULT_INJECTION */
-
 #ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
 
 struct dentry *fault_create_debugfs_attr(const char *name,
@@ -92,40 +65,17 @@ static inline struct dentry *fault_create_debugfs_attr(const char *name,
 
 #endif /* CONFIG_FAULT_INJECTION_DEBUG_FS */
 
-#ifdef CONFIG_FAULT_INJECTION_CONFIGFS
+#endif /* CONFIG_FAULT_INJECTION */
 
-struct fault_config {
-	struct fault_attr attr;
-	struct config_group group;
-};
+struct kmem_cache;
 
-void fault_config_init(struct fault_config *config, const char *name);
-
-#else /* CONFIG_FAULT_INJECTION_CONFIGFS */
-
-struct fault_config {
-};
-
-static inline void fault_config_init(struct fault_config *config,
-			const char *name)
-{
-}
-
-#endif /* CONFIG_FAULT_INJECTION_CONFIGFS */
-
-#ifdef CONFIG_FAIL_PAGE_ALLOC
 bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order);
-#else
-static inline bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
-{
-	return false;
-}
-#endif /* CONFIG_FAIL_PAGE_ALLOC */
 
-#ifdef CONFIG_FAILSLAB
 int should_failslab(struct kmem_cache *s, gfp_t gfpflags);
+#ifdef CONFIG_FAILSLAB
+extern bool __should_failslab(struct kmem_cache *s, gfp_t gfpflags);
 #else
-static inline int should_failslab(struct kmem_cache *s, gfp_t gfpflags)
+static inline bool __should_failslab(struct kmem_cache *s, gfp_t gfpflags)
 {
 	return false;
 }

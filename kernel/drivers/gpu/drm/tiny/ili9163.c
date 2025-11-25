@@ -7,10 +7,9 @@
 #include <linux/property.h>
 #include <linux/spi/spi.h>
 
-#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_mipi_dbi.h>
@@ -101,7 +100,11 @@ out_exit:
 }
 
 static const struct drm_simple_display_pipe_funcs ili9163_pipe_funcs = {
-	DRM_MIPI_DBI_SIMPLE_DISPLAY_PIPE_FUNCS(yx240qv29_enable),
+	.mode_valid = mipi_dbi_pipe_mode_valid,
+	.enable = yx240qv29_enable,
+	.disable = mipi_dbi_pipe_disable,
+	.update = mipi_dbi_pipe_update,
+	.prepare_fb = drm_gem_simple_display_pipe_prepare_fb,
 };
 
 static const struct drm_display_mode yx240qv29_mode = {
@@ -114,10 +117,10 @@ static struct drm_driver ili9163_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops			= &ili9163_fops,
 	DRM_GEM_DMA_DRIVER_OPS_VMAP,
-	DRM_FBDEV_DMA_DRIVER_OPS,
 	.debugfs_init		= mipi_dbi_debugfs_init,
 	.name			= "ili9163",
 	.desc			= "Ilitek ILI9163",
+	.date			= "20210208",
 	.major			= 1,
 	.minor			= 0,
 };
@@ -186,7 +189,7 @@ static int ili9163_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	drm_client_setup(drm, NULL);
+	drm_fbdev_generic_setup(drm, 0);
 
 	return 0;
 }

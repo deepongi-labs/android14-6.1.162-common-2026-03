@@ -221,7 +221,7 @@ static int malidp_crtc_atomic_check_ctm(struct drm_crtc *crtc,
 
 	/*
 	 * The size of the ctm is checked in
-	 * drm_property_replace_blob_from_id.
+	 * drm_atomic_replace_property_blob_from_id.
 	 */
 	ctm = (struct drm_color_ctm *)state->ctm->data;
 	for (i = 0; i < ARRAY_SIZE(ctm->matrix); ++i) {
@@ -514,6 +514,7 @@ static void malidp_crtc_disable_vblank(struct drm_crtc *crtc)
 }
 
 static const struct drm_crtc_funcs malidp_crtc_funcs = {
+	.destroy = drm_crtc_cleanup,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
 	.reset = malidp_crtc_reset,
@@ -525,7 +526,7 @@ static const struct drm_crtc_funcs malidp_crtc_funcs = {
 
 int malidp_crtc_init(struct drm_device *drm)
 {
-	struct malidp_drm *malidp = drm_to_malidp(drm);
+	struct malidp_drm *malidp = drm->dev_private;
 	struct drm_plane *primary = NULL, *plane;
 	int ret;
 
@@ -547,8 +548,8 @@ int malidp_crtc_init(struct drm_device *drm)
 		return -EINVAL;
 	}
 
-	ret = drmm_crtc_init_with_planes(drm, &malidp->crtc, primary, NULL,
-					 &malidp_crtc_funcs, NULL);
+	ret = drm_crtc_init_with_planes(drm, &malidp->crtc, primary, NULL,
+					&malidp_crtc_funcs, NULL);
 	if (ret)
 		return ret;
 

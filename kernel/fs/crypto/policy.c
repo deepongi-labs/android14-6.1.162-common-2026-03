@@ -10,13 +10,11 @@
  * Modified by Eric Biggers, 2019 for v2 policy support.
  */
 
-#include <linux/export.h>
 #include <linux/fs_context.h>
-#include <linux/mount.h>
 #include <linux/random.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
-
+#include <linux/mount.h>
 #include "fscrypt_private.h"
 
 /**
@@ -120,11 +118,12 @@ static bool supported_direct_key_modes(const struct inode *inode,
 }
 
 static bool supported_iv_ino_lblk_policy(const struct fscrypt_policy_v2 *policy,
-					 const struct inode *inode)
+					 const struct inode *inode,
+					 const char *type,
+					 int max_ino_bits, int max_lblk_bits)
 {
-	const char *type = (policy->flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64)
-				? "IV_INO_LBLK_64" : "IV_INO_LBLK_32";
 	struct super_block *sb = inode->i_sb;
+	int ino_bits = 64, lblk_bits = 64;
 
 	/*
 	 * IV_INO_LBLK_* exist only because of hardware limitations, and
@@ -151,15 +150,9 @@ static bool supported_iv_ino_lblk_policy(const struct fscrypt_policy_v2 *policy,
 			     type, sb->s_id);
 		return false;
 	}
-
-	/*
-	 * IV_INO_LBLK_64 and IV_INO_LBLK_32 both require that inode numbers fit
-	 * in 32 bits.  In principle, IV_INO_LBLK_32 could support longer inode
-	 * numbers because it hashes the inode number; however, currently the
-	 * inode number is gotten from inode::i_ino which is 'unsigned long'.
-	 * So for now the implementation limit is 32 bits.
-	 */
-	if (!sb->s_cop->has_32bit_inodes) {
+	if (sb->s_cop->get_ino_and_lblk_bits)
+		sb->s_cop->get_ino_and_lblk_bits(sb, &ino_bits, &lblk_bits);
+	if (ino_bits > max_ino_bits) {
 		fscrypt_warn(inode,
 			     "Can't use %s policy on filesystem '%s' because its inode numbers are too long",
 			     type, sb->s_id);
@@ -247,7 +240,8 @@ static bool fscrypt_supported_v2_policy(const struct fscrypt_policy_v2 *policy,
 	}
 
 	if (policy->log2_data_unit_size) {
-		if (!inode->i_sb->s_cop->supports_subblock_data_units) {
+		if (!(inode->i_sb->s_cop->flags &
+		      FS_CFLG_SUPPORTS_SUBBLOCK_DATA_UNITS)) {
 			fscrypt_warn(inode,
 				     "Filesystem does not support configuring crypto data unit size");
 			return false;
@@ -276,9 +270,20 @@ static bool fscrypt_supported_v2_policy(const struct fscrypt_policy_v2 *policy,
 					policy->filenames_encryption_mode))
 		return false;
 
-	if ((policy->flags & (FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64 |
-			      FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32)) &&
-	    !supported_iv_ino_lblk_policy(policy, inode))
+	if ((policy->flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64) &&
+	    !supported_iv_ino_lblk_policy(policy, inode, "IV_INO_LBLK_64",
+					  32, 32))
+		return false;
+
+	/*
+	 * IV_INO_LBLK_32 hashes the inode number, so in principle it can
+	 * support any ino_bits.  However, currently the inode number is gotten
+	 * from inode::i_ino which is 'unsigned long'.  So for now the
+	 * implementation limit is 32 bits.
+	 */
+	if ((policy->flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32) &&
+	    !supported_iv_ino_lblk_policy(policy, inode, "IV_INO_LBLK_32",
+					  32, 32))
 		return false;
 
 	if (memchr_inv(policy->__reserved, 0, sizeof(policy->__reserved))) {
@@ -434,11 +439,11 @@ int fscrypt_policy_from_context(union fscrypt_policy *policy_u,
 /* Retrieve an inode's encryption policy */
 static int fscrypt_get_policy(struct inode *inode, union fscrypt_policy *policy)
 {
-	const struct fscrypt_inode_info *ci;
+	const struct fscrypt_info *ci;
 	union fscrypt_context ctx;
 	int ret;
 
-	ci = fscrypt_get_inode_info(inode);
+	ci = fscrypt_get_info(inode);
 	if (ci) {
 		/* key available, use the cached policy */
 		*policy = ci->ci_policy;
@@ -534,7 +539,7 @@ int fscrypt_ioctl_set_policy(struct file *filp, const void __user *arg)
 		return -EFAULT;
 	policy.version = version;
 
-	if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
+	if (!inode_owner_or_capable(&init_user_ns, inode))
 		return -EACCES;
 
 	ret = mnt_want_write_file(filp);
@@ -676,7 +681,7 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 
 	/*
 	 * Both parent and child are encrypted, so verify they use the same
-	 * encryption policy.  Compare the cached policies if the keys are
+	 * encryption policy.  Compare the fscrypt_info structs if the keys are
 	 * available, otherwise retrieve and compare the fscrypt_contexts.
 	 *
 	 * Note that the fscrypt_context retrieval will be required frequently
@@ -727,7 +732,7 @@ const union fscrypt_policy *fscrypt_policy_to_inherit(struct inode *dir)
 		err = fscrypt_require_key(dir);
 		if (err)
 			return ERR_PTR(err);
-		return &fscrypt_get_inode_info_raw(dir)->ci_policy;
+		return &dir->i_crypt_info->ci_policy;
 	}
 
 	return fscrypt_get_dummy_policy(dir->i_sb);
@@ -746,7 +751,7 @@ const union fscrypt_policy *fscrypt_policy_to_inherit(struct inode *dir)
  */
 int fscrypt_context_for_new_inode(void *ctx, struct inode *inode)
 {
-	struct fscrypt_inode_info *ci = fscrypt_get_inode_info_raw(inode);
+	struct fscrypt_info *ci = inode->i_crypt_info;
 
 	BUILD_BUG_ON(sizeof(union fscrypt_context) !=
 			FSCRYPT_SET_CONTEXT_MAX_SIZE);
@@ -771,7 +776,7 @@ EXPORT_SYMBOL_GPL(fscrypt_context_for_new_inode);
  */
 int fscrypt_set_context(struct inode *inode, void *fs_data)
 {
-	struct fscrypt_inode_info *ci;
+	struct fscrypt_info *ci = inode->i_crypt_info;
 	union fscrypt_context ctx;
 	int ctxsize;
 
@@ -783,7 +788,6 @@ int fscrypt_set_context(struct inode *inode, void *fs_data)
 	 * This may be the first time the inode number is available, so do any
 	 * delayed key setup that requires the inode number.
 	 */
-	ci = fscrypt_get_inode_info_raw(inode);
 	if (ci->ci_policy.version == FSCRYPT_POLICY_V2 &&
 	    (ci->ci_policy.v2.flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32))
 		fscrypt_hash_inode_number(ci, ci->ci_master_key);
@@ -827,8 +831,10 @@ int fscrypt_parse_test_dummy_encryption(const struct fs_parameter *param,
 		policy->version = FSCRYPT_POLICY_V2;
 		policy->v2.contents_encryption_mode = FSCRYPT_MODE_AES_256_XTS;
 		policy->v2.filenames_encryption_mode = FSCRYPT_MODE_AES_256_CTS;
-		fscrypt_get_test_dummy_key_identifier(
+		err = fscrypt_get_test_dummy_key_identifier(
 				policy->v2.master_key_identifier);
+		if (err)
+			goto out;
 	} else {
 		err = -EINVAL;
 		goto out;

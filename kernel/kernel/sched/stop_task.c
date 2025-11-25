@@ -7,8 +7,8 @@
  *
  * See kernel/stop_machine.c
  */
-#include "sched.h"
 
+#ifdef CONFIG_SMP
 static int
 select_task_rq_stop(struct task_struct *p, int cpu, int flags)
 {
@@ -20,9 +20,10 @@ balance_stop(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
 	return sched_stop_runnable(rq);
 }
+#endif /* CONFIG_SMP */
 
 static void
-wakeup_preempt_stop(struct rq *rq, struct task_struct *p, int flags)
+check_preempt_curr_stop(struct rq *rq, struct task_struct *p, int flags)
 {
 	/* we're never preempted */
 }
@@ -40,17 +41,26 @@ static struct task_struct *pick_task_stop(struct rq *rq)
 	return rq->stop;
 }
 
+static struct task_struct *pick_next_task_stop(struct rq *rq)
+{
+	struct task_struct *p = pick_task_stop(rq);
+
+	if (p)
+		set_next_task_stop(rq, p, true);
+
+	return p;
+}
+
 static void
 enqueue_task_stop(struct rq *rq, struct task_struct *p, int flags)
 {
 	add_nr_running(rq, 1);
 }
 
-static bool
+static void
 dequeue_task_stop(struct rq *rq, struct task_struct *p, int flags)
 {
 	sub_nr_running(rq, 1);
-	return true;
 }
 
 static void yield_task_stop(struct rq *rq)
@@ -58,9 +68,20 @@ static void yield_task_stop(struct rq *rq)
 	BUG(); /* the stop task should never yield, its pointless. */
 }
 
-static void put_prev_task_stop(struct rq *rq, struct task_struct *prev, struct task_struct *next)
+static void put_prev_task_stop(struct rq *rq, struct task_struct *prev)
 {
-	update_curr_common(rq);
+	struct task_struct *curr = rq->curr;
+	u64 now, delta_exec;
+
+	now = rq_clock_task(rq);
+	delta_exec = now - curr->se.exec_start;
+	if (unlikely((s64)delta_exec < 0))
+		delta_exec = 0;
+
+	schedstat_set(curr->stats.exec_max,
+		      max(curr->stats.exec_max, delta_exec));
+
+	update_current_exec_runtime(curr, now, delta_exec);
 }
 
 /*
@@ -99,15 +120,18 @@ DEFINE_SCHED_CLASS(stop) = {
 	.dequeue_task		= dequeue_task_stop,
 	.yield_task		= yield_task_stop,
 
-	.wakeup_preempt		= wakeup_preempt_stop,
+	.check_preempt_curr	= check_preempt_curr_stop,
 
-	.pick_task		= pick_task_stop,
+	.pick_next_task		= pick_next_task_stop,
 	.put_prev_task		= put_prev_task_stop,
 	.set_next_task          = set_next_task_stop,
 
+#ifdef CONFIG_SMP
 	.balance		= balance_stop,
+	.pick_task		= pick_task_stop,
 	.select_task_rq		= select_task_rq_stop,
 	.set_cpus_allowed	= set_cpus_allowed_common,
+#endif
 
 	.task_tick		= task_tick_stop,
 

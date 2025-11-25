@@ -19,8 +19,6 @@
 #include <linux/compiler.h>
 #include <linux/dmi.h>
 #include <linux/slab.h>
-#include <linux/string_helpers.h>
-#include <linux/platform_device.h>
 
 #include <linux/acpi.h>
 #include <linux/io.h>
@@ -50,6 +48,8 @@ enum {
 #define AMD_MSR_RANGE		(0x7)
 #define HYGON_MSR_RANGE		(0x7)
 
+#define MSR_K7_HWCR_CPB_DIS	(1ULL << 25)
+
 struct acpi_cpufreq_data {
 	unsigned int resume;
 	unsigned int cpu_feature;
@@ -73,17 +73,20 @@ static unsigned int acpi_pstate_strict;
 
 static bool boost_state(unsigned int cpu)
 {
+	u32 lo, hi;
 	u64 msr;
 
 	switch (boot_cpu_data.x86_vendor) {
 	case X86_VENDOR_INTEL:
 	case X86_VENDOR_CENTAUR:
 	case X86_VENDOR_ZHAOXIN:
-		rdmsrq_on_cpu(cpu, MSR_IA32_MISC_ENABLE, &msr);
+		rdmsr_on_cpu(cpu, MSR_IA32_MISC_ENABLE, &lo, &hi);
+		msr = lo | ((u64)hi << 32);
 		return !(msr & MSR_IA32_MISC_ENABLE_TURBO_DISABLE);
 	case X86_VENDOR_HYGON:
 	case X86_VENDOR_AMD:
-		rdmsrq_on_cpu(cpu, MSR_K7_HWCR, &msr);
+		rdmsr_on_cpu(cpu, MSR_K7_HWCR, &lo, &hi);
+		msr = lo | ((u64)hi << 32);
 		return !(msr & MSR_K7_HWCR_CPB_DIS);
 	}
 	return false;
@@ -110,14 +113,14 @@ static int boost_set_msr(bool enable)
 		return -EINVAL;
 	}
 
-	rdmsrq(msr_addr, val);
+	rdmsrl(msr_addr, val);
 
 	if (enable)
 		val &= ~msr_mask;
 	else
 		val |= msr_mask;
 
-	wrmsrq(msr_addr, val);
+	wrmsrl(msr_addr, val);
 	return 0;
 }
 
@@ -132,8 +135,8 @@ static int set_boost(struct cpufreq_policy *policy, int val)
 {
 	on_each_cpu_mask(policy->cpus, boost_set_msr_each,
 			 (void *)(long)val, 1);
-	pr_debug("CPU %*pbl: Core Boosting %s.\n",
-		 cpumask_pr_args(policy->cpus), str_enabled_disabled(val));
+	pr_debug("CPU %*pbl: Core Boosting %sabled.\n",
+		 cpumask_pr_args(policy->cpus), val ? "en" : "dis");
 
 	return 0;
 }
@@ -318,6 +321,7 @@ static u32 drv_read(struct acpi_cpufreq_data *data, const struct cpumask *mask)
 	return cmd.val;
 }
 
+/* Called via smp_call_function_many(), on the target CPUs */
 static void do_drv_write(void *_cmd)
 {
 	struct drv_cmd *cmd = _cmd;
@@ -334,8 +338,14 @@ static void drv_write(struct acpi_cpufreq_data *data,
 		.val = val,
 		.func.write = data->cpu_freq_write,
 	};
+	int this_cpu;
 
-	on_each_cpu_mask(mask, do_drv_write, &cmd, true);
+	this_cpu = get_cpu();
+	if (cpumask_test_cpu(this_cpu, mask))
+		do_drv_write(&cmd);
+
+	smp_call_function_many(mask, do_drv_write, &cmd, 1);
+	put_cpu();
 }
 
 static u32 get_cur_val(const struct cpumask *mask, struct acpi_cpufreq_data *data)
@@ -525,6 +535,15 @@ static void free_acpi_perf_data(void)
 	free_percpu(acpi_perf_data);
 }
 
+static int cpufreq_boost_online(unsigned int cpu)
+{
+	/*
+	 * On the CPU_UP path we simply keep the boost-disable flag
+	 * in sync with the current global state.
+	 */
+	return boost_set_msr(acpi_cpufreq_driver.boost_enabled);
+}
+
 static int cpufreq_boost_down_prep(unsigned int cpu)
 {
 	/*
@@ -639,16 +658,10 @@ static u64 get_max_boost_ratio(unsigned int cpu, u64 *nominal_freq)
 		return 0;
 	}
 
-	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD) {
-		ret = amd_get_boost_ratio_numerator(cpu, &highest_perf);
-		if (ret) {
-			pr_debug("CPU%d: Unable to get boost ratio numerator (%d)\n",
-				 cpu, ret);
-			return 0;
-		}
-	} else {
+	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
+		highest_perf = amd_get_highest_perf();
+	else
 		highest_perf = perf_caps.highest_perf;
-	}
 
 	nominal_perf = perf_caps.nominal_perf;
 
@@ -902,20 +915,6 @@ static int acpi_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	if (perf->states[0].core_frequency * 1000 != freq_table[0].frequency)
 		pr_warn(FW_WARN "P-state 0 is not max freq\n");
 
-	if (acpi_cpufreq_driver.set_boost) {
-		if (policy->boost_supported) {
-			/*
-			 * The firmware may have altered boost state while the
-			 * CPU was offline (for example during a suspend-resume
-			 * cycle).
-			 */
-			if (policy->boost_enabled != boost_state(cpu))
-				set_boost(policy, policy->boost_enabled);
-		} else {
-			policy->boost_supported = true;
-		}
-	}
-
 	return result;
 
 err_unreg:
@@ -929,19 +928,20 @@ err_free:
 	return result;
 }
 
-static void acpi_cpufreq_cpu_exit(struct cpufreq_policy *policy)
+static int acpi_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 {
 	struct acpi_cpufreq_data *data = policy->driver_data;
 
 	pr_debug("%s\n", __func__);
 
-	cpufreq_boost_down_prep(policy->cpu);
 	policy->fast_switch_possible = false;
 	policy->driver_data = NULL;
 	acpi_processor_unregister_performance(data->acpi_perf_cpu);
 	free_cpumask_var(data->freqdomain_cpus);
 	kfree(policy->freq_table);
 	kfree(data);
+
+	return 0;
 }
 
 static int acpi_cpufreq_resume(struct cpufreq_policy *policy)
@@ -956,6 +956,7 @@ static int acpi_cpufreq_resume(struct cpufreq_policy *policy)
 }
 
 static struct freq_attr *acpi_cpufreq_attr[] = {
+	&cpufreq_freq_attr_scaling_available_freqs,
 	&freqdomain_cpus,
 #ifdef CONFIG_X86_ACPI_CPUFREQ_CPB
 	&cpb,
@@ -975,8 +976,12 @@ static struct cpufreq_driver acpi_cpufreq_driver = {
 	.attr		= acpi_cpufreq_attr,
 };
 
+static enum cpuhp_state acpi_cpufreq_online;
+
 static void __init acpi_cpufreq_boost_init(void)
 {
+	int ret;
+
 	if (!(boot_cpu_has(X86_FEATURE_CPB) || boot_cpu_has(X86_FEATURE_IDA))) {
 		pr_debug("Boost capabilities not present in the processor\n");
 		return;
@@ -984,9 +989,27 @@ static void __init acpi_cpufreq_boost_init(void)
 
 	acpi_cpufreq_driver.set_boost = set_boost;
 	acpi_cpufreq_driver.boost_enabled = boost_state(0);
+
+	/*
+	 * This calls the online callback on all online cpu and forces all
+	 * MSRs to the same value.
+	 */
+	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "cpufreq/acpi:online",
+				cpufreq_boost_online, cpufreq_boost_down_prep);
+	if (ret < 0) {
+		pr_err("acpi_cpufreq: failed to register hotplug callbacks\n");
+		return;
+	}
+	acpi_cpufreq_online = ret;
 }
 
-static int __init acpi_cpufreq_probe(struct platform_device *pdev)
+static void acpi_cpufreq_boost_exit(void)
+{
+	if (acpi_cpufreq_online > 0)
+		cpuhp_remove_state_nocalls(acpi_cpufreq_online);
+}
+
+static int __init acpi_cpufreq_init(void)
 {
 	int ret;
 
@@ -995,7 +1018,7 @@ static int __init acpi_cpufreq_probe(struct platform_device *pdev)
 
 	/* don't keep reloading if cpufreq_driver exists */
 	if (cpufreq_get_current_driver())
-		return -ENODEV;
+		return -EEXIST;
 
 	pr_debug("%s\n", __func__);
 
@@ -1027,34 +1050,20 @@ static int __init acpi_cpufreq_probe(struct platform_device *pdev)
 	ret = cpufreq_register_driver(&acpi_cpufreq_driver);
 	if (ret) {
 		free_acpi_perf_data();
+		acpi_cpufreq_boost_exit();
 	}
 	return ret;
 }
 
-static void acpi_cpufreq_remove(struct platform_device *pdev)
+static void __exit acpi_cpufreq_exit(void)
 {
 	pr_debug("%s\n", __func__);
+
+	acpi_cpufreq_boost_exit();
 
 	cpufreq_unregister_driver(&acpi_cpufreq_driver);
 
 	free_acpi_perf_data();
-}
-
-static struct platform_driver acpi_cpufreq_platdrv = {
-	.driver = {
-		.name	= "acpi-cpufreq",
-	},
-	.remove = acpi_cpufreq_remove,
-};
-
-static int __init acpi_cpufreq_init(void)
-{
-	return platform_driver_probe(&acpi_cpufreq_platdrv, acpi_cpufreq_probe);
-}
-
-static void __exit acpi_cpufreq_exit(void)
-{
-	platform_driver_unregister(&acpi_cpufreq_platdrv);
 }
 
 module_param(acpi_pstate_strict, uint, 0644);
@@ -1065,4 +1074,18 @@ MODULE_PARM_DESC(acpi_pstate_strict,
 late_initcall(acpi_cpufreq_init);
 module_exit(acpi_cpufreq_exit);
 
-MODULE_ALIAS("platform:acpi-cpufreq");
+static const struct x86_cpu_id __maybe_unused acpi_cpufreq_ids[] = {
+	X86_MATCH_FEATURE(X86_FEATURE_ACPI, NULL),
+	X86_MATCH_FEATURE(X86_FEATURE_HW_PSTATE, NULL),
+	{}
+};
+MODULE_DEVICE_TABLE(x86cpu, acpi_cpufreq_ids);
+
+static const struct acpi_device_id __maybe_unused processor_device_ids[] = {
+	{ACPI_PROCESSOR_OBJECT_HID, },
+	{ACPI_PROCESSOR_DEVICE_HID, },
+	{},
+};
+MODULE_DEVICE_TABLE(acpi, processor_device_ids);
+
+MODULE_ALIAS("acpi");

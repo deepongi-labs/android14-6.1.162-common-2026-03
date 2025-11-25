@@ -900,7 +900,7 @@ static inline int pcmcia_devmatch(struct pcmcia_device *dev,
 }
 
 
-static int pcmcia_bus_match(struct device *dev, const struct device_driver *drv)
+static int pcmcia_bus_match(struct device *dev, struct device_driver *drv)
 {
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 	struct pcmcia_driver *p_drv = to_pcmcia_drv(drv);
@@ -931,9 +931,9 @@ static int pcmcia_bus_match(struct device *dev, const struct device_driver *drv)
 	return 0;
 }
 
-static int pcmcia_bus_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct pcmcia_device *p_dev;
+	struct pcmcia_device *p_dev;
 	int i;
 	u32 hash[4] = { 0, 0, 0, 0};
 
@@ -1308,7 +1308,7 @@ static int pcmcia_bus_early_resume(struct pcmcia_socket *skt)
  * physically present, even if the call to this function returns
  * non-NULL. Furthermore, the device driver most likely is unbound
  * almost immediately, so the timeframe where pcmcia_dev_present
- * returns NULL is probably really, really small.
+ * returns NULL is probably really really small.
  */
 struct pcmcia_device *pcmcia_dev_present(struct pcmcia_device *_p_dev)
 {
@@ -1339,7 +1339,8 @@ static struct pcmcia_callback pcmcia_bus_callback = {
 	.resume = pcmcia_bus_resume,
 };
 
-static int pcmcia_bus_add_socket(struct device *dev)
+static int pcmcia_bus_add_socket(struct device *dev,
+					   struct class_interface *class_intf)
 {
 	struct pcmcia_socket *socket = dev_get_drvdata(dev);
 	int ret;
@@ -1372,7 +1373,8 @@ static int pcmcia_bus_add_socket(struct device *dev)
 	return 0;
 }
 
-static void pcmcia_bus_remove_socket(struct device *dev)
+static void pcmcia_bus_remove_socket(struct device *dev,
+				     struct class_interface *class_intf)
 {
 	struct pcmcia_socket *socket = dev_get_drvdata(dev);
 
@@ -1406,7 +1408,7 @@ static const struct dev_pm_ops pcmcia_bus_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(pcmcia_dev_suspend, pcmcia_dev_resume)
 };
 
-const struct bus_type pcmcia_bus_type = {
+struct bus_type pcmcia_bus_type = {
 	.name = "pcmcia",
 	.uevent = pcmcia_bus_uevent,
 	.match = pcmcia_bus_match,

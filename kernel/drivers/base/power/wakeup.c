@@ -22,6 +22,11 @@
 
 #include "power.h"
 
+#ifndef CONFIG_SUSPEND
+suspend_state_t pm_suspend_target_state;
+#define pm_suspend_target_state	(PM_SUSPEND_ON)
+#endif
+
 #define list_for_each_entry_rcu_locked(pos, head, member) \
 	list_for_each_entry_rcu(pos, head, member, \
 		srcu_read_lock_held(&wakeup_srcu))
@@ -80,7 +85,7 @@ static DEFINE_IDA(wakeup_ida);
  * wakeup_source_create - Create a struct wakeup_source object.
  * @name: Name of the new wakeup source.
  */
-static struct wakeup_source *wakeup_source_create(const char *name)
+struct wakeup_source *wakeup_source_create(const char *name)
 {
 	struct wakeup_source *ws;
 	const char *ws_name;
@@ -109,6 +114,7 @@ err_name:
 err_ws:
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(wakeup_source_create);
 
 /*
  * Record wakeup_source statistics being deleted into a dummy wakeup_source.
@@ -151,7 +157,7 @@ static void wakeup_source_free(struct wakeup_source *ws)
  *
  * Use only for wakeup source objects created with wakeup_source_create().
  */
-static void wakeup_source_destroy(struct wakeup_source *ws)
+void wakeup_source_destroy(struct wakeup_source *ws)
 {
 	if (!ws)
 		return;
@@ -160,12 +166,13 @@ static void wakeup_source_destroy(struct wakeup_source *ws)
 	wakeup_source_record(ws);
 	wakeup_source_free(ws);
 }
+EXPORT_SYMBOL_GPL(wakeup_source_destroy);
 
 /**
  * wakeup_source_add - Add given object to the list of wakeup sources.
  * @ws: Wakeup source object to add to the list.
  */
-static void wakeup_source_add(struct wakeup_source *ws)
+void wakeup_source_add(struct wakeup_source *ws)
 {
 	unsigned long flags;
 
@@ -180,12 +187,13 @@ static void wakeup_source_add(struct wakeup_source *ws)
 	list_add_rcu(&ws->entry, &wakeup_sources);
 	raw_spin_unlock_irqrestore(&events_lock, flags);
 }
+EXPORT_SYMBOL_GPL(wakeup_source_add);
 
 /**
  * wakeup_source_remove - Remove given object from the wakeup sources list.
  * @ws: Wakeup source object to remove from the list.
  */
-static void wakeup_source_remove(struct wakeup_source *ws)
+void wakeup_source_remove(struct wakeup_source *ws)
 {
 	unsigned long flags;
 
@@ -197,13 +205,14 @@ static void wakeup_source_remove(struct wakeup_source *ws)
 	raw_spin_unlock_irqrestore(&events_lock, flags);
 	synchronize_srcu(&wakeup_srcu);
 
-	timer_delete_sync(&ws->timer);
+	del_timer_sync(&ws->timer);
 	/*
 	 * Clear timer.function to make wakeup_source_not_registered() treat
 	 * this wakeup source as not registered.
 	 */
 	ws->timer.function = NULL;
 }
+EXPORT_SYMBOL_GPL(wakeup_source_remove);
 
 /**
  * wakeup_source_register - Create wakeup source and add it to the list.
@@ -336,7 +345,7 @@ int device_wakeup_enable(struct device *dev)
 	if (!dev || !dev->power.can_wakeup)
 		return -EINVAL;
 
-	if (pm_sleep_transition_in_progress())
+	if (pm_suspend_target_state != PM_SUSPEND_ON)
 		dev_dbg(dev, "Suspicious %s() during system transition!\n", __func__);
 
 	ws = wakeup_source_register(dev, dev_name(dev));
@@ -450,15 +459,16 @@ static struct wakeup_source *device_wakeup_detach(struct device *dev)
  * Detach the @dev's wakeup source object from it, unregister this wakeup source
  * object and destroy it.
  */
-void device_wakeup_disable(struct device *dev)
+int device_wakeup_disable(struct device *dev)
 {
 	struct wakeup_source *ws;
 
 	if (!dev || !dev->power.can_wakeup)
-		return;
+		return -EINVAL;
 
 	ws = device_wakeup_detach(dev);
 	wakeup_source_unregister(ws);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(device_wakeup_disable);
 
@@ -500,11 +510,7 @@ EXPORT_SYMBOL_GPL(device_set_wakeup_capable);
  */
 int device_set_wakeup_enable(struct device *dev, bool enable)
 {
-	if (enable)
-		return device_wakeup_enable(dev);
-
-	device_wakeup_disable(dev);
-	return 0;
+	return enable ? device_wakeup_enable(dev) : device_wakeup_disable(dev);
 }
 EXPORT_SYMBOL_GPL(device_set_wakeup_enable);
 
@@ -573,6 +579,13 @@ static void wakeup_source_activate(struct wakeup_source *ws)
 
 	/* Increment the counter of events in progress. */
 	cec = atomic_inc_return(&combined_event_count);
+	/*
+	 * wakeup_source_activate() aborts suspend only if events_check_enabled
+	 * is set (see pm_wakeup_pending()). Similarly, abort suspend during
+	 * fs_sync only if events_check_enabled is set.
+	 */
+	if (events_check_enabled)
+		suspend_abort_fs_sync();
 
 	trace_wakeup_source_activate(ws->name, cec);
 }
@@ -612,7 +625,7 @@ void __pm_stay_awake(struct wakeup_source *ws)
 	spin_lock_irqsave(&ws->lock, flags);
 
 	wakeup_source_report_event(ws, false);
-	timer_delete(&ws->timer);
+	del_timer(&ws->timer);
 	ws->timer_expires = 0;
 
 	spin_unlock_irqrestore(&ws->lock, flags);
@@ -692,7 +705,7 @@ static void wakeup_source_deactivate(struct wakeup_source *ws)
 		ws->max_time = duration;
 
 	ws->last_time = now;
-	timer_delete(&ws->timer);
+	del_timer(&ws->timer);
 	ws->timer_expires = 0;
 
 	if (ws->autosleep_enabled)
@@ -762,7 +775,7 @@ EXPORT_SYMBOL_GPL(pm_relax);
  */
 static void pm_wakeup_timer_fn(struct timer_list *t)
 {
-	struct wakeup_source *ws = timer_container_of(ws, t, timer);
+	struct wakeup_source *ws = from_timer(ws, t, timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&ws->lock, flags);
@@ -938,6 +951,7 @@ EXPORT_SYMBOL_GPL(pm_wakeup_pending);
 void pm_system_wakeup(void)
 {
 	atomic_inc(&pm_abort_suspend);
+	suspend_abort_fs_sync();
 	s2idle_wake();
 }
 EXPORT_SYMBOL_GPL(pm_system_wakeup);
@@ -1002,6 +1016,7 @@ unsigned int pm_wakeup_irq(void)
 {
 	return wakeup_irq[0];
 }
+EXPORT_SYMBOL_GPL(pm_wakeup_irq);
 
 /**
  * pm_get_wakeup_count - Read the number of registered wakeup events.

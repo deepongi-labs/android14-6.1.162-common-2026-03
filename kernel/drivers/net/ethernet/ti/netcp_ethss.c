@@ -1735,8 +1735,8 @@ static const struct netcp_ethtool_stat xgbe10_et_stats[] = {
 static void keystone_get_drvinfo(struct net_device *ndev,
 				 struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, NETCP_DRIVER_NAME, sizeof(info->driver));
-	strscpy(info->version, NETCP_DRIVER_VERSION, sizeof(info->version));
+	strncpy(info->driver, NETCP_DRIVER_NAME, sizeof(info->driver));
+	strncpy(info->version, NETCP_DRIVER_VERSION, sizeof(info->version));
 }
 
 static u32 keystone_get_msglevel(struct net_device *ndev)
@@ -1999,7 +1999,7 @@ static int keystone_set_link_ksettings(struct net_device *ndev,
 
 #if IS_ENABLED(CONFIG_TI_CPTS)
 static int keystone_get_ts_info(struct net_device *ndev,
-				struct kernel_ethtool_ts_info *info)
+				struct ethtool_ts_info *info)
 {
 	struct netcp_intf *netcp = netdev_priv(ndev);
 	struct gbe_intf *gbe_intf;
@@ -2012,6 +2012,8 @@ static int keystone_get_ts_info(struct net_device *ndev,
 		SOF_TIMESTAMPING_TX_HARDWARE |
 		SOF_TIMESTAMPING_TX_SOFTWARE |
 		SOF_TIMESTAMPING_RX_HARDWARE |
+		SOF_TIMESTAMPING_RX_SOFTWARE |
+		SOF_TIMESTAMPING_SOFTWARE |
 		SOF_TIMESTAMPING_RAW_HARDWARE;
 	info->phc_index = gbe_intf->gbe_dev->cpts->phc_index;
 	info->tx_types =
@@ -2025,10 +2027,13 @@ static int keystone_get_ts_info(struct net_device *ndev,
 }
 #else
 static int keystone_get_ts_info(struct net_device *ndev,
-				struct kernel_ethtool_ts_info *info)
+				struct ethtool_ts_info *info)
 {
 	info->so_timestamping =
-		SOF_TIMESTAMPING_TX_SOFTWARE;
+		SOF_TIMESTAMPING_TX_SOFTWARE |
+		SOF_TIMESTAMPING_RX_SOFTWARE |
+		SOF_TIMESTAMPING_SOFTWARE;
+	info->phc_index = -1;
 	info->tx_types = 0;
 	info->rx_filters = 0;
 	return 0;
@@ -2833,7 +2838,7 @@ static int gbe_ioctl(void *intf_priv, struct ifreq *req, int cmd)
 
 static void netcp_ethss_timer(struct timer_list *t)
 {
-	struct gbe_priv *gbe_dev = timer_container_of(gbe_dev, t, timer);
+	struct gbe_priv *gbe_dev = from_timer(gbe_dev, t, timer);
 	struct gbe_intf *gbe_intf;
 	struct gbe_slave *slave;
 
@@ -3578,11 +3583,13 @@ static int gbe_probe(struct netcp_device *netcp_device, struct device *dev,
 	/* init the hw stats lock */
 	spin_lock_init(&gbe_dev->hw_stats_lock);
 
-	gbe_dev->enable_ale = of_property_read_bool(node, "enable-ale");
-	if (gbe_dev->enable_ale)
+	if (of_find_property(node, "enable-ale", NULL)) {
+		gbe_dev->enable_ale = true;
 		dev_info(dev, "ALE enabled\n");
-	else
+	} else {
+		gbe_dev->enable_ale = false;
 		dev_dbg(dev, "ALE bypass enabled*\n");
+	}
 
 	ret = of_property_read_u32(node, "tx-queue",
 				   &gbe_dev->tx_queue_id);
@@ -3796,7 +3803,7 @@ static int gbe_remove(struct netcp_device *netcp_device, void *inst_priv)
 {
 	struct gbe_priv *gbe_dev = inst_priv;
 
-	timer_delete_sync(&gbe_dev->timer);
+	del_timer_sync(&gbe_dev->timer);
 	cpts_release(gbe_dev->cpts);
 	cpsw_ale_stop(gbe_dev->ale);
 	netcp_txpipe_close(&gbe_dev->tx_pipe);

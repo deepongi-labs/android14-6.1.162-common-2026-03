@@ -14,14 +14,11 @@
  * Copyright (c) 2018, Intel Corporation.
  */
 
-#include <linux/topology.h>
 #include <linux/acpi.h>
 #include <linux/dmi.h>
 #include <linux/adxl.h>
-#include <linux/overflow.h>
 #include <acpi/nfit.h>
 #include <asm/mce.h>
-#include <asm/uv/uv.h>
 #include "edac_module.h"
 #include "skx_common.h"
 
@@ -50,7 +47,6 @@ static skx_show_retry_log_f skx_show_retry_rd_err_log;
 static u64 skx_tolm, skx_tohm;
 static LIST_HEAD(dev_edac_list);
 static bool skx_mem_cfg_2lm;
-static struct res_config *skx_res_cfg;
 
 int skx_adxl_get(void)
 {
@@ -124,45 +120,10 @@ void skx_adxl_put(void)
 }
 EXPORT_SYMBOL_GPL(skx_adxl_put);
 
-static void skx_init_mc_mapping(struct skx_dev *d)
+static bool skx_adxl_decode(struct decoded_addr *res, bool error_in_1st_level_mem)
 {
-	/*
-	 * By default, the BIOS presents all memory controllers within each
-	 * socket to the EDAC driver. The physical indices are the same as
-	 * the logical indices of the memory controllers enumerated by the
-	 * EDAC driver.
-	 */
-	for (int i = 0; i < d->num_imc; i++)
-		d->imc[i].mc_mapping = i;
-}
-
-void skx_set_mc_mapping(struct skx_dev *d, u8 pmc, u8 lmc)
-{
-	edac_dbg(0, "Set the mapping of mc phy idx to logical idx: %02d -> %02d\n",
-		 pmc, lmc);
-
-	d->imc[lmc].mc_mapping = pmc;
-}
-EXPORT_SYMBOL_GPL(skx_set_mc_mapping);
-
-static int skx_get_mc_mapping(struct skx_dev *d, u8 pmc)
-{
-	for (int lmc = 0; lmc < d->num_imc; lmc++) {
-		if (d->imc[lmc].mc_mapping == pmc) {
-			edac_dbg(0, "Get the mapping of mc phy idx to logical idx: %02d -> %02d\n",
-				 pmc, lmc);
-
-			return lmc;
-		}
-	}
-
-	return -1;
-}
-
-static bool skx_adxl_decode(struct decoded_addr *res, enum error_source err_src)
-{
-	int i, lmc, len = 0;
 	struct skx_dev *d;
+	int i, len = 0;
 
 	if (res->addr >= skx_tohm || (res->addr >= skx_tolm &&
 				      res->addr < BIT_ULL(32))) {
@@ -175,24 +136,8 @@ static bool skx_adxl_decode(struct decoded_addr *res, enum error_source err_src)
 		return false;
 	}
 
-	/*
-	 * GNR with a Flat2LM memory configuration may mistakenly classify
-	 * a near-memory error(DDR5) as a far-memory error(CXL), resulting
-	 * in the incorrect selection of decoded ADXL components.
-	 * To address this, prefetch the decoded far-memory controller ID
-	 * and adjust the error source to near-memory if the far-memory
-	 * controller ID is invalid.
-	 */
-	if (skx_res_cfg && skx_res_cfg->type == GNR && err_src == ERR_SRC_2LM_FM) {
-		res->imc = (int)adxl_values[component_indices[INDEX_MEMCTRL]];
-		if (res->imc == -1) {
-			err_src = ERR_SRC_2LM_NM;
-			edac_dbg(0, "Adjust the error source to near-memory.\n");
-		}
-	}
-
 	res->socket  = (int)adxl_values[component_indices[INDEX_SOCKET]];
-	if (err_src == ERR_SRC_2LM_NM) {
+	if (error_in_1st_level_mem) {
 		res->imc     = (adxl_nm_bitmap & BIT_NM_MEMCTRL) ?
 			       (int)adxl_values[component_indices[INDEX_NM_MEMCTRL]] : -1;
 		res->channel = (adxl_nm_bitmap & BIT_NM_CHANNEL) ?
@@ -208,7 +153,7 @@ static bool skx_adxl_decode(struct decoded_addr *res, enum error_source err_src)
 		res->cs      = (int)adxl_values[component_indices[INDEX_CS]];
 	}
 
-	if (res->imc < 0) {
+	if (res->imc > NUM_IMC - 1 || res->imc < 0) {
 		skx_printk(KERN_ERR, "Bad imc %d\n", res->imc);
 		return false;
 	}
@@ -225,14 +170,6 @@ static bool skx_adxl_decode(struct decoded_addr *res, enum error_source err_src)
 			   res->socket, res->imc);
 		return false;
 	}
-
-	lmc = skx_get_mc_mapping(d, res->imc);
-	if (lmc < 0) {
-		skx_printk(KERN_ERR, "No lmc for imc %d\n", res->imc);
-		return false;
-	}
-
-	res->imc = lmc;
 
 	for (i = 0; i < adxl_component_count; i++) {
 		if (adxl_values[i] == ~0x0ull)
@@ -255,12 +192,6 @@ void skx_set_mem_cfg(bool mem_cfg_2lm)
 }
 EXPORT_SYMBOL_GPL(skx_set_mem_cfg);
 
-void skx_set_res_cfg(struct res_config *cfg)
-{
-	skx_res_cfg = cfg;
-}
-EXPORT_SYMBOL_GPL(skx_set_res_cfg);
-
 void skx_set_decode(skx_decode_f decode, skx_show_retry_log_f show_retry_log)
 {
 	driver_decode = decode;
@@ -268,41 +199,9 @@ void skx_set_decode(skx_decode_f decode, skx_show_retry_log_f show_retry_log)
 }
 EXPORT_SYMBOL_GPL(skx_set_decode);
 
-static int skx_get_pkg_id(struct skx_dev *d, u8 *id)
-{
-	int node;
-	int cpu;
-
-	node = pcibus_to_node(d->util_all->bus);
-	if (numa_valid_node(node)) {
-		for_each_cpu(cpu, cpumask_of_pcibus(d->util_all->bus)) {
-			struct cpuinfo_x86 *c = &cpu_data(cpu);
-
-			if (c->initialized && cpu_to_node(cpu) == node) {
-				*id = topology_physical_package_id(cpu);
-				return 0;
-			}
-		}
-	}
-
-	skx_printk(KERN_ERR, "Failed to get package ID from NUMA information\n");
-	return -ENODEV;
-}
-
 int skx_get_src_id(struct skx_dev *d, int off, u8 *id)
 {
 	u32 reg;
-
-	/*
-	 * The 3-bit source IDs in PCI configuration space registers are limited
-	 * to 8 unique IDs, and each ID is local to a UPI/QPI domain.
-	 *
-	 * Source IDs cannot be used to map devices to sockets on UV systems
-	 * because they can exceed 8 sockets and have multiple UPI/QPI domains
-	 * with identical, repeating source IDs.
-	 */
-	if (is_uv_system())
-		return skx_get_pkg_id(d, id);
 
 	if (pci_read_config_dword(d->util_all, off, &reg)) {
 		skx_printk(KERN_ERR, "Failed to read src id\n");
@@ -313,6 +212,20 @@ int skx_get_src_id(struct skx_dev *d, int off, u8 *id)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(skx_get_src_id);
+
+int skx_get_node_id(struct skx_dev *d, u8 *id)
+{
+	u32 reg;
+
+	if (pci_read_config_dword(d->util_all, 0xf4, &reg)) {
+		skx_printk(KERN_ERR, "Failed to read node id\n");
+		return -ENODEV;
+	}
+
+	*id = GET_BITFIELD(reg, 0, 2);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(skx_get_node_id);
 
 static int get_width(u32 mtr)
 {
@@ -334,10 +247,10 @@ static int get_width(u32 mtr)
  */
 int skx_get_all_bus_mappings(struct res_config *cfg, struct list_head **list)
 {
-	int ndev = 0, imc_num = cfg->ddr_imc_num + cfg->hbm_imc_num;
 	struct pci_dev *pdev, *prev;
 	struct skx_dev *d;
 	u32 reg;
+	int ndev = 0;
 
 	prev = NULL;
 	for (;;) {
@@ -345,7 +258,7 @@ int skx_get_all_bus_mappings(struct res_config *cfg, struct list_head **list)
 		if (!pdev)
 			break;
 		ndev++;
-		d = kzalloc(struct_size(d, imc, imc_num), GFP_KERNEL);
+		d = kzalloc(sizeof(*d), GFP_KERNEL);
 		if (!d) {
 			pci_dev_put(pdev);
 			return -ENOMEM;
@@ -368,14 +281,10 @@ int skx_get_all_bus_mappings(struct res_config *cfg, struct list_head **list)
 			d->seg = GET_BITFIELD(reg, 16, 23);
 		}
 
-		d->num_imc = imc_num;
-
-		edac_dbg(2, "busses: 0x%x, 0x%x, 0x%x, 0x%x, imcs %d\n",
-			 d->bus[0], d->bus[1], d->bus[2], d->bus[3], imc_num);
+		edac_dbg(2, "busses: 0x%x, 0x%x, 0x%x, 0x%x\n",
+			 d->bus[0], d->bus[1], d->bus[2], d->bus[3]);
 		list_add_tail(&d->list, &dev_edac_list);
 		prev = pdev;
-
-		skx_init_mc_mapping(d);
 	}
 
 	if (list)
@@ -455,7 +364,7 @@ int skx_get_dimm_info(u32 mtr, u32 mcmtr, u32 amap, struct dimm_info *dimm,
 	if (imc->hbm_mc) {
 		banks = 32;
 		mtype = MEM_HBM2;
-	} else if (cfg->support_ddr5) {
+	} else if (cfg->support_ddr5 && (amap & 0x8)) {
 		banks = 32;
 		mtype = MEM_DDR5;
 	} else {
@@ -557,10 +466,10 @@ int skx_register_mci(struct skx_imc *imc, struct pci_dev *pdev,
 
 	/* Allocate a new MC control structure */
 	layers[0].type = EDAC_MC_LAYER_CHANNEL;
-	layers[0].size = imc->num_channels;
+	layers[0].size = NUM_CHANNELS;
 	layers[0].is_virt_csrow = false;
 	layers[1].type = EDAC_MC_LAYER_SLOT;
-	layers[1].size = imc->num_dimms;
+	layers[1].size = NUM_DIMMS;
 	layers[1].is_virt_csrow = true;
 	mci = edac_mc_alloc(imc->mc, ARRAY_SIZE(layers), layers,
 			    sizeof(struct skx_pvt));
@@ -576,7 +485,7 @@ int skx_register_mci(struct skx_imc *imc, struct pci_dev *pdev,
 	pvt->imc = imc;
 
 	mci->ctl_name = kasprintf(GFP_KERNEL, "%s#%d IMC#%d", ctl_name,
-				  imc->src_id, imc->lmc);
+				  imc->node_id, imc->lmc);
 	if (!mci->ctl_name) {
 		rc = -ENOMEM;
 		goto fail0;
@@ -663,35 +572,51 @@ static void skx_mce_output_error(struct mem_ctl_info *mci,
 		tp_event = HW_EVENT_ERR_CORRECTED;
 	}
 
-	switch (optypenum) {
-	case 0:
-		optype = "generic undef request error";
-		break;
-	case 1:
-		optype = "memory read error";
-		break;
-	case 2:
-		optype = "memory write error";
-		break;
-	case 3:
-		optype = "addr/cmd error";
-		break;
-	case 4:
-		optype = "memory scrubbing error";
-		scrub_err = true;
-		break;
-	default:
-		optype = "reserved";
-		break;
+	/*
+	 * According to Intel Architecture spec vol 3B,
+	 * Table 15-10 "IA32_MCi_Status [15:0] Compound Error Code Encoding"
+	 * memory errors should fit one of these masks:
+	 *	000f 0000 1mmm cccc (binary)
+	 *	000f 0010 1mmm cccc (binary)	[RAM used as cache]
+	 * where:
+	 *	f = Correction Report Filtering Bit. If 1, subsequent errors
+	 *	    won't be shown
+	 *	mmm = error type
+	 *	cccc = channel
+	 * If the mask doesn't match, report an error to the parsing logic
+	 */
+	if (!((errcode & 0xef80) == 0x80 || (errcode & 0xef80) == 0x280)) {
+		optype = "Can't parse: it is not a mem";
+	} else {
+		switch (optypenum) {
+		case 0:
+			optype = "generic undef request error";
+			break;
+		case 1:
+			optype = "memory read error";
+			break;
+		case 2:
+			optype = "memory write error";
+			break;
+		case 3:
+			optype = "addr/cmd error";
+			break;
+		case 4:
+			optype = "memory scrubbing error";
+			scrub_err = true;
+			break;
+		default:
+			optype = "reserved";
+			break;
+		}
 	}
-
 	if (res->decoded_by_adxl) {
-		len = scnprintf(skx_msg, MSG_SIZE, "%s%s err_code:0x%04x:0x%04x %s",
+		len = snprintf(skx_msg, MSG_SIZE, "%s%s err_code:0x%04x:0x%04x %s",
 			 overflow ? " OVERFLOW" : "",
 			 (uncorrected_error && recoverable) ? " recoverable" : "",
 			 mscod, errcode, adxl_msg);
 	} else {
-		len = scnprintf(skx_msg, MSG_SIZE,
+		len = snprintf(skx_msg, MSG_SIZE,
 			 "%s%s err_code:0x%04x:0x%04x ProcessorSocketId:0x%x MemoryControllerId:0x%x PhysicalRankId:0x%x Row:0x%x Column:0x%x Bank:0x%x BankGroup:0x%x",
 			 overflow ? " OVERFLOW" : "",
 			 (uncorrected_error && recoverable) ? " recoverable" : "",
@@ -712,27 +637,25 @@ static void skx_mce_output_error(struct mem_ctl_info *mci,
 			     optype, skx_msg);
 }
 
-static enum error_source skx_error_source(const struct mce *m)
+static bool skx_error_in_1st_level_mem(const struct mce *m)
 {
-	u32 errcode = GET_BITFIELD(m->status, 0, 15) & MCACOD_MEM_ERR_MASK;
-
-	if (errcode != MCACOD_MEM_CTL_ERR && errcode != MCACOD_EXT_MEM_ERR)
-		return ERR_SRC_NOT_MEMORY;
+	u32 errcode;
 
 	if (!skx_mem_cfg_2lm)
-		return ERR_SRC_1LM;
+		return false;
 
-	if (errcode == MCACOD_EXT_MEM_ERR)
-		return ERR_SRC_2LM_NM;
+	errcode = GET_BITFIELD(m->status, 0, 15);
 
-	return ERR_SRC_2LM_FM;
+	if ((errcode & 0xef80) != 0x280)
+		return false;
+
+	return true;
 }
 
 int skx_mce_check_error(struct notifier_block *nb, unsigned long val,
 			void *data)
 {
 	struct mce *mce = (struct mce *)data;
-	enum error_source err_src;
 	struct decoded_addr res;
 	struct mem_ctl_info *mci;
 	char *type;
@@ -740,24 +663,18 @@ int skx_mce_check_error(struct notifier_block *nb, unsigned long val,
 	if (mce->kflags & MCE_HANDLED_CEC)
 		return NOTIFY_DONE;
 
-	err_src = skx_error_source(mce);
-
-	/* Ignore unless this is memory related with an address */
-	if (err_src == ERR_SRC_NOT_MEMORY || !(mce->status & MCI_STATUS_ADDRV))
+	/* ignore unless this is memory related with an address */
+	if ((mce->status & 0xefff) >> 7 != 1 || !(mce->status & MCI_STATUS_ADDRV))
 		return NOTIFY_DONE;
 
 	memset(&res, 0, sizeof(res));
 	res.mce  = mce;
-	res.addr = mce->addr & MCI_ADDR_PHYSADDR;
-	if (!pfn_to_online_page(res.addr >> PAGE_SHIFT) && !arch_is_platform_page(res.addr)) {
-		pr_err("Invalid address 0x%llx in IA32_MC%d_ADDR\n", mce->addr, mce->bank);
-		return NOTIFY_DONE;
-	}
+	res.addr = mce->addr;
 
 	/* Try driver decoder first */
 	if (!(driver_decode && driver_decode(&res))) {
 		/* Then try firmware decoder (ACPI DSM methods) */
-		if (!(adxl_component_count && skx_adxl_decode(&res, err_src)))
+		if (!(adxl_component_count && skx_adxl_decode(&res, skx_error_in_1st_level_mem(mce))))
 			return NOTIFY_DONE;
 	}
 
@@ -800,7 +717,7 @@ void skx_remove(void)
 
 	list_for_each_entry_safe(d, tmp, &dev_edac_list, list) {
 		list_del(&d->list);
-		for (i = 0; i < d->num_imc; i++) {
+		for (i = 0; i < NUM_IMC; i++) {
 			if (d->imc[i].mci)
 				skx_unregister_mci(&d->imc[i]);
 
@@ -810,7 +727,7 @@ void skx_remove(void)
 			if (d->imc[i].mbase)
 				iounmap(d->imc[i].mbase);
 
-			for (j = 0; j < d->imc[i].num_channels; j++) {
+			for (j = 0; j < NUM_CHANNELS; j++) {
 				if (d->imc[i].chan[j].cdev)
 					pci_dev_put(d->imc[i].chan[j].cdev);
 			}
@@ -828,53 +745,6 @@ void skx_remove(void)
 	}
 }
 EXPORT_SYMBOL_GPL(skx_remove);
-
-#ifdef CONFIG_EDAC_DEBUG
-/*
- * Debug feature.
- * Exercise the address decode logic by writing an address to
- * /sys/kernel/debug/edac/{skx,i10nm}_test/addr.
- */
-static struct dentry *skx_test;
-
-static int debugfs_u64_set(void *data, u64 val)
-{
-	struct mce m;
-
-	pr_warn_once("Fake error to 0x%llx injected via debugfs\n", val);
-
-	memset(&m, 0, sizeof(m));
-	/* ADDRV + MemRd + Unknown channel */
-	m.status = MCI_STATUS_ADDRV + 0x90;
-	/* One corrected error */
-	m.status |= BIT_ULL(MCI_STATUS_CEC_SHIFT);
-	m.addr = val;
-	skx_mce_check_error(NULL, 0, &m);
-
-	return 0;
-}
-DEFINE_SIMPLE_ATTRIBUTE(fops_u64_wo, NULL, debugfs_u64_set, "%llu\n");
-
-void skx_setup_debug(const char *name)
-{
-	skx_test = edac_debugfs_create_dir(name);
-	if (!skx_test)
-		return;
-
-	if (!edac_debugfs_create_file("addr", 0200, skx_test,
-				      NULL, &fops_u64_wo)) {
-		debugfs_remove(skx_test);
-		skx_test = NULL;
-	}
-}
-EXPORT_SYMBOL_GPL(skx_setup_debug);
-
-void skx_teardown_debug(void)
-{
-	debugfs_remove_recursive(skx_test);
-}
-EXPORT_SYMBOL_GPL(skx_teardown_debug);
-#endif /*CONFIG_EDAC_DEBUG*/
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Tony Luck");

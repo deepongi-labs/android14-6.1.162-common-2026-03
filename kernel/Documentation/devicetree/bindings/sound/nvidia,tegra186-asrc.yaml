@@ -23,7 +23,7 @@ maintainers:
   - Sameer Pujar <spujar@nvidia.com>
 
 allOf:
-  - $ref: dai-common.yaml#
+  - $ref: name-prefix.yaml#
 
 properties:
   $nodename:
@@ -31,9 +31,7 @@ properties:
 
   compatible:
     oneOf:
-      - enum:
-          - nvidia,tegra186-asrc
-          - nvidia,tegra264-asrc
+      - const: nvidia,tegra186-asrc
       - items:
           - enum:
               - nvidia,tegra234-asrc

@@ -15,8 +15,6 @@
 #include <net/ipv6.h>
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
-#include <asm/rqspinlock.h>
-#include <linux/bpf_mem_alloc.h>
 
 /* Intermediate node */
 #define LPM_TREE_NODE_FLAG_IM BIT(0)
@@ -24,6 +22,7 @@
 struct lpm_trie_node;
 
 struct lpm_trie_node {
+	struct rcu_head rcu;
 	struct lpm_trie_node __rcu	*child[2];
 	u32				prefixlen;
 	u32				flags;
@@ -33,11 +32,10 @@ struct lpm_trie_node {
 struct lpm_trie {
 	struct bpf_map			map;
 	struct lpm_trie_node __rcu	*root;
-	struct bpf_mem_alloc		ma;
 	size_t				n_entries;
 	size_t				max_prefixlen;
 	size_t				data_size;
-	rqspinlock_t			lock;
+	spinlock_t			lock;
 };
 
 /* This trie implements a longest prefix match algorithm that can be used to
@@ -157,17 +155,16 @@ static inline int extract_bit(const u8 *data, size_t index)
 }
 
 /**
- * __longest_prefix_match() - determine the longest prefix
+ * longest_prefix_match() - determine the longest prefix
  * @trie:	The trie to get internal sizes from
  * @node:	The node to operate on
  * @key:	The key to compare to @node
  *
  * Determine the longest prefix of @node that matches the bits in @key.
  */
-static __always_inline
-size_t __longest_prefix_match(const struct lpm_trie *trie,
-			      const struct lpm_trie_node *node,
-			      const struct bpf_lpm_trie_key_u8 *key)
+static size_t longest_prefix_match(const struct lpm_trie *trie,
+				   const struct lpm_trie_node *node,
+				   const struct bpf_lpm_trie_key_u8 *key)
 {
 	u32 limit = min(node->prefixlen, key->prefixlen);
 	u32 prefixlen = 0, i = 0;
@@ -227,13 +224,6 @@ size_t __longest_prefix_match(const struct lpm_trie *trie,
 	return prefixlen;
 }
 
-static size_t longest_prefix_match(const struct lpm_trie *trie,
-				   const struct lpm_trie_node *node,
-				   const struct bpf_lpm_trie_key_u8 *key)
-{
-	return __longest_prefix_match(trie, node, key);
-}
-
 /* Called from syscall or from eBPF program */
 static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 {
@@ -255,7 +245,7 @@ static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 		 * If it's the maximum possible prefix for this trie, we have
 		 * an exact match and can return it directly.
 		 */
-		matchlen = __longest_prefix_match(trie, node, key);
+		matchlen = longest_prefix_match(trie, node, key);
 		if (matchlen == trie->max_prefixlen) {
 			found = node;
 			break;
@@ -289,13 +279,17 @@ static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 	return found->data + trie->data_size;
 }
 
-static struct lpm_trie_node *lpm_trie_node_alloc(struct lpm_trie *trie,
+static struct lpm_trie_node *lpm_trie_node_alloc(const struct lpm_trie *trie,
 						 const void *value)
 {
 	struct lpm_trie_node *node;
+	size_t size = sizeof(struct lpm_trie_node) + trie->data_size;
 
-	node = bpf_mem_cache_alloc(&trie->ma);
+	if (value)
+		size += trie->map.value_size;
 
+	node = bpf_map_kmalloc_node(&trie->map, size, GFP_NOWAIT | __GFP_NOWARN,
+				    trie->map.numa_node);
 	if (!node)
 		return NULL;
 
@@ -319,11 +313,11 @@ static int trie_check_add_elem(struct lpm_trie *trie, u64 flags)
 }
 
 /* Called from syscall or from eBPF program */
-static long trie_update_elem(struct bpf_map *map,
-			     void *_key, void *value, u64 flags)
+static int trie_update_elem(struct bpf_map *map,
+			    void *_key, void *value, u64 flags)
 {
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
-	struct lpm_trie_node *node, *im_node, *new_node;
+	struct lpm_trie_node *node, *im_node, *new_node = NULL;
 	struct lpm_trie_node *free_node = NULL;
 	struct lpm_trie_node __rcu **slot;
 	struct bpf_lpm_trie_key_u8 *key = _key;
@@ -338,14 +332,14 @@ static long trie_update_elem(struct bpf_map *map,
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
+	spin_lock_irqsave(&trie->lock, irq_flags);
+
 	/* Allocate and fill a new node */
 	new_node = lpm_trie_node_alloc(trie, value);
-	if (!new_node)
-		return -ENOMEM;
-
-	ret = raw_res_spin_lock_irqsave(&trie->lock, irq_flags);
-	if (ret)
-		goto out_free;
+	if (!new_node) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	new_node->prefixlen = key->prefixlen;
 	RCU_INIT_POINTER(new_node->child[0], NULL);
@@ -359,11 +353,13 @@ static long trie_update_elem(struct bpf_map *map,
 	 */
 	slot = &trie->root;
 
-	while ((node = rcu_dereference(*slot))) {
+	while ((node = rcu_dereference_protected(*slot,
+					lockdep_is_held(&trie->lock)))) {
 		matchlen = longest_prefix_match(trie, node, key);
 
 		if (node->prefixlen != matchlen ||
-		    node->prefixlen == key->prefixlen)
+		    node->prefixlen == key->prefixlen ||
+		    node->prefixlen == trie->max_prefixlen)
 			break;
 
 		next_bit = extract_bit(key->data, node->prefixlen);
@@ -444,17 +440,16 @@ static long trie_update_elem(struct bpf_map *map,
 	rcu_assign_pointer(*slot, im_node);
 
 out:
-	raw_res_spin_unlock_irqrestore(&trie->lock, irq_flags);
-out_free:
 	if (ret)
-		bpf_mem_cache_free(&trie->ma, new_node);
-	bpf_mem_cache_free_rcu(&trie->ma, free_node);
+		kfree(new_node);
+	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	kfree_rcu(free_node, rcu);
 
 	return ret;
 }
 
 /* Called from syscall or from eBPF program */
-static long trie_delete_elem(struct bpf_map *map, void *_key)
+static int trie_delete_elem(struct bpf_map *map, void *_key)
 {
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
 	struct lpm_trie_node *free_node = NULL, *free_parent = NULL;
@@ -469,9 +464,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
-	ret = raw_res_spin_lock_irqsave(&trie->lock, irq_flags);
-	if (ret)
-		return ret;
+	spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Walk the tree looking for an exact key/length match and keeping
 	 * track of the path we traverse.  We will need to know the node
@@ -482,7 +475,8 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	trim = &trie->root;
 	trim2 = trim;
 	parent = NULL;
-	while ((node = rcu_dereference(*trim))) {
+	while ((node = rcu_dereference_protected(
+		       *trim, lockdep_is_held(&trie->lock)))) {
 		matchlen = longest_prefix_match(trie, node, key);
 
 		if (node->prefixlen != matchlen ||
@@ -546,10 +540,9 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	free_node = node;
 
 out:
-	raw_res_spin_unlock_irqrestore(&trie->lock, irq_flags);
-
-	bpf_mem_cache_free_rcu(&trie->ma, free_parent);
-	bpf_mem_cache_free_rcu(&trie->ma, free_node);
+	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	kfree_rcu(free_parent, rcu);
+	kfree_rcu(free_node, rcu);
 
 	return ret;
 }
@@ -571,8 +564,9 @@ out:
 static struct bpf_map *trie_alloc(union bpf_attr *attr)
 {
 	struct lpm_trie *trie;
-	size_t leaf_size;
-	int err;
+
+	if (!bpf_capable())
+		return ERR_PTR(-EPERM);
 
 	/* check sanity of attributes */
 	if (attr->max_entries == 0 ||
@@ -595,19 +589,9 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 			  offsetof(struct bpf_lpm_trie_key_u8, data);
 	trie->max_prefixlen = trie->data_size * 8;
 
-	raw_res_spin_lock_init(&trie->lock);
+	spin_lock_init(&trie->lock);
 
-	/* Allocate intermediate and leaf nodes from the same allocator */
-	leaf_size = sizeof(struct lpm_trie_node) + trie->data_size +
-		    trie->map.value_size;
-	err = bpf_mem_alloc_init(&trie->ma, leaf_size, false);
-	if (err)
-		goto free_out;
 	return &trie->map;
-
-free_out:
-	bpf_map_area_free(trie);
-	return ERR_PTR(err);
 }
 
 static void trie_free(struct bpf_map *map)
@@ -639,17 +623,13 @@ static void trie_free(struct bpf_map *map)
 				continue;
 			}
 
-			/* No bpf program may access the map, so freeing the
-			 * node without waiting for the extra RCU GP.
-			 */
-			bpf_mem_cache_raw_free(node);
+			kfree(node);
 			RCU_INIT_POINTER(*slot, NULL);
 			break;
 		}
 	}
 
 out:
-	bpf_mem_alloc_destroy(&trie->ma);
 	bpf_map_area_free(trie);
 }
 
@@ -761,16 +741,6 @@ static int trie_check_btf(const struct bpf_map *map,
 	       -EINVAL : 0;
 }
 
-static u64 trie_mem_usage(const struct bpf_map *map)
-{
-	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
-	u64 elem_size;
-
-	elem_size = sizeof(struct lpm_trie_node) + trie->data_size +
-			    trie->map.value_size;
-	return elem_size * READ_ONCE(trie->n_entries);
-}
-
 BTF_ID_LIST_SINGLE(trie_map_btf_ids, struct, lpm_trie)
 const struct bpf_map_ops trie_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -784,6 +754,5 @@ const struct bpf_map_ops trie_map_ops = {
 	.map_update_batch = generic_map_update_batch,
 	.map_delete_batch = generic_map_delete_batch,
 	.map_check_btf = trie_check_btf,
-	.map_mem_usage = trie_mem_usage,
 	.map_btf_id = &trie_map_btf_ids[0],
 };

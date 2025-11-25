@@ -15,18 +15,7 @@ extern struct static_call_site __start_static_call_sites[],
 extern struct static_call_tramp_key __start_static_call_tramp_key[],
 				    __stop_static_call_tramp_key[];
 
-int static_call_initialized;
-
-/*
- * Must be called before early_initcall() to be effective.
- */
-void static_call_force_reinit(void)
-{
-	if (WARN_ON_ONCE(!static_call_initialized))
-		return;
-
-	static_call_initialized++;
-}
+bool static_call_initialized;
 
 /* mutex to protect key modules/sites */
 static DEFINE_MUTEX(static_call_mutex);
@@ -206,7 +195,7 @@ void __static_call_update(struct static_call_key *key, void *tramp, void *func)
 				continue;
 			}
 
-			arch_static_call_transform(site_addr, tramp, func,
+			arch_static_call_transform(site_addr, NULL, func,
 						   static_call_is_tail(site));
 		}
 	}
@@ -325,12 +314,13 @@ static int __static_call_mod_text_reserved(void *start, void *end)
 	struct module *mod;
 	int ret;
 
-	scoped_guard(rcu) {
-		mod = __module_text_address((unsigned long)start);
-		WARN_ON_ONCE(__module_text_address((unsigned long)end) != mod);
-		if (!try_module_get(mod))
-			mod = NULL;
-	}
+	preempt_disable();
+	mod = __module_text_address((unsigned long)start);
+	WARN_ON_ONCE(__module_text_address((unsigned long)end) != mod);
+	if (!try_module_get(mod))
+		mod = NULL;
+	preempt_enable();
+
 	if (!mod)
 		return 0;
 
@@ -496,8 +486,7 @@ int __init static_call_init(void)
 {
 	int ret;
 
-	/* See static_call_force_reinit(). */
-	if (static_call_initialized == 1)
+	if (static_call_initialized)
 		return 0;
 
 	cpus_read_lock();
@@ -512,12 +501,11 @@ int __init static_call_init(void)
 		BUG();
 	}
 
-#ifdef CONFIG_MODULES
-	if (!static_call_initialized)
-		register_module_notifier(&static_call_module_nb);
-#endif
+	static_call_initialized = true;
 
-	static_call_initialized = 1;
+#ifdef CONFIG_MODULES
+	register_module_notifier(&static_call_module_nb);
+#endif
 	return 0;
 }
 early_initcall(static_call_init);

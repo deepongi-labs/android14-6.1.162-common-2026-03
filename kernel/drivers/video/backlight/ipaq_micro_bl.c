@@ -7,6 +7,7 @@
 
 #include <linux/backlight.h>
 #include <linux/err.h>
+#include <linux/fb.h>
 #include <linux/init.h>
 #include <linux/mfd/ipaq-micro.h>
 #include <linux/module.h>
@@ -15,11 +16,16 @@
 static int micro_bl_update_status(struct backlight_device *bd)
 {
 	struct ipaq_micro *micro = dev_get_drvdata(&bd->dev);
-	int intensity = backlight_get_brightness(bd);
+	int intensity = bd->props.brightness;
 	struct ipaq_micro_msg msg = {
 		.id = MSG_BACKLIGHT,
 		.tx_len = 3,
 	};
+
+	if (bd->props.power != FB_BLANK_UNBLANK)
+		intensity = 0;
+	if (bd->props.state & (BL_CORE_FBBLANK | BL_CORE_SUSPENDED))
+		intensity = 0;
 
 	/*
 	 * Message format:
@@ -41,7 +47,7 @@ static const struct backlight_ops micro_bl_ops = {
 static const struct backlight_properties micro_bl_props = {
 	.type = BACKLIGHT_RAW,
 	.max_brightness = 255,
-	.power = BACKLIGHT_POWER_ON,
+	.power = FB_BLANK_UNBLANK,
 	.brightness = 64,
 };
 

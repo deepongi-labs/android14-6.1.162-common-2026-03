@@ -13,7 +13,6 @@
 
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
-#include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -22,7 +21,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
@@ -99,6 +98,7 @@ enum bma400_activity {
 struct bma400_data {
 	struct device *dev;
 	struct regmap *regmap;
+	struct regulator_bulk_data regulators[BMA400_NUM_REGULATORS];
 	struct mutex mutex; /* data register lock */
 	struct iio_mount_matrix orientation;
 	enum bma400_power_mode power_mode;
@@ -115,7 +115,7 @@ struct bma400_data {
 	struct {
 		__le16 buff[3];
 		u8 temperature;
-		aligned_s64 ts;
+		s64 ts __aligned(8);
 	} buffer __aligned(IIO_DMA_MINALIGN);
 	__le16 status;
 	__be16 duration;
@@ -190,11 +190,11 @@ const struct regmap_config bma400_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = BMA400_CMD_REG,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.writeable_reg = bma400_is_writable_reg,
 	.volatile_reg = bma400_is_volatile_reg,
 };
-EXPORT_SYMBOL_NS(bma400_regmap_config, "IIO_BMA400");
+EXPORT_SYMBOL_NS(bma400_regmap_config, IIO_BMA400);
 
 static const struct iio_mount_matrix *
 bma400_accel_get_mount_matrix(const struct iio_dev *indio_dev,
@@ -796,19 +796,21 @@ static int bma400_enable_steps(struct bma400_data *data, int val)
 
 static int bma400_get_steps_reg(struct bma400_data *data, int *val)
 {
+	u8 *steps_raw;
 	int ret;
 
-	u8 *steps_raw __free(kfree) = kmalloc(BMA400_STEP_RAW_LEN, GFP_KERNEL);
+	steps_raw = kmalloc(BMA400_STEP_RAW_LEN, GFP_KERNEL);
 	if (!steps_raw)
 		return -ENOMEM;
 
 	ret = regmap_bulk_read(data->regmap, BMA400_STEP_CNT0_REG,
 			       steps_raw, BMA400_STEP_RAW_LEN);
-	if (ret)
+	if (ret) {
+		kfree(steps_raw);
 		return ret;
-
+	}
 	*val = get_unaligned_le24(steps_raw);
-
+	kfree(steps_raw);
 	return IIO_VAL_INT;
 }
 
@@ -828,6 +830,13 @@ static void bma400_init_tables(void)
 		bma400_scales[i] = 0;
 		bma400_scales[i + 1] = BMA400_SCALE_MIN << raw;
 	}
+}
+
+static void bma400_regulators_disable(void *data_ptr)
+{
+	struct bma400_data *data = data_ptr;
+
+	regulator_bulk_disable(ARRAY_SIZE(data->regulators), data->regulators);
 }
 
 static void bma400_power_disable(void *data_ptr)
@@ -859,15 +868,33 @@ static enum iio_modifier bma400_act_to_mod(enum bma400_activity activity)
 
 static int bma400_init(struct bma400_data *data)
 {
-	static const char * const regulator_names[] = { "vdd", "vddio" };
 	unsigned int val;
 	int ret;
 
-	ret = devm_regulator_bulk_get_enable(data->dev,
-					     ARRAY_SIZE(regulator_names),
-					     regulator_names);
+	data->regulators[BMA400_VDD_REGULATOR].supply = "vdd";
+	data->regulators[BMA400_VDDIO_REGULATOR].supply = "vddio";
+	ret = devm_regulator_bulk_get(data->dev,
+				      ARRAY_SIZE(data->regulators),
+				      data->regulators);
+	if (ret) {
+		if (ret != -EPROBE_DEFER)
+			dev_err(data->dev,
+				"Failed to get regulators: %d\n",
+				ret);
+
+		return ret;
+	}
+	ret = regulator_bulk_enable(ARRAY_SIZE(data->regulators),
+				    data->regulators);
+	if (ret) {
+		dev_err(data->dev, "Failed to enable regulators: %d\n",
+			ret);
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(data->dev, bma400_regulators_disable, data);
 	if (ret)
-		return dev_err_probe(data->dev, ret, "Failed to get regulators\n");
+		return ret;
 
 	/* Try to read chip_id register. It must return 0x90. */
 	ret = regmap_read(data->regmap, BMA400_CHIP_ID_REG, &val);
@@ -1293,7 +1320,7 @@ static int bma400_disable_adv_interrupt(struct bma400_data *data)
 static int bma400_write_event_config(struct iio_dev *indio_dev,
 				     const struct iio_chan_spec *chan,
 				     enum iio_event_type type,
-				     enum iio_event_direction dir, bool state)
+				     enum iio_event_direction dir, int state)
 {
 	struct bma400_data *data = iio_priv(indio_dev);
 	int ret;
@@ -1591,9 +1618,8 @@ static irqreturn_t bma400_trigger_handler(int irq, void *p)
 		data->buffer.temperature = temp;
 	}
 
-	iio_push_to_buffers_with_ts(indio_dev, &data->buffer,
-				    sizeof(data->buffer),
-				    iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_timestamp(indio_dev, &data->buffer,
+					   iio_get_time_ns(indio_dev));
 
 	mutex_unlock(&data->mutex);
 	iio_trigger_notify_done(indio_dev->trig);
@@ -1688,7 +1714,7 @@ static irqreturn_t bma400_interrupt(int irq, void *private)
 
 	if (FIELD_GET(BMA400_INT_DRDY_MSK, le16_to_cpu(data->status))) {
 		mutex_unlock(&data->mutex);
-		iio_trigger_poll_nested(data->trig);
+		iio_trigger_poll_chained(data->trig);
 		return IRQ_HANDLED;
 	}
 
@@ -1764,7 +1790,7 @@ int bma400_probe(struct device *dev, struct regmap *regmap, int irq,
 
 	return devm_iio_device_register(dev, indio_dev);
 }
-EXPORT_SYMBOL_NS(bma400_probe, "IIO_BMA400");
+EXPORT_SYMBOL_NS(bma400_probe, IIO_BMA400);
 
 MODULE_AUTHOR("Dan Robertson <dan@dlrobertson.com>");
 MODULE_AUTHOR("Jagath Jog J <jagathjog1996@gmail.com>");

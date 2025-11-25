@@ -435,9 +435,8 @@ static int fpr_set(struct task_struct *target,
 	ubuf = u;
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  ELF_NFPREG * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 ELF_NFPREG * sizeof(reg), -1);
 }
 
 #define RI(reg) (offsetof(struct user_regs_struct,reg) / sizeof(long))
@@ -555,19 +554,18 @@ static int gpr_set(struct task_struct *target,
 	ubuf = u;
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  ELF_NGREG * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 ELF_NGREG * sizeof(reg), -1);
 }
 
 static const struct user_regset native_regsets[] = {
 	[REGSET_GENERAL] = {
-		USER_REGSET_NOTE_TYPE(PRSTATUS), .n = ELF_NGREG,
+		.core_note_type = NT_PRSTATUS, .n = ELF_NGREG,
 		.size = sizeof(long), .align = sizeof(long),
 		.regset_get = gpr_get, .set = gpr_set
 	},
 	[REGSET_FP] = {
-		USER_REGSET_NOTE_TYPE(PRFPREG), .n = ELF_NFPREG,
+		.core_note_type = NT_PRFPREG, .n = ELF_NFPREG,
 		.size = sizeof(__u64), .align = sizeof(__u64),
 		.regset_get = fpr_get, .set = fpr_set
 	}
@@ -619,9 +617,8 @@ static int gpr32_set(struct task_struct *target,
 	ubuf = u;
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  ELF_NGREG * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 ELF_NGREG * sizeof(reg), -1);
 }
 
 /*
@@ -629,12 +626,12 @@ static int gpr32_set(struct task_struct *target,
  */
 static const struct user_regset compat_regsets[] = {
 	[REGSET_GENERAL] = {
-		USER_REGSET_NOTE_TYPE(PRSTATUS), .n = ELF_NGREG,
+		.core_note_type = NT_PRSTATUS, .n = ELF_NGREG,
 		.size = sizeof(compat_long_t), .align = sizeof(compat_long_t),
 		.regset_get = gpr32_get, .set = gpr32_set
 	},
 	[REGSET_FP] = {
-		USER_REGSET_NOTE_TYPE(PRFPREG), .n = ELF_NFPREG,
+		.core_note_type = NT_PRFPREG, .n = ELF_NFPREG,
 		.size = sizeof(__u64), .align = sizeof(__u64),
 		.regset_get = fpr_get, .set = fpr_set
 	}

@@ -4,9 +4,12 @@
 
 #include <asm/processor-flags.h>
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 #include <asm/nospec-branch.h>
+
+/* Provide __cpuidle; we can't safely include <linux/cpu.h> */
+#define __cpuidle __section(".cpuidle.text")
 
 /*
  * Interrupt control:
@@ -42,66 +45,24 @@ static __always_inline void native_irq_enable(void)
 	asm volatile("sti": : :"memory");
 }
 
-static __always_inline void native_safe_halt(void)
+static inline __cpuidle void native_safe_halt(void)
 {
 	x86_idle_clear_cpu_buffers();
 	asm volatile("sti; hlt": : :"memory");
 }
 
-static __always_inline void native_halt(void)
+static inline __cpuidle void native_halt(void)
 {
 	x86_idle_clear_cpu_buffers();
 	asm volatile("hlt": : :"memory");
 }
 
-static __always_inline int native_irqs_disabled_flags(unsigned long flags)
-{
-	return !(flags & X86_EFLAGS_IF);
-}
-
-static __always_inline unsigned long native_local_irq_save(void)
-{
-	unsigned long flags = native_save_fl();
-
-	native_irq_disable();
-
-	return flags;
-}
-
-static __always_inline void native_local_irq_restore(unsigned long flags)
-{
-	if (!native_irqs_disabled_flags(flags))
-		native_irq_enable();
-}
-
 #endif
-
-#ifndef CONFIG_PARAVIRT
-#ifndef __ASSEMBLY__
-/*
- * Used in the idle loop; sti takes one instruction cycle
- * to complete:
- */
-static __always_inline void arch_safe_halt(void)
-{
-	native_safe_halt();
-}
-
-/*
- * Used when interrupts are already enabled or to
- * shutdown the processor:
- */
-static __always_inline void halt(void)
-{
-	native_halt();
-}
-#endif /* __ASSEMBLY__ */
-#endif /* CONFIG_PARAVIRT */
 
 #ifdef CONFIG_PARAVIRT_XXL
 #include <asm/paravirt.h>
 #else
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 #include <linux/types.h>
 
 static __always_inline unsigned long arch_local_save_flags(void)
@@ -117,6 +78,24 @@ static __always_inline void arch_local_irq_disable(void)
 static __always_inline void arch_local_irq_enable(void)
 {
 	native_irq_enable();
+}
+
+/*
+ * Used in the idle loop; sti takes one instruction cycle
+ * to complete:
+ */
+static inline __cpuidle void arch_safe_halt(void)
+{
+	native_safe_halt();
+}
+
+/*
+ * Used when interrupts are already enabled or to
+ * shutdown the processor:
+ */
+static inline __cpuidle void halt(void)
+{
+	native_halt();
 }
 
 /*
@@ -137,10 +116,10 @@ static __always_inline unsigned long arch_local_irq_save(void)
 
 #endif
 
-#endif /* __ASSEMBLER__ */
+#endif /* __ASSEMBLY__ */
 #endif /* CONFIG_PARAVIRT_XXL */
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 static __always_inline int arch_irqs_disabled_flags(unsigned long flags)
 {
 	return !(flags & X86_EFLAGS_IF);
@@ -158,6 +137,6 @@ static __always_inline void arch_local_irq_restore(unsigned long flags)
 	if (!arch_irqs_disabled_flags(flags))
 		arch_local_irq_enable();
 }
-#endif /* !__ASSEMBLER__ */
+#endif /* !__ASSEMBLY__ */
 
 #endif

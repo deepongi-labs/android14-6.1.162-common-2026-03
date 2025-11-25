@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010-2012 by Dell Inc.  All rights reserved.
  * Copyright (C) 2011-2013 Red Hat, Inc.
@@ -114,8 +113,8 @@ static int alloc_region_table(struct dm_target *ti, unsigned int nr_paths)
 		return -EINVAL;
 	}
 
-	sctx->region_table = vmalloc_array(nr_slots,
-					   sizeof(region_table_slot_t));
+	sctx->region_table = vmalloc(array_size(nr_slots,
+						sizeof(region_table_slot_t)));
 	if (!sctx->region_table) {
 		ti->error = "Cannot allocate region table";
 		return -ENOMEM;
@@ -517,9 +516,7 @@ static void switch_status(struct dm_target *ti, status_type_t type,
  *
  * Passthrough all ioctls to the path for sector 0
  */
-static int switch_prepare_ioctl(struct dm_target *ti, struct block_device **bdev,
-				unsigned int cmd, unsigned long arg,
-				bool *forward)
+static int switch_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
 	struct switch_ctx *sctx = ti->private;
 	unsigned int path_nr;
@@ -567,7 +564,25 @@ static struct target_type switch_target = {
 	.prepare_ioctl = switch_prepare_ioctl,
 	.iterate_devices = switch_iterate_devices,
 };
-module_dm(switch);
+
+static int __init dm_switch_init(void)
+{
+	int r;
+
+	r = dm_register_target(&switch_target);
+	if (r < 0)
+		DMERR("dm_register_target() failed %d", r);
+
+	return r;
+}
+
+static void __exit dm_switch_exit(void)
+{
+	dm_unregister_target(&switch_target);
+}
+
+module_init(dm_switch_init);
+module_exit(dm_switch_exit);
 
 MODULE_DESCRIPTION(DM_NAME " dynamic path switching target");
 MODULE_AUTHOR("Kevin D. O'Kelley <Kevin_OKelley@dell.com>");

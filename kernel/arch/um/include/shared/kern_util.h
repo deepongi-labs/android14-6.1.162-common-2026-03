@@ -13,6 +13,7 @@ struct siginfo;
 
 extern int uml_exitcode;
 
+extern int ncpus;
 extern int kmalloc_ok;
 
 #define UML_ROUND_UP(addr) \
@@ -24,17 +25,16 @@ extern void free_stack(unsigned long stack, int order);
 struct pt_regs;
 extern void do_signal(struct pt_regs *regs);
 extern void interrupt_end(void);
-extern void relay_signal(int sig, struct siginfo *si, struct uml_pt_regs *regs,
-			 void *mc);
+extern void relay_signal(int sig, struct siginfo *si, struct uml_pt_regs *regs);
 
 extern unsigned long segv(struct faultinfo fi, unsigned long ip,
-			  int is_user, struct uml_pt_regs *regs,
-			  void *mc);
+			  int is_user, struct uml_pt_regs *regs);
 extern int handle_page_fault(unsigned long address, unsigned long ip,
 			     int is_write, int is_user, int *code_out);
 
 extern unsigned int do_IRQ(int irq, struct uml_pt_regs *regs);
 extern void initial_thread_cb(void (*proc)(void *), void *arg);
+extern int is_syscall(unsigned long addr);
 
 extern void timer_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs);
 
@@ -42,7 +42,6 @@ extern void uml_pm_wake(void);
 
 extern int start_uml(void);
 extern void paging_init(void);
-extern int parse_iomem(char *str, int *add);
 
 extern void uml_cleanup(void);
 extern void do_uml_exitcalls(void);
@@ -59,12 +58,11 @@ extern char *uml_strdup(const char *string);
 extern unsigned long to_irq_stack(unsigned long *mask_out);
 extern unsigned long from_irq_stack(int nested);
 
-extern int singlestepping(void);
+extern int singlestepping(void *t);
 
-extern void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
-			 void *mc);
-extern void winch(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs,
-		  void *mc);
+extern void segv_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs);
+extern void bus_handler(int sig, struct siginfo *si, struct uml_pt_regs *regs);
+extern void winch(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs);
 extern void fatal_sigsegv(void) __attribute__ ((noreturn));
 
 void um_idle_sleep(void);

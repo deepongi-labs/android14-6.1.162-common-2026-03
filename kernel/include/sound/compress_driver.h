@@ -12,36 +12,13 @@
 
 #include <linux/types.h>
 #include <linux/sched.h>
+#include <linux/android_kabi.h>
 #include <sound/core.h>
 #include <sound/compress_offload.h>
 #include <sound/asound.h>
 #include <sound/pcm.h>
 
 struct snd_compr_ops;
-
-/**
- * struct snd_compr_task_runtime: task runtime description
- * @list: list of all managed tasks
- * @input: input DMA buffer
- * @output: output DMA buffer
- * @seqno: sequence number
- * @input_size: really used data in the input buffer
- * @output_size: really used data in the output buffer
- * @flags: see SND_COMPRESS_TFLG_*
- * @state: actual task state
- * @private_value: used by the lowlevel driver (opaque)
- */
-struct snd_compr_task_runtime {
-	struct list_head list;
-	struct dma_buf *input;
-	struct dma_buf *output;
-	u64 seqno;
-	u64 input_size;
-	u64 output_size;
-	u32 flags;
-	u8 state;
-	void *private_value;
-};
 
 /**
  * struct snd_compr_runtime: runtime stream description
@@ -61,10 +38,6 @@ struct snd_compr_task_runtime {
  * @dma_addr: physical buffer address (not accessible from main CPU)
  * @dma_bytes: size of DMA area
  * @dma_buffer_p: runtime dma buffer pointer
- * @active_tasks: count of active tasks
- * @total_tasks: count of all tasks
- * @task_seqno: last task sequence number (!= 0)
- * @tasks: list of all tasks
  */
 struct snd_compr_runtime {
 	snd_pcm_state_t state;
@@ -83,12 +56,7 @@ struct snd_compr_runtime {
 	size_t dma_bytes;
 	struct snd_dma_buffer *dma_buffer_p;
 
-#if IS_ENABLED(CONFIG_SND_COMPRESS_ACCEL)
-	u32 active_tasks;
-	u32 total_tasks;
-	u64 task_seqno;
-	struct list_head tasks;
-#endif
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -119,6 +87,8 @@ struct snd_compr_stream {
 	bool pause_in_draining;
 	void *private_data;
 	struct snd_dma_buffer dma_buffer;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -143,10 +113,6 @@ struct snd_compr_stream {
  * Not valid if copy is implemented
  * @get_caps: Retrieve DSP capabilities, mandatory
  * @get_codec_caps: Retrieve capabilities for a specific codec, mandatory
- * @task_create: Create a set of input/output buffers for accel operations
- * @task_start: Start (queue) a task for accel operations
- * @task_stop: Stop (dequeue) a task for accel operations
- * @task_free: Free a set of input/output buffers for accel operations
  */
 struct snd_compr_ops {
 	int (*open)(struct snd_compr_stream *stream);
@@ -161,7 +127,7 @@ struct snd_compr_ops {
 			struct snd_compr_metadata *metadata);
 	int (*trigger)(struct snd_compr_stream *stream, int cmd);
 	int (*pointer)(struct snd_compr_stream *stream,
-		       struct snd_compr_tstamp64 *tstamp);
+			struct snd_compr_tstamp *tstamp);
 	int (*copy)(struct snd_compr_stream *stream, char __user *buf,
 		       size_t count);
 	int (*mmap)(struct snd_compr_stream *stream,
@@ -171,12 +137,8 @@ struct snd_compr_ops {
 			struct snd_compr_caps *caps);
 	int (*get_codec_caps) (struct snd_compr_stream *stream,
 			struct snd_compr_codec_caps *codec);
-#if IS_ENABLED(CONFIG_SND_COMPRESS_ACCEL)
-	int (*task_create) (struct snd_compr_stream *stream, struct snd_compr_task_runtime *task);
-	int (*task_start) (struct snd_compr_stream *stream, struct snd_compr_task_runtime *task);
-	int (*task_stop) (struct snd_compr_stream *stream, struct snd_compr_task_runtime *task);
-	int (*task_free) (struct snd_compr_stream *stream, struct snd_compr_task_runtime *task);
-#endif
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /**
@@ -193,7 +155,7 @@ struct snd_compr_ops {
  */
 struct snd_compr {
 	const char *name;
-	struct device *dev;
+	struct device dev;
 	struct snd_compr_ops *ops;
 	void *private_data;
 	struct snd_card *card;
@@ -207,6 +169,7 @@ struct snd_compr {
 	struct snd_info_entry *proc_root;
 	struct snd_info_entry *proc_info_entry;
 #endif
+	ANDROID_KABI_RESERVE(1);
 };
 
 /* compress device register APIs */
@@ -286,10 +249,5 @@ int snd_compr_free_pages(struct snd_compr_stream *stream);
 
 int snd_compr_stop_error(struct snd_compr_stream *stream,
 			 snd_pcm_state_t state);
-
-#if IS_ENABLED(CONFIG_SND_COMPRESS_ACCEL)
-void snd_compr_task_finished(struct snd_compr_stream *stream,
-			     struct snd_compr_task_runtime *task);
-#endif
 
 #endif

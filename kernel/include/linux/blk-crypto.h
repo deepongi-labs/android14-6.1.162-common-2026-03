@@ -6,9 +6,7 @@
 #ifndef __LINUX_BLK_CRYPTO_H
 #define __LINUX_BLK_CRYPTO_H
 
-#include <linux/minmax.h>
 #include <linux/types.h>
-#include <uapi/linux/blk-crypto.h>
 
 enum blk_crypto_mode_num {
 	BLK_ENCRYPTION_MODE_INVALID,
@@ -25,10 +23,10 @@ enum blk_crypto_mode_num {
  */
 enum blk_crypto_key_type {
 	/*
-	 * Raw keys (i.e. "software keys").  These keys are simply kept in raw,
-	 * plaintext form in kernel memory.
+	 * Standard keys (i.e. "software keys").  These keys are simply kept in
+	 * raw, plaintext form in kernel memory.
 	 */
-	BLK_CRYPTO_KEY_TYPE_RAW = 0x1,
+	BLK_CRYPTO_KEY_TYPE_STANDARD = 1 << 0,
 
 	/*
 	 * Hardware-wrapped keys.  These keys are only present in kernel memory
@@ -36,12 +34,12 @@ enum blk_crypto_key_type {
 	 * dedicated hardware.  For details, see the "Hardware-wrapped keys"
 	 * section of Documentation/block/inline-encryption.rst.
 	 */
-	BLK_CRYPTO_KEY_TYPE_HW_WRAPPED = 0x2,
+	BLK_CRYPTO_KEY_TYPE_HW_WRAPPED = 1 << 1,
 };
 
 /*
- * Currently the maximum raw key size is 64 bytes, as that is the key size of
- * BLK_ENCRYPTION_MODE_AES_256_XTS which takes the longest key.
+ * Currently the maximum standard key size is 64 bytes, as that is the key size
+ * of BLK_ENCRYPTION_MODE_AES_256_XTS which takes the longest key.
  *
  * The maximum hardware-wrapped key size depends on the hardware's key wrapping
  * algorithm, which is a hardware implementation detail, so it isn't precisely
@@ -51,11 +49,14 @@ enum blk_crypto_key_type {
  *
  * Both of these values can trivially be increased if ever needed.
  */
-#define BLK_CRYPTO_MAX_RAW_KEY_SIZE		64
+#define BLK_CRYPTO_MAX_STANDARD_KEY_SIZE	64
 #define BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE	128
 
+/* This should use max(), but max() doesn't work in a struct definition. */
 #define BLK_CRYPTO_MAX_ANY_KEY_SIZE \
-	MAX(BLK_CRYPTO_MAX_RAW_KEY_SIZE, BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE)
+	(BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE > \
+	 BLK_CRYPTO_MAX_STANDARD_KEY_SIZE ? \
+	 BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE : BLK_CRYPTO_MAX_STANDARD_KEY_SIZE)
 
 /*
  * Size of the "software secret" which can be derived from a hardware-wrapped
@@ -76,7 +77,7 @@ enum blk_crypto_key_type {
  *	ciphertext.  This is always a power of 2.  It might be e.g. the
  *	filesystem block size or the disk sector size.
  * @dun_bytes: the maximum number of bytes of DUN used when using this key
- * @key_type: the type of this key -- either raw or hardware-wrapped
+ * @key_type: the type of this key -- either standard or hardware-wrapped
  */
 struct blk_crypto_config {
 	enum blk_crypto_mode_num crypto_mode;
@@ -90,9 +91,9 @@ struct blk_crypto_config {
  * @crypto_cfg: the crypto mode, data unit size, key type, and other
  *		characteristics of this key and how it will be used
  * @data_unit_size_bits: log2 of data_unit_size
- * @size: size of this key in bytes.  The size of a raw key is fixed for a given
- *	  crypto mode, but the size of a hardware-wrapped key can vary.
- * @bytes: the bytes of this key.  Only the first @size bytes are significant.
+ * @size: size of this key in bytes.  The size of a standard key is fixed for a
+ *	  given crypto mode, but the size of a hardware-wrapped key can vary.
+ * @raw: the bytes of this key.  Only the first @size bytes are significant.
  *
  * A blk_crypto_key is immutable once created, and many bios can reference it at
  * the same time.  It must not be freed until all bios using it have completed
@@ -102,7 +103,7 @@ struct blk_crypto_key {
 	struct blk_crypto_config crypto_cfg;
 	unsigned int data_unit_size_bits;
 	unsigned int size;
-	u8 bytes[BLK_CRYPTO_MAX_ANY_KEY_SIZE];
+	u8 raw[BLK_CRYPTO_MAX_ANY_KEY_SIZE];
 };
 
 #define BLK_CRYPTO_MAX_IV_SIZE		32
@@ -141,7 +142,7 @@ bool bio_crypt_dun_is_contiguous(const struct bio_crypt_ctx *bc,
 				 const u64 next_dun[BLK_CRYPTO_DUN_ARRAY_SIZE]);
 
 int blk_crypto_init_key(struct blk_crypto_key *blk_key,
-			const u8 *key_bytes, size_t key_size,
+			const u8 *raw_key, size_t raw_key_size,
 			enum blk_crypto_key_type key_type,
 			enum blk_crypto_mode_num crypto_mode,
 			unsigned int dun_bytes,

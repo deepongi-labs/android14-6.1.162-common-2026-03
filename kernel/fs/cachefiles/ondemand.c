@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <linux/fdtable.h>
 #include <linux/anon_inodes.h>
 #include <linux/uio.h>
 #include "internal.h"
@@ -61,7 +62,7 @@ static ssize_t cachefiles_ondemand_fd_write_iter(struct kiocb *kiocb,
 	struct cachefiles_object *object = kiocb->ki_filp->private_data;
 	struct cachefiles_cache *cache = object->volume->cache;
 	struct file *file;
-	size_t len = iter->count, aligned_len = len;
+	size_t len = iter->count;
 	loff_t pos = kiocb->ki_pos;
 	const struct cred *saved_cred;
 	int ret;
@@ -76,15 +77,17 @@ static ssize_t cachefiles_ondemand_fd_write_iter(struct kiocb *kiocb,
 	spin_unlock(&object->lock);
 
 	cachefiles_begin_secure(cache, &saved_cred);
-	ret = __cachefiles_prepare_write(object, file, &pos, &aligned_len, len, true);
+	ret = __cachefiles_prepare_write(object, file, &pos, &len, true);
 	cachefiles_end_secure(cache, saved_cred);
 	if (ret < 0)
 		goto out;
 
 	trace_cachefiles_ondemand_fd_write(object, file_inode(file), pos, len);
 	ret = __cachefiles_write(object, file, pos, iter, NULL, NULL);
-	if (ret > 0)
+	if (!ret) {
+		ret = len;
 		kiocb->ki_pos += ret;
+	}
 
 out:
 	fput(file);
@@ -315,9 +318,8 @@ static int cachefiles_ondemand_get_fd(struct cachefiles_req *req,
 		goto err_free_id;
 	}
 
-	anon_file->file = anon_inode_getfile_fmode("[cachefiles]",
-				&cachefiles_ondemand_fd_fops, object,
-				O_WRONLY, FMODE_PWRITE | FMODE_LSEEK);
+	anon_file->file = anon_inode_getfile("[cachefiles]",
+				&cachefiles_ondemand_fd_fops, object, O_WRONLY);
 	if (IS_ERR(anon_file->file)) {
 		ret = PTR_ERR(anon_file->file);
 		goto err_put_fd;
@@ -331,6 +333,8 @@ static int cachefiles_ondemand_get_fd(struct cachefiles_req *req,
 		ret = -EEXIST;
 		goto err_put_file;
 	}
+
+	anon_file->file->f_mode |= FMODE_PWRITE | FMODE_LSEEK;
 
 	load = (void *)req->msg.data;
 	load->fd = anon_file->fd;

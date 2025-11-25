@@ -28,7 +28,6 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/slab.h>
-#include <linux/string_choices.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/hrtimer.h>
@@ -43,7 +42,7 @@
 #include <asm/byteorder.h>
 #include <linux/io.h>
 #include <asm/irq.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #define DRIVER_DESC	"USB Host+Gadget Emulator"
 #define DRIVER_VERSION	"02 May 2005"
@@ -81,7 +80,7 @@ module_param_named(num, mod_data.num, uint, S_IRUGO);
 MODULE_PARM_DESC(num, "number of emulated controllers");
 /*-------------------------------------------------------------------------*/
 
-/* gadget side driver data structures */
+/* gadget side driver data structres */
 struct dummy_ep {
 	struct list_head		queue;
 	unsigned long			last_io;	/* jiffies timestamp */
@@ -623,10 +622,10 @@ static int dummy_enable(struct usb_ep *_ep,
 
 	dev_dbg(udc_dev(dum), "enabled %s (ep%d%s-%s) maxpacket %d stream %s\n",
 		_ep->name,
-		usb_endpoint_num(desc),
+		desc->bEndpointAddress & 0x0f,
 		(desc->bEndpointAddress & USB_DIR_IN) ? "in" : "out",
 		usb_ep_type_string(usb_endpoint_type(desc)),
-		max, str_enabled_disabled(ep->stream_en));
+		max, ep->stream_en ? "enabled" : "disabled");
 
 	/* at this point real hardware should be NAKing transfers
 	 * to that endpoint, until a buffer is queued to it.
@@ -765,7 +764,8 @@ static int dummy_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 	if (!dum->driver)
 		return -ESHUTDOWN;
 
-	spin_lock_irqsave(&dum->lock, flags);
+	local_irq_save(flags);
+	spin_lock(&dum->lock);
 	list_for_each_entry(iter, &ep->queue, queue) {
 		if (&iter->req != _req)
 			continue;
@@ -775,16 +775,15 @@ static int dummy_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 		retval = 0;
 		break;
 	}
+	spin_unlock(&dum->lock);
 
 	if (retval == 0) {
 		dev_dbg(udc_dev(dum),
 				"dequeued req %p from %s, len %d buf %p\n",
 				req, _ep->name, _req->length, _req->buf);
-		spin_unlock(&dum->lock);
 		usb_gadget_giveback_request(_ep, _req);
-		spin_lock(&dum->lock);
 	}
-	spin_unlock_irqrestore(&dum->lock, flags);
+	local_irq_restore(flags);
 	return retval;
 }
 
@@ -1112,12 +1111,13 @@ err_udc:
 	return rc;
 }
 
-static void dummy_udc_remove(struct platform_device *pdev)
+static int dummy_udc_remove(struct platform_device *pdev)
 {
 	struct dummy	*dum = platform_get_drvdata(pdev);
 
 	device_remove_file(&dum->gadget.dev, &dev_attr_function);
 	usb_del_gadget_udc(&dum->gadget);
+	return 0;
 }
 
 static void dummy_udc_pm(struct dummy *dum, struct dummy_hcd *dum_hcd,
@@ -1787,8 +1787,7 @@ static int handle_control_request(struct dummy_hcd *dum_hcd, struct urb *urb,
  */
 static enum hrtimer_restart dummy_timer(struct hrtimer *t)
 {
-	struct dummy_hcd	*dum_hcd = timer_container_of(dum_hcd, t,
-							      timer);
+	struct dummy_hcd	*dum_hcd = from_timer(dum_hcd, t, timer);
 	struct dummy		*dum = dum_hcd->dum;
 	struct urbp		*urbp, *tmp;
 	unsigned long		flags;
@@ -2480,7 +2479,8 @@ static DEVICE_ATTR_RO(urbs);
 
 static int dummy_start_ss(struct dummy_hcd *dum_hcd)
 {
-	hrtimer_setup(&dum_hcd->timer, dummy_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	hrtimer_init(&dum_hcd->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	dum_hcd->timer.function = dummy_timer;
 	dum_hcd->rh_state = DUMMY_RH_RUNNING;
 	dum_hcd->stream_en_ep = 0;
 	INIT_LIST_HEAD(&dum_hcd->urbp_list);
@@ -2509,7 +2509,8 @@ static int dummy_start(struct usb_hcd *hcd)
 		return dummy_start_ss(dum_hcd);
 
 	spin_lock_init(&dum_hcd->dum->lock);
-	hrtimer_setup(&dum_hcd->timer, dummy_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	hrtimer_init(&dum_hcd->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	dum_hcd->timer.function = dummy_timer;
 	dum_hcd->rh_state = DUMMY_RH_RUNNING;
 
 	INIT_LIST_HEAD(&dum_hcd->urbp_list);
@@ -2719,7 +2720,7 @@ put_usb2_hcd:
 	return retval;
 }
 
-static void dummy_hcd_remove(struct platform_device *pdev)
+static int dummy_hcd_remove(struct platform_device *pdev)
 {
 	struct dummy		*dum;
 
@@ -2735,6 +2736,8 @@ static void dummy_hcd_remove(struct platform_device *pdev)
 
 	dum->hs_hcd = NULL;
 	dum->ss_hcd = NULL;
+
+	return 0;
 }
 
 static int dummy_hcd_suspend(struct platform_device *pdev, pm_message_t state)

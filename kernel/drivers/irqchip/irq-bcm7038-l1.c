@@ -20,6 +20,7 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/smp.h>
@@ -249,7 +250,7 @@ static int __init bcm7038_l1_init_one(struct device_node *dn,
 		return -EINVAL;
 	}
 
-	cpu = intc->cpus[idx] = kzalloc(struct_size(cpu, mask_cache, n_words),
+	cpu = intc->cpus[idx] = kzalloc(sizeof(*cpu) + n_words * sizeof(u32),
 					GFP_KERNEL);
 	if (!cpu)
 		return -ENOMEM;
@@ -416,7 +417,7 @@ static int __init bcm7038_l1_of_init(struct device_node *dn,
 		}
 	}
 
-	intc->domain = irq_domain_create_linear(of_fwnode_handle(dn), IRQS_PER_WORD * intc->n_words,
+	intc->domain = irq_domain_add_linear(dn, IRQS_PER_WORD * intc->n_words,
 					     &bcm7038_l1_domain_ops,
 					     intc);
 	if (!intc->domain) {

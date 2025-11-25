@@ -158,9 +158,8 @@ static int genregs32_set(struct task_struct *target,
 				 35 * sizeof(u32), 36 * sizeof(u32));
 	if (ret || !count)
 		return ret;
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf, 36 * sizeof(u32),
-				  38 * sizeof(u32));
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 36 * sizeof(u32), 38 * sizeof(u32));
 }
 
 static int fpregs32_get(struct task_struct *target,
@@ -204,8 +203,8 @@ static int fpregs32_set(struct task_struct *target,
 					 33 * sizeof(u32),
 					 34 * sizeof(u32));
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  34 * sizeof(u32), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						34 * sizeof(u32), -1);
 	return ret;
 }
 
@@ -218,7 +217,7 @@ static const struct user_regset sparc32_regsets[] = {
 	 *	PSR, PC, nPC, Y, WIM, TBR
 	 */
 	[REGSET_GENERAL] = {
-		USER_REGSET_NOTE_TYPE(PRSTATUS),
+		.core_note_type = NT_PRSTATUS,
 		.n = 38,
 		.size = sizeof(u32), .align = sizeof(u32),
 		.regset_get = genregs32_get, .set = genregs32_set
@@ -234,7 +233,7 @@ static const struct user_regset sparc32_regsets[] = {
 	 *	FPU QUEUE (64 32-bit ints)
 	 */
 	[REGSET_FP] = {
-		USER_REGSET_NOTE_TYPE(PRFPREG),
+		.core_note_type = NT_PRFPREG,
 		.n = 99,
 		.size = sizeof(u32), .align = sizeof(u32),
 		.regset_get = fpregs32_get, .set = fpregs32_set

@@ -77,7 +77,7 @@ Basic design
 ============
 
 We introduce ``struct blk_crypto_key`` to represent an inline encryption key and
-how it will be used.  This includes the type of the key (raw or
+how it will be used.  This includes the type of the key (standard or
 hardware-wrapped); the actual bytes of the key; the size of the key; the
 algorithm and data unit size the key will be used with; and the number of bytes
 needed to represent the maximum data unit number the key will be used with.
@@ -270,7 +270,8 @@ Request queue based layered devices like dm-rq that wish to support inline
 encryption need to create their own blk_crypto_profile for their request_queue,
 and expose whatever functionality they choose. When a layered device wants to
 pass a clone of that request to another request_queue, blk-crypto will
-initialize and prepare the clone as necessary.
+initialize and prepare the clone as necessary; see
+``blk_crypto_insert_cloned_request()``.
 
 Interaction between inline encryption and blk integrity
 =======================================================
@@ -355,25 +356,19 @@ be read back by software.  As such, the above security goals could be achieved
 if the kernel simply erased its copy of the key(s) after programming them into
 keyslot(s) and thereafter only referred to them via keyslot number.
 
-However, that naive approach runs into a couple problems:
-
-- It limits the number of unlocked keys to the number of keyslots, which
-  typically is a small number.  In cases where there is only one encryption key
-  system-wide (e.g., a full-disk encryption key), that can be tolerable.
-  However, in general there can be many logged-in users with many different
-  keys, and/or many running applications with application-specific encrypted
-  storage areas.  This is especially true if file-based encryption (e.g.
-  fscrypt) is being used.
-
-- Inline crypto engines typically lose the contents of their keyslots if the
-  storage controller (usually UFS or eMMC) is reset.  Resetting the storage
-  controller is a standard error recovery procedure that is executed if certain
-  types of storage errors occur, and such errors can occur at any time.
-  Therefore, when inline crypto is being used, the operating system must always
-  be ready to reprogram the keyslots without user intervention.
+However, that naive approach runs into the problem that it limits the number of
+unlocked keys to the number of keyslots, which typically is a small number.  In
+cases where there is only one encryption key system-wide (e.g., a full-disk
+encryption key), that can be tolerable.  However, in general there can be many
+logged-in users with many different keys, and/or many running applications with
+application-specific encrypted storage areas.  This is especially true if
+file-based encryption (e.g. fscrypt) is being used.
 
 Thus, it is important for the kernel to still have a way to "remind" the
-hardware about a key, without actually having the raw key itself.
+hardware about a key, without actually having the raw key itself.  This would
+ensure that the number of hardware keyslots only limits the number of active I/O
+requests, not other things such as the number of logged-in users, the number of
+running apps, or the number of encrypted storage areas that apps can create.
 
 Somewhat less importantly, it is also desirable that the raw keys are never
 visible to software at all, even while being initially unlocked.  This would
@@ -466,18 +461,18 @@ Kernel support
 --------------
 
 The inline encryption support of the kernel's block layer ("blk-crypto") has
-been extended to support hardware-wrapped keys as an alternative to raw keys,
-when hardware support is available.  This works in the following way:
+been extended to support hardware-wrapped keys as an alternative to standard
+keys, when hardware support is available.  This works in the following way:
 
 - A ``key_types_supported`` field is added to the crypto capabilities in
   ``struct blk_crypto_profile``.  This allows device drivers to declare that
-  they support raw keys, hardware-wrapped keys, or both.
+  they support standard keys, hardware-wrapped keys, or both.
 
 - ``struct blk_crypto_key`` can now contain a hardware-wrapped key as an
-  alternative to a raw key; a ``key_type`` field is added to
+  alternative to a standard key; a ``key_type`` field is added to
   ``struct blk_crypto_config`` to distinguish between the different key types.
   This allows users of blk-crypto to en/decrypt data using a hardware-wrapped
-  key in a way very similar to using a raw key.
+  key in a way very similar to using a standard key.
 
 - A new method ``blk_crypto_ll_ops::derive_sw_secret`` is added.  Device drivers
   that support hardware-wrapped keys must implement this method.  Users of
@@ -485,48 +480,20 @@ when hardware support is available.  This works in the following way:
 
 - The programming and eviction of hardware-wrapped keys happens via
   ``blk_crypto_ll_ops::keyslot_program`` and
-  ``blk_crypto_ll_ops::keyslot_evict``, just like it does for raw keys.  If a
-  driver supports hardware-wrapped keys, then it must handle hardware-wrapped
+  ``blk_crypto_ll_ops::keyslot_evict``, just like it does for standard keys.  If
+  a driver supports hardware-wrapped keys, then it must handle hardware-wrapped
   keys being passed to these methods.
 
 blk-crypto-fallback doesn't support hardware-wrapped keys.  Therefore,
 hardware-wrapped keys can only be used with actual inline encryption hardware.
 
-All the above deals with hardware-wrapped keys in ephemerally-wrapped form only.
-To get such keys in the first place, new block device ioctls have been added to
-provide a generic interface to creating and preparing such keys:
-
-- ``BLKCRYPTOIMPORTKEY`` converts a raw key to long-term wrapped form.  It takes
-  in a pointer to a ``struct blk_crypto_import_key_arg``.  The caller must set
-  ``raw_key_ptr`` and ``raw_key_size`` to the pointer and size (in bytes) of the
-  raw key to import.  On success, ``BLKCRYPTOIMPORTKEY`` returns 0 and writes
-  the resulting long-term wrapped key blob to the buffer pointed to by
-  ``lt_key_ptr``, which is of maximum size ``lt_key_size``.  It also updates
-  ``lt_key_size`` to be the actual size of the key.  On failure, it returns -1
-  and sets errno.  An errno of ``EOPNOTSUPP`` indicates that the block device
-  does not support hardware-wrapped keys.  An errno of ``EOVERFLOW`` indicates
-  that the output buffer did not have enough space for the key blob.
-
-- ``BLKCRYPTOGENERATEKEY`` is like ``BLKCRYPTOIMPORTKEY``, but it has the
-  hardware generate the key instead of importing one.  It takes in a pointer to
-  a ``struct blk_crypto_generate_key_arg``.
-
-- ``BLKCRYPTOPREPAREKEY`` converts a key from long-term wrapped form to
-  ephemerally-wrapped form.  It takes in a pointer to a ``struct
-  blk_crypto_prepare_key_arg``.  The caller must set ``lt_key_ptr`` and
-  ``lt_key_size`` to the pointer and size (in bytes) of the long-term wrapped
-  key blob to convert.  On success, ``BLKCRYPTOPREPAREKEY`` returns 0 and writes
-  the resulting ephemerally-wrapped key blob to the buffer pointed to by
-  ``eph_key_ptr``, which is of maximum size ``eph_key_size``.  It also updates
-  ``eph_key_size`` to be the actual size of the key.  On failure, it returns -1
-  and sets errno.  Errno values of ``EOPNOTSUPP`` and ``EOVERFLOW`` mean the
-  same as they do for ``BLKCRYPTOIMPORTKEY``.  An errno of ``EBADMSG`` indicates
-  that the long-term wrapped key is invalid.
-
-Userspace needs to use either ``BLKCRYPTOIMPORTKEY`` or ``BLKCRYPTOGENERATEKEY``
-once to create a key, and then ``BLKCRYPTOPREPAREKEY`` each time the key is
-unlocked and added to the kernel.  Note that these ioctls have no relevance for
-raw keys; they are only for hardware-wrapped keys.
+Currently, the kernel only works with hardware-wrapped keys in
+ephemerally-wrapped form.  No generic kernel interfaces are provided for
+generating or importing hardware-wrapped keys in the first place, or converting
+them to ephemerally-wrapped form.  In Android, SoC vendors are required to
+support these operations in their KeyMint implementation (a hardware abstraction
+layer in userspace); for details, see the `Android documentation
+<https://source.android.com/security/encryption/hw-wrapped-keys>`_.
 
 Testability
 -----------
@@ -547,4 +514,4 @@ the hardware RNG and its use to generate the key, as well as the testing of the
 For an example of a test that verifies the ciphertext written to disk in the
 "import" mode, see the fscrypt hardware-wrapped key tests in xfstests, or
 `Android's vts_kernel_encryption_test
-<https://android.googlesource.com/platform/test/vts-testcase/kernel/+/refs/heads/main/encryption/>`_.
+<https://android.googlesource.com/platform/test/vts-testcase/kernel/+/refs/heads/master/encryption/>`_.

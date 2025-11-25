@@ -9,7 +9,6 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/pm.h>
 
 #include <linux/pinctrl/pinctrl.h>
 
@@ -29,7 +28,18 @@
 	}
 
 #define EBG_COMMUNITY(b, s, e, g)			\
-	INTEL_COMMUNITY_GPPS(b, s, e, g, EBG)
+	{						\
+		.barno = (b),				\
+		.padown_offset = EBG_PAD_OWN,		\
+		.padcfglock_offset = EBG_PADCFGLOCK,	\
+		.hostown_offset = EBG_HOSTSW_OWN,	\
+		.is_offset = EBG_GPI_IS,		\
+		.ie_offset = EBG_GPI_IE,		\
+		.pin_base = (s),			\
+		.npins = ((e) - (s) + 1),		\
+		.gpps = (g),				\
+		.ngpps = ARRAY_SIZE(g),			\
+	}
 
 /* Emmitsburg */
 static const struct pinctrl_pin_desc ebg_pins[] = {
@@ -359,17 +369,19 @@ static const struct acpi_device_id ebg_pinctrl_acpi_match[] = {
 };
 MODULE_DEVICE_TABLE(acpi, ebg_pinctrl_acpi_match);
 
+static INTEL_PINCTRL_PM_OPS(ebg_pinctrl_pm_ops);
+
 static struct platform_driver ebg_pinctrl_driver = {
 	.probe = intel_pinctrl_probe_by_hid,
 	.driver = {
 		.name = "emmitsburg-pinctrl",
 		.acpi_match_table = ebg_pinctrl_acpi_match,
-		.pm = pm_sleep_ptr(&intel_pinctrl_pm_ops),
+		.pm = &ebg_pinctrl_pm_ops,
 	},
 };
+
 module_platform_driver(ebg_pinctrl_driver);
 
 MODULE_AUTHOR("Andy Shevchenko <andriy.shevchenko@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Emmitsburg PCH pinctrl/GPIO driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("PINCTRL_INTEL");

@@ -12,17 +12,16 @@
  */
 #if PAGE_SHIFT < 13
 #ifdef CONFIG_4KSTACKS
-#define THREAD_SIZE_ORDER	0
+#define THREAD_SIZE	4096
 #else
-#define THREAD_SIZE_ORDER	1
+#define THREAD_SIZE	8192
 #endif
 #else
-#define THREAD_SIZE_ORDER	0
+#define THREAD_SIZE	PAGE_SIZE
 #endif
+#define THREAD_SIZE_ORDER	((THREAD_SIZE / PAGE_SIZE) - 1)
 
-#define THREAD_SIZE	(PAGE_SIZE << THREAD_SIZE_ORDER)
-
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 struct thread_info {
 	struct task_struct	*task;		/* main task structure */
@@ -31,7 +30,7 @@ struct thread_info {
 	__u32			cpu;		/* should always be 0 on m68k */
 	unsigned long		tp_value;	/* thread pointer */
 };
-#endif /* __ASSEMBLER__ */
+#endif /* __ASSEMBLY__ */
 
 #define INIT_THREAD_INFO(tsk)			\
 {						\
@@ -39,7 +38,7 @@ struct thread_info {
 	.preempt_count	= INIT_PREEMPT_COUNT,	\
 }
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 /* how to get the thread information struct from C */
 static inline struct thread_info *current_thread_info(void)
 {
@@ -62,7 +61,6 @@ static inline struct thread_info *current_thread_info(void)
 #define TIF_NOTIFY_RESUME	5	/* callback before returning to user */
 #define TIF_SIGPENDING		6	/* signal pending */
 #define TIF_NEED_RESCHED	7	/* rescheduling necessary */
-#define TIF_SECCOMP		13	/* seccomp syscall filtering active */
 #define TIF_DELAYED_TRACE	14	/* single step a syscall */
 #define TIF_SYSCALL_TRACE	15	/* syscall trace active */
 #define TIF_MEMDIE		16	/* is terminating due to OOM killer */
@@ -71,7 +69,6 @@ static inline struct thread_info *current_thread_info(void)
 #define _TIF_NOTIFY_RESUME	(1 << TIF_NOTIFY_RESUME)
 #define _TIF_SIGPENDING		(1 << TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
-#define _TIF_SECCOMP		(1 << TIF_SECCOMP)
 #define _TIF_DELAYED_TRACE	(1 << TIF_DELAYED_TRACE)
 #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
 #define _TIF_MEMDIE		(1 << TIF_MEMDIE)

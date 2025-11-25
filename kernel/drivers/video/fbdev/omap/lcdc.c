@@ -5,10 +5,8 @@
  * Copyright (C) 2004 Nokia Corporation
  * Author: Imre Deak <imre.deak@nokia.com>
  */
-
 #include <linux/module.h>
 #include <linux/device.h>
-#include <linux/export.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/err.h>
@@ -708,6 +706,8 @@ static int omap_lcdc_init(struct omapfb_device *fbdev, int ext_mode,
 
 	if (machine_is_ams_delta())
 		rate /= 4;
+	if (machine_is_omap_h3())
+		rate /= 3;
 	r = clk_set_rate(lcdc.lcd_ck, rate);
 	if (r) {
 		dev_err(fbdev->dev, "failed to adjust LCD rate\n");

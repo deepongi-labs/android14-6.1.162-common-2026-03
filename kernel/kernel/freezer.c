@@ -10,8 +10,10 @@
 #include <linux/export.h>
 #include <linux/syscalls.h>
 #include <linux/freezer.h>
-#include <linux/oom.h>
 #include <linux/kthread.h>
+
+#undef CREATE_TRACE_POINT
+#include <trace/hooks/cgroup.h>
 
 /* total number of freezing conditions in effect */
 DEFINE_STATIC_KEY_FALSE(freezer_active);
@@ -41,7 +43,7 @@ bool freezing_slow_path(struct task_struct *p)
 	if (p->flags & (PF_NOFREEZE | PF_SUSPEND_TASK))
 		return false;
 
-	if (tsk_is_oom_victim(p))
+	if (test_tsk_thread_flag(p, TIF_MEMDIE))
 		return false;
 
 	if (pm_nosig_freezing || cgroup_freezing(p))
@@ -73,13 +75,14 @@ bool __refrigerator(bool check_kthr_stop)
 		bool freeze;
 
 		raw_spin_lock_irq(&current->pi_lock);
-		WRITE_ONCE(current->__state, TASK_FROZEN);
+		set_current_state(TASK_FROZEN);
 		/* unstale saved_state so that __thaw_task() will wake us up */
 		current->saved_state = TASK_RUNNING;
 		raw_spin_unlock_irq(&current->pi_lock);
 
 		spin_lock_irq(&freezer_lock);
 		freeze = freezing(current) && !(check_kthr_stop && kthread_should_stop());
+		trace_android_rvh_refrigerator(pm_nosig_freezing);
 		spin_unlock_irq(&freezer_lock);
 
 		if (!freeze)
@@ -110,12 +113,7 @@ static int __set_task_frozen(struct task_struct *p, void *arg)
 {
 	unsigned int state = READ_ONCE(p->__state);
 
-	/*
-	 * Allow freezing the sched_delayed tasks; they will not execute until
-	 * ttwu() fixes them up, so it is safe to swap their state now, instead
-	 * of waiting for them to get fully dequeued.
-	 */
-	if (task_is_runnable(p))
+	if (p->on_rq)
 		return 0;
 
 	if (p != current && task_curr(p))
@@ -202,26 +200,18 @@ static int __restore_freezer_state(struct task_struct *p, void *arg)
 
 void __thaw_task(struct task_struct *p)
 {
-	guard(spinlock_irqsave)(&freezer_lock);
-	if (frozen(p) && !task_call_func(p, __restore_freezer_state, NULL))
-		wake_up_state(p, TASK_FROZEN);
-}
+	unsigned long flags;
 
-/*
- * thaw_process - Thaw a frozen process
- * @p: the process to be thawed
- *
- * Iterate over all threads of @p and call __thaw_task() on each.
- */
-void thaw_process(struct task_struct *p)
-{
-	struct task_struct *t;
+	spin_lock_irqsave(&freezer_lock, flags);
+	if (WARN_ON_ONCE(freezing(p)))
+		goto unlock;
 
-	rcu_read_lock();
-	for_each_thread(p, t) {
-		__thaw_task(t);
-	}
-	rcu_read_unlock();
+	if (!frozen(p) || task_call_func(p, __restore_freezer_state, NULL))
+		goto unlock;
+
+	wake_up_state(p, TASK_FROZEN);
+unlock:
+	spin_unlock_irqrestore(&freezer_lock, flags);
 }
 
 /**

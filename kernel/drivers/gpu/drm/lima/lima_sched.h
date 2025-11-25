@@ -88,12 +88,12 @@ struct lima_sched_pipe {
 int lima_sched_task_init(struct lima_sched_task *task,
 			 struct lima_sched_context *context,
 			 struct lima_bo **bos, int num_bos,
-			 struct lima_vm *vm,
-			 u64 drm_client_id);
+			 struct lima_vm *vm);
 void lima_sched_task_fini(struct lima_sched_task *task);
 
 int lima_sched_context_init(struct lima_sched_pipe *pipe,
-			    struct lima_sched_context *context);
+			    struct lima_sched_context *context,
+			    atomic_t *guilty);
 void lima_sched_context_fini(struct lima_sched_pipe *pipe,
 			     struct lima_sched_context *context);
 struct dma_fence *lima_sched_context_queue_task(struct lima_sched_task *task);

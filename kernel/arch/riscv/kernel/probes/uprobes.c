@@ -3,7 +3,6 @@
 #include <linux/highmem.h>
 #include <linux/ptrace.h>
 #include <linux/uprobes.h>
-#include <asm/insn.h>
 
 #include "decode-insn.h"
 
@@ -16,11 +15,6 @@ bool is_swbp_insn(uprobe_opcode_t *insn)
 #else
 	return *insn == UPROBE_SWBP_INSN;
 #endif
-}
-
-bool is_trap_insn(uprobe_opcode_t *insn)
-{
-	return riscv_insn_is_ebreak(*insn) || riscv_insn_is_c_ebreak(*insn);
 }
 
 unsigned long uprobe_get_swbp_addr(struct pt_regs *regs)
@@ -167,7 +161,6 @@ void arch_uprobe_copy_ixol(struct page *page, unsigned long vaddr,
 	/* Initialize the slot */
 	void *kaddr = kmap_atomic(page);
 	void *dst = kaddr + (vaddr & ~PAGE_MASK);
-	unsigned long start = (unsigned long)dst;
 
 	memcpy(dst, src, len);
 
@@ -177,6 +170,13 @@ void arch_uprobe_copy_ixol(struct page *page, unsigned long vaddr,
 		*(uprobe_opcode_t *)dst = __BUG_INSN_32;
 	}
 
-	flush_icache_range(start, start + len);
 	kunmap_atomic(kaddr);
+
+	/*
+	 * We probably need flush_icache_user_page() but it needs vma.
+	 * This should work on most of architectures by default. If
+	 * architecture needs to do something different it can define
+	 * its own version of the function.
+	 */
+	flush_dcache_page(page);
 }

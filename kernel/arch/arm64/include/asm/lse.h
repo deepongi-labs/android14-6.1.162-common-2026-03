@@ -4,7 +4,7 @@
 
 #include <asm/atomic_ll_sc.h>
 
-#ifdef CONFIG_ARM64_LSE_ATOMICS
+#if defined(CONFIG_ARM64_LSE_ATOMICS) && !defined(BUILD_FIPS140_KO)
 
 #define __LSE_PREAMBLE	".arch_extension lse\n"
 
@@ -16,9 +16,14 @@
 #include <asm/atomic_lse.h>
 #include <asm/cpucaps.h>
 
+static __always_inline bool system_uses_lse_atomics(void)
+{
+	return alternative_has_feature_likely(ARM64_HAS_LSE_ATOMICS);
+}
+
 #define __lse_ll_sc_body(op, ...)					\
 ({									\
-	alternative_has_cap_likely(ARM64_HAS_LSE_ATOMICS) ?		\
+	system_uses_lse_atomics() ?					\
 		__lse_##op(__VA_ARGS__) :				\
 		__ll_sc_##op(__VA_ARGS__);				\
 })
@@ -28,6 +33,8 @@
 	ALTERNATIVE(llsc, __LSE_PREAMBLE lse, ARM64_HAS_LSE_ATOMICS)
 
 #else	/* CONFIG_ARM64_LSE_ATOMICS */
+
+static inline bool system_uses_lse_atomics(void) { return false; }
 
 #define __lse_ll_sc_body(op, ...)		__ll_sc_##op(__VA_ARGS__)
 

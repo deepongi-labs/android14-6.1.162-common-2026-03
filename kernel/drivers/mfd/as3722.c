@@ -299,7 +299,7 @@ static const struct regmap_config as3722_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = AS3722_MAX_REGISTER,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.rd_table = &as3722_readable_table,
 	.wr_table = &as3722_writable_table,
 	.volatile_table = &as3722_volatile_table,
@@ -333,7 +333,8 @@ static int as3722_i2c_of_probe(struct i2c_client *i2c,
 	return 0;
 }
 
-static int as3722_i2c_probe(struct i2c_client *i2c)
+static int as3722_i2c_probe(struct i2c_client *i2c,
+			const struct i2c_device_id *id)
 {
 	struct as3722 *as3722;
 	unsigned long irq_flags;
@@ -394,9 +395,7 @@ static int as3722_i2c_probe(struct i2c_client *i2c)
 		return ret;
 	}
 
-	ret = devm_device_init_wakeup(as3722->dev);
-	if (ret)
-		return dev_err_probe(as3722->dev, ret, "Failed to init wakeup\n");
+	device_init_wakeup(as3722->dev, true);
 
 	dev_dbg(as3722->dev, "AS3722 core driver initialized successfully\n");
 	return 0;
@@ -432,8 +431,8 @@ static const struct of_device_id as3722_of_match[] = {
 MODULE_DEVICE_TABLE(of, as3722_of_match);
 
 static const struct i2c_device_id as3722_i2c_id[] = {
-	{ "as3722" },
-	{}
+	{ "as3722", 0 },
+	{},
 };
 MODULE_DEVICE_TABLE(i2c, as3722_i2c_id);
 

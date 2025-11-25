@@ -160,7 +160,7 @@ static int qla4xxx_eh_abort(struct scsi_cmnd *cmd);
 static int qla4xxx_eh_device_reset(struct scsi_cmnd *cmd);
 static int qla4xxx_eh_target_reset(struct scsi_cmnd *cmd);
 static int qla4xxx_eh_host_reset(struct scsi_cmnd *cmd);
-static int qla4xxx_sdev_init(struct scsi_device *device);
+static int qla4xxx_slave_alloc(struct scsi_device *device);
 static umode_t qla4_attr_is_visible(int param_type, int param);
 static int qla4xxx_host_reset(struct Scsi_Host *shost, int reset_type);
 
@@ -234,7 +234,7 @@ static struct scsi_host_template qla4xxx_driver_template = {
 	.eh_host_reset_handler	= qla4xxx_eh_host_reset,
 	.eh_timed_out		= qla4xxx_eh_cmd_timed_out,
 
-	.sdev_init		= qla4xxx_sdev_init,
+	.slave_alloc		= qla4xxx_slave_alloc,
 	.change_queue_depth	= scsi_change_queue_depth,
 
 	.this_id		= -1,
@@ -798,11 +798,11 @@ static int qla4xxx_get_chap_list(struct Scsi_Host *shost, uint16_t chap_tbl_idx,
 			continue;
 
 		chap_rec->chap_tbl_idx = i;
-		strscpy(chap_rec->username, chap_table->name,
-			sizeof(chap_rec->username));
-		chap_rec->password_length = strscpy(chap_rec->password,
-						    chap_table->secret,
-						    sizeof(chap_rec->password));
+		strlcpy(chap_rec->username, chap_table->name,
+			ISCSI_CHAP_AUTH_NAME_MAX_LEN);
+		strlcpy(chap_rec->password, chap_table->secret,
+			QL4_CHAP_MAX_SECRET_LEN);
+		chap_rec->password_length = chap_table->secret_len;
 
 		if (chap_table->flags & BIT_7) /* local */
 			chap_rec->chap_type = CHAP_TYPE_OUT;
@@ -4023,7 +4023,7 @@ static void qla4xxx_start_timer(struct scsi_qla_host *ha,
 
 static void qla4xxx_stop_timer(struct scsi_qla_host *ha)
 {
-	timer_delete_sync(&ha->timer);
+	del_timer_sync(&ha->timer);
 	ha->timer_active = 0;
 }
 
@@ -4104,7 +4104,7 @@ void qla4xxx_srb_compl(struct kref *ref)
  * The mid-level driver tries to ensure that queuecommand never gets
  * invoked concurrently with itself or the interrupt handler (although
  * the interrupt handler may call this routine as part of request-
- * completion handling). Unfortunately, it sometimes calls the scheduler
+ * completion handling).   Unfortunely, it sometimes calls the scheduler
  * in interrupt context which is a big NO! NO!.
  **/
 static int qla4xxx_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *cmd)
@@ -4553,7 +4553,7 @@ static void qla4xxx_check_relogin_flash_ddb(struct iscsi_cls_session *cls_sess)
  **/
 static void qla4xxx_timer(struct timer_list *t)
 {
-	struct scsi_qla_host *ha = timer_container_of(ha, t, timer);
+	struct scsi_qla_host *ha = from_timer(ha, t, timer);
 	int start_dpc = 0;
 	uint16_t w;
 
@@ -4647,7 +4647,7 @@ static int qla4xxx_cmd_wait(struct scsi_qla_host *ha)
 			cmd = scsi_host_find_tag(ha->host, index);
 			/*
 			 * We cannot just check if the index is valid,
-			 * because if we are run from the scsi eh, then
+			 * becase if we are run from the scsi eh, then
 			 * the scsi/block layer is going to prevent
 			 * the tag from being released.
 			 */
@@ -4952,7 +4952,7 @@ recover_ha_init_adapter:
 	/* Upon successful firmware/chip reset, re-initialize the adapter */
 	if (status == QLA_SUCCESS) {
 		/* For ISP-4xxx, force function 1 to always initialize
-		 * before function 3 to prevent both functions from
+		 * before function 3 to prevent both funcions from
 		 * stepping on top of the other */
 		if (is_qla40XX(ha) && (ha->mac_index == 3))
 			ssleep(6);
@@ -6064,8 +6064,8 @@ static int qla4xxx_get_bidi_chap(struct scsi_qla_host *ha, char *username,
 		if (!(chap_table->flags & BIT_6)) /* Not BIDI */
 			continue;
 
-		strscpy(password, chap_table->secret, QL4_CHAP_MAX_SECRET_LEN);
-		strscpy(username, chap_table->name, QL4_CHAP_MAX_NAME_LEN);
+		strlcpy(password, chap_table->secret, QL4_CHAP_MAX_SECRET_LEN);
+		strlcpy(username, chap_table->name, QL4_CHAP_MAX_NAME_LEN);
 		ret = 0;
 		break;
 	}
@@ -6293,8 +6293,8 @@ static void qla4xxx_get_param_ddb(struct ddb_entry *ddb_entry,
 
 	tddb->tpgt = sess->tpgt;
 	tddb->port = conn->persistent_port;
-	strscpy(tddb->iscsi_name, sess->targetname, sizeof(tddb->iscsi_name));
-	strscpy(tddb->ip_addr, conn->persistent_address, sizeof(tddb->ip_addr));
+	strlcpy(tddb->iscsi_name, sess->targetname, ISCSI_NAME_SIZE);
+	strlcpy(tddb->ip_addr, conn->persistent_address, DDB_IPADDR_LEN);
 }
 
 static void qla4xxx_convert_param_ddb(struct dev_db_entry *fw_ddb_entry,
@@ -6606,8 +6606,6 @@ static struct iscsi_endpoint *qla4xxx_get_ep_fwdb(struct scsi_qla_host *ha,
 
 	ep = qla4xxx_ep_connect(ha->host, (struct sockaddr *)dst_addr, 0);
 	vfree(dst_addr);
-	if (IS_ERR(ep))
-		return NULL;
 	return ep;
 }
 
@@ -6914,7 +6912,7 @@ static int qla4xxx_sess_conn_setup(struct scsi_qla_host *ha,
 	struct ddb_entry *ddb_entry = NULL;
 
 	/* Create session object, with INVALID_ENTRY,
-	 * the target_id would get set when we issue the login
+	 * the targer_id would get set when we issue the login
 	 */
 	cls_sess = iscsi_session_setup(&qla4xxx_iscsi_transport, ha->host,
 				       cmds_max, sizeof(struct ddb_entry),
@@ -7193,8 +7191,7 @@ exit_new_nt_list:
  *	1: if flashnode entry is non-persistent
  *	0: if flashnode entry is persistent
  **/
-static int qla4xxx_sysfs_ddb_is_non_persistent(struct device *dev,
-					       const void *data)
+static int qla4xxx_sysfs_ddb_is_non_persistent(struct device *dev, void *data)
 {
 	struct iscsi_bus_flash_session *fnode_sess;
 
@@ -7796,8 +7793,8 @@ static int qla4xxx_sysfs_ddb_logout(struct iscsi_bus_flash_session *fnode_sess,
 		goto exit_ddb_logout;
 	}
 
-	strscpy(flash_tddb->iscsi_name, fnode_sess->targetname,
-		sizeof(flash_tddb->iscsi_name));
+	strlcpy(flash_tddb->iscsi_name, fnode_sess->targetname,
+		ISCSI_NAME_SIZE);
 
 	if (!strncmp(fnode_sess->portal_type, PORTAL_TYPE_IPV6, 4))
 		sprintf(flash_tddb->ip_addr, "%pI6", fnode_conn->ipaddress);
@@ -8659,6 +8656,8 @@ static int qla4xxx_probe_adapter(struct pci_dev *pdev,
 	ha->host_no = host->host_no;
 	ha->func_num = PCI_FUNC(ha->pdev->devfn);
 
+	pci_enable_pcie_error_reporting(pdev);
+
 	/* Setup Runtime configurable options */
 	if (is_qla8022(ha)) {
 		ha->isp_ops = &qla4_82xx_isp_ops;
@@ -8811,7 +8810,7 @@ skip_retry_init:
 	DEBUG2(printk("scsi: %s: Starting kernel thread for "
 		      "qla4xxx_dpc\n", __func__));
 	sprintf(buf, "qla4xxx_%lu_dpc", ha->host_no);
-	ha->dpc_thread = alloc_ordered_workqueue("%s", WQ_MEM_RECLAIM, buf);
+	ha->dpc_thread = create_singlethread_workqueue(buf);
 	if (!ha->dpc_thread) {
 		ql4_printk(KERN_WARNING, ha, "Unable to start DPC thread!\n");
 		ret = -ENODEV;
@@ -8885,6 +8884,7 @@ probe_failed:
 	qla4xxx_free_adapter(ha);
 
 probe_failed_ioconfig:
+	pci_disable_pcie_error_reporting(pdev);
 	scsi_host_put(ha->host);
 
 probe_disable_device:
@@ -9039,6 +9039,7 @@ static void qla4xxx_remove_adapter(struct pci_dev *pdev)
 
 	scsi_host_put(ha->host);
 
+	pci_disable_pcie_error_reporting(pdev);
 	pci_disable_device(pdev);
 }
 
@@ -9057,7 +9058,7 @@ static void qla4xxx_config_dma_addressing(struct scsi_qla_host *ha)
 	}
 }
 
-static int qla4xxx_sdev_init(struct scsi_device *sdev)
+static int qla4xxx_slave_alloc(struct scsi_device *sdev)
 {
 	struct iscsi_cls_session *cls_sess;
 	struct iscsi_session *sess;
@@ -9851,7 +9852,7 @@ static const struct pci_error_handlers qla4xxx_err_handler = {
 	.resume = qla4xxx_pci_resume,
 };
 
-static const struct pci_device_id qla4xxx_pci_tbl[] = {
+static struct pci_device_id qla4xxx_pci_tbl[] = {
 	{
 		.vendor		= PCI_VENDOR_ID_QLOGIC,
 		.device		= PCI_DEVICE_ID_QLOGIC_ISP4010,

@@ -74,11 +74,6 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, bool abnr)
 	int rc;
 	int xflag;
 
-	if (isReadOnly(ip)) {
-		jfs_error(ip->i_sb, "read-only filesystem\n");
-		return -EIO;
-	}
-
 	/* This blocks if we are low on resources */
 	txBeginAnon(ip->i_sb);
 
@@ -171,7 +166,7 @@ extAlloc(struct inode *ip, s64 xlen, s64 pno, xad_t * xp, bool abnr)
 	/*
 	 * COMMIT_SyncList flags an anonymous tlock on page that is on
 	 * sync list.
-	 * We need to commit the inode to get the page written to the disk.
+	 * We need to commit the inode to get the page written disk.
 	 */
 	if (test_and_clear_cflag(COMMIT_Synclist,ip))
 		jfs_commit_inode(ip, 0);
@@ -257,11 +252,6 @@ out:
 int extRecord(struct inode *ip, xad_t * xp)
 {
 	int rc;
-
-	if (isReadOnly(ip)) {
-		jfs_error(ip->i_sb, "read-only filesystem\n");
-		return -EIO;
-	}
 
 	txBeginAnon(ip->i_sb);
 

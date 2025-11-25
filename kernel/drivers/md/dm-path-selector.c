@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2003 Sistina Software.
  * Copyright (C) 2004 Red Hat, Inc. All rights reserved.
@@ -115,18 +114,17 @@ int dm_register_path_selector(struct path_selector_type *pst)
 
 	return r;
 }
-EXPORT_SYMBOL_GPL(dm_register_path_selector);
 
-void dm_unregister_path_selector(struct path_selector_type *pst)
+int dm_unregister_path_selector(struct path_selector_type *pst)
 {
 	struct ps_internal *psi;
 
 	down_write(&_ps_lock);
 
 	psi = __find_path_selector_type(pst->name);
-	if (WARN_ON(!psi)) {
+	if (!psi) {
 		up_write(&_ps_lock);
-		return;
+		return -EINVAL;
 	}
 
 	list_del(&psi->list);
@@ -134,5 +132,9 @@ void dm_unregister_path_selector(struct path_selector_type *pst)
 	up_write(&_ps_lock);
 
 	kfree(psi);
+
+	return 0;
 }
+
+EXPORT_SYMBOL_GPL(dm_register_path_selector);
 EXPORT_SYMBOL_GPL(dm_unregister_path_selector);

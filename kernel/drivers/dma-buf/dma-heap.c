@@ -7,16 +7,17 @@
  */
 
 #include <linux/cdev.h>
+#include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/dma-buf.h>
-#include <linux/dma-heap.h>
 #include <linux/err.h>
-#include <linux/export.h>
-#include <linux/list.h>
-#include <linux/nospec.h>
-#include <linux/syscalls.h>
-#include <linux/uaccess.h>
 #include <linux/xarray.h>
+#include <linux/list.h>
+#include <linux/slab.h>
+#include <linux/nospec.h>
+#include <linux/uaccess.h>
+#include <linux/syscalls.h>
+#include <linux/dma-heap.h>
 #include <uapi/linux/dma-heap.h>
 
 #define DEVNAME "dma_heap"
@@ -27,7 +28,6 @@
  * struct dma_heap - represents a dmabuf heap in the system
  * @name:		used for debugging/device-node name
  * @ops:		ops struct for this heap
- * @priv:		private data for this heap
  * @heap_devt		heap device node
  * @list		list head connecting to list of heaps
  * @heap_cdev		heap char device
@@ -77,8 +77,8 @@ void dma_heap_buffer_free(struct dma_buf *dmabuf)
 EXPORT_SYMBOL_GPL(dma_heap_buffer_free);
 
 struct dma_buf *dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
-				      u32 fd_flags,
-				      u64 heap_flags)
+				      unsigned int fd_flags,
+				      unsigned int heap_flags)
 {
 	if (fd_flags & ~DMA_HEAP_VALID_FD_FLAGS)
 		return ERR_PTR(-EINVAL);
@@ -98,8 +98,8 @@ struct dma_buf *dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
 EXPORT_SYMBOL_GPL(dma_heap_buffer_alloc);
 
 int dma_heap_bufferfd_alloc(struct dma_heap *heap, size_t len,
-			    u32 fd_flags,
-			    u64 heap_flags)
+			    unsigned int fd_flags,
+			    unsigned int heap_flags)
 {
 	struct dma_buf *dmabuf;
 	int fd;
@@ -230,17 +230,17 @@ static const struct file_operations dma_heap_fops = {
 };
 
 /**
- * dma_heap_get_drvdata - get per-heap driver data
+ * dma_heap_get_drvdata() - get per-subdriver data for the heap
  * @heap: DMA-Heap to retrieve private data for
  *
  * Returns:
- * The per-heap data for the heap.
+ * The per-subdriver data for the heap.
  */
 void *dma_heap_get_drvdata(struct dma_heap *heap)
 {
 	return heap->priv;
 }
-EXPORT_SYMBOL_NS_GPL(dma_heap_get_drvdata, "DMA_BUF_HEAP");
+EXPORT_SYMBOL_GPL(dma_heap_get_drvdata);
 
 static void dma_heap_release(struct kref *ref)
 {
@@ -283,8 +283,8 @@ struct device *dma_heap_get_dev(struct dma_heap *heap)
 EXPORT_SYMBOL_GPL(dma_heap_get_dev);
 
 /**
- * dma_heap_get_name - get heap name
- * @heap: DMA-Heap to retrieve the name of
+ * dma_heap_get_name() - get heap name
+ * @heap: DMA-Heap to retrieve private data for
  *
  * Returns:
  * The char* for the heap name.
@@ -293,12 +293,8 @@ const char *dma_heap_get_name(struct dma_heap *heap)
 {
 	return heap->name;
 }
-EXPORT_SYMBOL_NS_GPL(dma_heap_get_name, "DMA_BUF_HEAP");
+EXPORT_SYMBOL_GPL(dma_heap_get_name);
 
-/**
- * dma_heap_add - adds a heap to dmabuf heaps
- * @exp_info: information needed to register this heap
- */
 struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info)
 {
 	struct dma_heap *heap, *h, *err_ret;
@@ -387,28 +383,88 @@ err0:
 	kfree(heap);
 	return err_ret;
 }
-EXPORT_SYMBOL_NS_GPL(dma_heap_add, "DMA_BUF_HEAP");
+EXPORT_SYMBOL_GPL(dma_heap_add);
 
-static char *dma_heap_devnode(const struct device *dev, umode_t *mode)
+static char *dma_heap_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "dma_heap/%s", dev_name(dev));
+}
+
+static ssize_t total_pools_kb_show(struct kobject *kobj,
+				   struct kobj_attribute *attr, char *buf)
+{
+	struct dma_heap *heap;
+	u64 total_pool_size = 0;
+
+	mutex_lock(&heap_list_lock);
+	list_for_each_entry(heap, &heap_list, list) {
+		if (heap->ops->get_pool_size)
+			total_pool_size += heap->ops->get_pool_size(heap);
+	}
+	mutex_unlock(&heap_list_lock);
+
+	return sysfs_emit(buf, "%llu\n", total_pool_size / 1024);
+}
+
+static struct kobj_attribute total_pools_kb_attr =
+	__ATTR_RO(total_pools_kb);
+
+static struct attribute *dma_heap_sysfs_attrs[] = {
+	&total_pools_kb_attr.attr,
+	NULL,
+};
+
+ATTRIBUTE_GROUPS(dma_heap_sysfs);
+
+static struct kobject *dma_heap_kobject;
+
+static int dma_heap_sysfs_setup(void)
+{
+	int ret;
+
+	dma_heap_kobject = kobject_create_and_add("dma_heap", kernel_kobj);
+	if (!dma_heap_kobject)
+		return -ENOMEM;
+
+	ret = sysfs_create_groups(dma_heap_kobject, dma_heap_sysfs_groups);
+	if (ret) {
+		kobject_put(dma_heap_kobject);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void dma_heap_sysfs_teardown(void)
+{
+	kobject_put(dma_heap_kobject);
 }
 
 static int dma_heap_init(void)
 {
 	int ret;
 
-	ret = alloc_chrdev_region(&dma_heap_devt, 0, NUM_HEAP_MINORS, DEVNAME);
+	ret = dma_heap_sysfs_setup();
 	if (ret)
 		return ret;
 
-	dma_heap_class = class_create(DEVNAME);
+	ret = alloc_chrdev_region(&dma_heap_devt, 0, NUM_HEAP_MINORS, DEVNAME);
+	if (ret)
+		goto err_chrdev;
+
+	dma_heap_class = class_create(THIS_MODULE, DEVNAME);
 	if (IS_ERR(dma_heap_class)) {
-		unregister_chrdev_region(dma_heap_devt, NUM_HEAP_MINORS);
-		return PTR_ERR(dma_heap_class);
+		ret = PTR_ERR(dma_heap_class);
+		goto err_class;
 	}
 	dma_heap_class->devnode = dma_heap_devnode;
 
 	return 0;
+
+err_class:
+	unregister_chrdev_region(dma_heap_devt, NUM_HEAP_MINORS);
+err_chrdev:
+	dma_heap_sysfs_teardown();
+	return ret;
 }
 subsys_initcall(dma_heap_init);

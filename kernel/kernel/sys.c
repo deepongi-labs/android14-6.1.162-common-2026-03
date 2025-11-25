@@ -15,7 +15,6 @@
 #include <linux/highuid.h>
 #include <linux/fs.h>
 #include <linux/kmod.h>
-#include <linux/ksm.h>
 #include <linux/perf_event.h>
 #include <linux/resource.h>
 #include <linux/kernel.h>
@@ -52,7 +51,6 @@
 #include <linux/user_namespace.h>
 #include <linux/time_namespace.h>
 #include <linux/binfmts.h>
-#include <linux/futex.h>
 
 #include <linux/sched.h>
 #include <linux/sched/autogroup.h>
@@ -75,8 +73,6 @@
 #include <linux/uaccess.h>
 #include <asm/io.h>
 #include <asm/unistd.h>
-
-#include <trace/events/task.h>
 
 #include "uid16.h"
 
@@ -145,21 +141,6 @@
 #ifndef GET_TAGGED_ADDR_CTRL
 # define GET_TAGGED_ADDR_CTRL()		(-EINVAL)
 #endif
-#ifndef RISCV_V_SET_CONTROL
-# define RISCV_V_SET_CONTROL(a)		(-EINVAL)
-#endif
-#ifndef RISCV_V_GET_CONTROL
-# define RISCV_V_GET_CONTROL()		(-EINVAL)
-#endif
-#ifndef RISCV_SET_ICACHE_FLUSH_CTX
-# define RISCV_SET_ICACHE_FLUSH_CTX(a, b)	(-EINVAL)
-#endif
-#ifndef PPC_GET_DEXCR_ASPECT
-# define PPC_GET_DEXCR_ASPECT(a, b)	(-EINVAL)
-#endif
-#ifndef PPC_SET_DEXCR_ASPECT
-# define PPC_SET_DEXCR_ASPECT(a, b, c)	(-EINVAL)
-#endif
 
 /*
  * this is where the system-wide overflow UID and GID are defined, for
@@ -182,35 +163,6 @@ int fs_overflowgid = DEFAULT_FS_OVERFLOWGID;
 
 EXPORT_SYMBOL(fs_overflowuid);
 EXPORT_SYMBOL(fs_overflowgid);
-
-static const struct ctl_table overflow_sysctl_table[] = {
-	{
-		.procname	= "overflowuid",
-		.data		= &overflowuid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_MAXOLDUID,
-	},
-	{
-		.procname	= "overflowgid",
-		.data		= &overflowgid,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_MAXOLDUID,
-	},
-};
-
-static int __init init_overflow_sysctl(void)
-{
-	register_sysctl_init("kernel", overflow_sysctl_table);
-	return 0;
-}
-
-postcore_initcall(init_overflow_sysctl);
 
 /*
  * Returns true if current's euid is same as p's uid or euid,
@@ -1117,7 +1069,6 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 {
 	struct task_struct *p;
 	struct task_struct *group_leader = current->group_leader;
-	struct pid *pids[PIDTYPE_MAX] = { 0 };
 	struct pid *pgrp;
 	int err;
 
@@ -1175,14 +1126,13 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 		goto out;
 
 	if (task_pgrp(p) != pgrp)
-		change_pid(pids, p, PIDTYPE_PGID, pgrp);
+		change_pid(p, PIDTYPE_PGID, pgrp);
 
 	err = 0;
 out:
 	/* All paths lead to here, thus we are safe. -DaveM */
 	write_unlock_irq(&tasklist_lock);
 	rcu_read_unlock();
-	free_pids(pids);
 	return err;
 }
 
@@ -1256,22 +1206,21 @@ out:
 	return retval;
 }
 
-static void set_special_pids(struct pid **pids, struct pid *pid)
+static void set_special_pids(struct pid *pid)
 {
 	struct task_struct *curr = current->group_leader;
 
 	if (task_session(curr) != pid)
-		change_pid(pids, curr, PIDTYPE_SID, pid);
+		change_pid(curr, PIDTYPE_SID, pid);
 
 	if (task_pgrp(curr) != pid)
-		change_pid(pids, curr, PIDTYPE_PGID, pid);
+		change_pid(curr, PIDTYPE_PGID, pid);
 }
 
 int ksys_setsid(void)
 {
 	struct task_struct *group_leader = current->group_leader;
 	struct pid *sid = task_pid(group_leader);
-	struct pid *pids[PIDTYPE_MAX] = { 0 };
 	pid_t session = pid_vnr(sid);
 	int err = -EPERM;
 
@@ -1287,14 +1236,13 @@ int ksys_setsid(void)
 		goto out;
 
 	group_leader->signal->leader = 1;
-	set_special_pids(pids, sid);
+	set_special_pids(sid);
 
 	proc_clear_tty(group_leader);
 
 	err = session;
 out:
 	write_unlock_irq(&tasklist_lock);
-	free_pids(pids);
 	if (err > 0) {
 		proc_sid_connector(group_leader);
 		sched_autogroup_create_attach(group_leader);
@@ -1736,7 +1684,6 @@ SYSCALL_DEFINE4(prlimit64, pid_t, pid, unsigned int, resource,
 	struct rlimit old, new;
 	struct task_struct *tsk;
 	unsigned int checkflags = 0;
-	bool need_tasklist;
 	int ret;
 
 	if (old_rlim)
@@ -1763,25 +1710,8 @@ SYSCALL_DEFINE4(prlimit64, pid_t, pid, unsigned int, resource,
 	get_task_struct(tsk);
 	rcu_read_unlock();
 
-	need_tasklist = !same_thread_group(tsk, current);
-	if (need_tasklist) {
-		/*
-		 * Ensure we can't race with group exit or de_thread(),
-		 * so tsk->group_leader can't be freed or changed until
-		 * read_unlock(tasklist_lock) below.
-		 */
-		read_lock(&tasklist_lock);
-		if (!pid_alive(tsk))
-			ret = -ESRCH;
-	}
-
-	if (!ret) {
-		ret = do_prlimit(tsk, resource, new_rlim ? &new : NULL,
-				old_rlim ? &old : NULL);
-	}
-
-	if (need_tasklist)
-		read_unlock(&tasklist_lock);
+	ret = do_prlimit(tsk, resource, new_rlim ? &new : NULL,
+			old_rlim ? &old : NULL);
 
 	if (!ret && old_rlim) {
 		rlim_to_rlim64(&old, &old64);
@@ -1967,28 +1897,33 @@ SYSCALL_DEFINE1(umask, int, mask)
 
 static int prctl_set_mm_exe_file(struct mm_struct *mm, unsigned int fd)
 {
-	CLASS(fd, exe)(fd);
+	struct fd exe;
 	struct inode *inode;
 	int err;
 
-	if (fd_empty(exe))
+	exe = fdget(fd);
+	if (!exe.file)
 		return -EBADF;
 
-	inode = file_inode(fd_file(exe));
+	inode = file_inode(exe.file);
 
 	/*
 	 * Because the original mm->exe_file points to executable file, make
 	 * sure that this one is executable as well, to avoid breaking an
 	 * overall picture.
 	 */
-	if (!S_ISREG(inode->i_mode) || path_noexec(&fd_file(exe)->f_path))
-		return -EACCES;
+	err = -EACCES;
+	if (!S_ISREG(inode->i_mode) || path_noexec(&exe.file->f_path))
+		goto exit;
 
-	err = file_permission(fd_file(exe), MAY_EXEC);
+	err = file_permission(exe.file, MAY_EXEC);
 	if (err)
-		return err;
+		goto exit;
 
-	return replace_mm_exe_file(mm, fd_file(exe));
+	err = replace_mm_exe_file(mm, exe.file);
+exit:
+	fdput(exe);
+	return err;
 }
 
 /*
@@ -2375,31 +2310,61 @@ int __weak arch_prctl_spec_ctrl_set(struct task_struct *t, unsigned long which,
 	return -EINVAL;
 }
 
-int __weak arch_get_shadow_stack_status(struct task_struct *t, unsigned long __user *status)
-{
-	return -EINVAL;
-}
-
-int __weak arch_set_shadow_stack_status(struct task_struct *t, unsigned long status)
-{
-	return -EINVAL;
-}
-
-int __weak arch_lock_shadow_stack_status(struct task_struct *t, unsigned long status)
-{
-	return -EINVAL;
-}
-
 #define PR_IO_FLUSHER (PF_MEMALLOC_NOIO | PF_LOCAL_THROTTLE)
+
+#ifdef CONFIG_ANON_VMA_NAME
+
+#define ANON_VMA_NAME_MAX_LEN		80
+#define ANON_VMA_NAME_INVALID_CHARS	"\\`$[]"
+
+static inline bool is_valid_name_char(char ch)
+{
+	/* printable ascii characters, excluding ANON_VMA_NAME_INVALID_CHARS */
+	return ch > 0x1f && ch < 0x7f &&
+		!strchr(ANON_VMA_NAME_INVALID_CHARS, ch);
+}
 
 static int prctl_set_vma(unsigned long opt, unsigned long addr,
 			 unsigned long size, unsigned long arg)
 {
+	struct mm_struct *mm = current->mm;
+	const char __user *uname;
+	struct anon_vma_name *anon_name = NULL;
+	bool bypass = false;
 	int error;
 
 	switch (opt) {
 	case PR_SET_VMA_ANON_NAME:
-		error = set_anon_vma_name(addr, size, (const char __user *)arg);
+		uname = (const char __user *)arg;
+		if (uname) {
+			char *name, *pch;
+
+			name = strndup_user(uname, ANON_VMA_NAME_MAX_LEN);
+			if (IS_ERR(name))
+				return PTR_ERR(name);
+
+			for (pch = name; *pch != '\0'; pch++) {
+				if (!is_valid_name_char(*pch)) {
+					kfree(name);
+					return -EINVAL;
+				}
+			}
+			/* anon_vma has its own copy */
+			anon_name = anon_vma_name_alloc(name);
+			kfree(name);
+			if (!anon_name)
+				return -ENOMEM;
+
+		}
+
+		trace_android_rvh_pr_set_vma_name_bypass(mm, addr, size, anon_name,
+			      &error, &bypass);
+		if (bypass)
+			return error;
+		mmap_write_lock(mm);
+		error = madvise_set_anon_name(mm, addr, size, anon_name);
+		mmap_write_unlock(mm);
+		anon_vma_name_put(anon_name);
 		break;
 	default:
 		error = -EINVAL;
@@ -2408,114 +2373,13 @@ static int prctl_set_vma(unsigned long opt, unsigned long addr,
 	return error;
 }
 
-static inline unsigned long get_current_mdwe(void)
+#else /* CONFIG_ANON_VMA_NAME */
+static int prctl_set_vma(unsigned long opt, unsigned long start,
+			 unsigned long size, unsigned long arg)
 {
-	unsigned long ret = 0;
-
-	if (mm_flags_test(MMF_HAS_MDWE, current->mm))
-		ret |= PR_MDWE_REFUSE_EXEC_GAIN;
-	if (mm_flags_test(MMF_HAS_MDWE_NO_INHERIT, current->mm))
-		ret |= PR_MDWE_NO_INHERIT;
-
-	return ret;
+	return -EINVAL;
 }
-
-static inline int prctl_set_mdwe(unsigned long bits, unsigned long arg3,
-				 unsigned long arg4, unsigned long arg5)
-{
-	unsigned long current_bits;
-
-	if (arg3 || arg4 || arg5)
-		return -EINVAL;
-
-	if (bits & ~(PR_MDWE_REFUSE_EXEC_GAIN | PR_MDWE_NO_INHERIT))
-		return -EINVAL;
-
-	/* NO_INHERIT only makes sense with REFUSE_EXEC_GAIN */
-	if (bits & PR_MDWE_NO_INHERIT && !(bits & PR_MDWE_REFUSE_EXEC_GAIN))
-		return -EINVAL;
-
-	/*
-	 * EOPNOTSUPP might be more appropriate here in principle, but
-	 * existing userspace depends on EINVAL specifically.
-	 */
-	if (!arch_memory_deny_write_exec_supported())
-		return -EINVAL;
-
-	current_bits = get_current_mdwe();
-	if (current_bits && current_bits != bits)
-		return -EPERM; /* Cannot unset the flags */
-
-	if (bits & PR_MDWE_NO_INHERIT)
-		mm_flags_set(MMF_HAS_MDWE_NO_INHERIT, current->mm);
-	if (bits & PR_MDWE_REFUSE_EXEC_GAIN)
-		mm_flags_set(MMF_HAS_MDWE, current->mm);
-
-	return 0;
-}
-
-static inline int prctl_get_mdwe(unsigned long arg2, unsigned long arg3,
-				 unsigned long arg4, unsigned long arg5)
-{
-	if (arg2 || arg3 || arg4 || arg5)
-		return -EINVAL;
-	return get_current_mdwe();
-}
-
-static int prctl_get_auxv(void __user *addr, unsigned long len)
-{
-	struct mm_struct *mm = current->mm;
-	unsigned long size = min_t(unsigned long, sizeof(mm->saved_auxv), len);
-
-	if (size && copy_to_user(addr, mm->saved_auxv, size))
-		return -EFAULT;
-	return sizeof(mm->saved_auxv);
-}
-
-static int prctl_get_thp_disable(unsigned long arg2, unsigned long arg3,
-				 unsigned long arg4, unsigned long arg5)
-{
-	struct mm_struct *mm = current->mm;
-
-	if (arg2 || arg3 || arg4 || arg5)
-		return -EINVAL;
-
-	/* If disabled, we return "1 | flags", otherwise 0. */
-	if (mm_flags_test(MMF_DISABLE_THP_COMPLETELY, mm))
-		return 1;
-	else if (mm_flags_test(MMF_DISABLE_THP_EXCEPT_ADVISED, mm))
-		return 1 | PR_THP_DISABLE_EXCEPT_ADVISED;
-	return 0;
-}
-
-static int prctl_set_thp_disable(bool thp_disable, unsigned long flags,
-				 unsigned long arg4, unsigned long arg5)
-{
-	struct mm_struct *mm = current->mm;
-
-	if (arg4 || arg5)
-		return -EINVAL;
-
-	/* Flags are only allowed when disabling. */
-	if ((!thp_disable && flags) || (flags & ~PR_THP_DISABLE_EXCEPT_ADVISED))
-		return -EINVAL;
-	if (mmap_write_lock_killable(current->mm))
-		return -EINTR;
-	if (thp_disable) {
-		if (flags & PR_THP_DISABLE_EXCEPT_ADVISED) {
-			mm_flags_clear(MMF_DISABLE_THP_COMPLETELY, mm);
-			mm_flags_set(MMF_DISABLE_THP_EXCEPT_ADVISED, mm);
-		} else {
-			mm_flags_set(MMF_DISABLE_THP_COMPLETELY, mm);
-			mm_flags_clear(MMF_DISABLE_THP_EXCEPT_ADVISED, mm);
-		}
-	} else {
-		mm_flags_clear(MMF_DISABLE_THP_COMPLETELY, mm);
-		mm_flags_clear(MMF_DISABLE_THP_EXCEPT_ADVISED, mm);
-	}
-	mmap_write_unlock(current->mm);
-	return 0;
-}
+#endif /* CONFIG_ANON_VMA_NAME */
 
 SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		unsigned long, arg4, unsigned long, arg5)
@@ -2535,17 +2399,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			error = -EINVAL;
 			break;
 		}
-		/*
-		 * Ensure that either:
-		 *
-		 * 1. Subsequent getppid() calls reflect the parent process having died.
-		 * 2. forget_original_parent() will send the new me->pdeath_signal.
-		 *
-		 * Also prevent the read of me->pdeath_signal from being a data race.
-		 */
-		read_lock(&tasklist_lock);
 		me->pdeath_signal = arg2;
-		read_unlock(&tasklist_lock);
 		break;
 	case PR_GET_PDEATHSIG:
 		error = put_user(me->pdeath_signal, (int __user *)arg2);
@@ -2630,7 +2484,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			error = current->timer_slack_ns;
 		break;
 	case PR_SET_TIMERSLACK:
-		if (rt_or_dl_task_policy(current))
+		if (task_is_realtime(current))
 			break;
 		if (arg2 <= 0)
 			current->timer_slack_ns =
@@ -2700,10 +2554,20 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			return -EINVAL;
 		return task_no_new_privs(current) ? 1 : 0;
 	case PR_GET_THP_DISABLE:
-		error = prctl_get_thp_disable(arg2, arg3, arg4, arg5);
+		if (arg2 || arg3 || arg4 || arg5)
+			return -EINVAL;
+		error = !!test_bit(MMF_DISABLE_THP, &me->mm->flags);
 		break;
 	case PR_SET_THP_DISABLE:
-		error = prctl_set_thp_disable(arg2, arg3, arg4, arg5);
+		if (arg3 || arg4 || arg5)
+			return -EINVAL;
+		if (mmap_write_lock_killable(me->mm))
+			return -EINTR;
+		if (arg2)
+			set_bit(MMF_DISABLE_THP, &me->mm->flags);
+		else
+			clear_bit(MMF_DISABLE_THP, &me->mm->flags);
+		mmap_write_unlock(me->mm);
 		break;
 	case PR_MPX_ENABLE_MANAGEMENT:
 	case PR_MPX_DISABLE_MANAGEMENT:
@@ -2794,84 +2658,10 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		error = sched_core_share_pid(arg2, arg3, arg4, arg5);
 		break;
 #endif
-	case PR_SET_MDWE:
-		error = prctl_set_mdwe(arg2, arg3, arg4, arg5);
-		break;
-	case PR_GET_MDWE:
-		error = prctl_get_mdwe(arg2, arg3, arg4, arg5);
-		break;
-	case PR_PPC_GET_DEXCR:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		error = PPC_GET_DEXCR_ASPECT(me, arg2);
-		break;
-	case PR_PPC_SET_DEXCR:
-		if (arg4 || arg5)
-			return -EINVAL;
-		error = PPC_SET_DEXCR_ASPECT(me, arg2, arg3);
-		break;
 	case PR_SET_VMA:
 		error = prctl_set_vma(arg2, arg3, arg4, arg5);
 		break;
-	case PR_GET_AUXV:
-		if (arg4 || arg5)
-			return -EINVAL;
-		error = prctl_get_auxv((void __user *)arg2, arg3);
-		break;
-#ifdef CONFIG_KSM
-	case PR_SET_MEMORY_MERGE:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		if (mmap_write_lock_killable(me->mm))
-			return -EINTR;
-
-		if (arg2)
-			error = ksm_enable_merge_any(me->mm);
-		else
-			error = ksm_disable_merge_any(me->mm);
-		mmap_write_unlock(me->mm);
-		break;
-	case PR_GET_MEMORY_MERGE:
-		if (arg2 || arg3 || arg4 || arg5)
-			return -EINVAL;
-
-		error = !!mm_flags_test(MMF_VM_MERGE_ANY, me->mm);
-		break;
-#endif
-	case PR_RISCV_V_SET_CONTROL:
-		error = RISCV_V_SET_CONTROL(arg2);
-		break;
-	case PR_RISCV_V_GET_CONTROL:
-		error = RISCV_V_GET_CONTROL();
-		break;
-	case PR_RISCV_SET_ICACHE_FLUSH_CTX:
-		error = RISCV_SET_ICACHE_FLUSH_CTX(arg2, arg3);
-		break;
-	case PR_GET_SHADOW_STACK_STATUS:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		error = arch_get_shadow_stack_status(me, (unsigned long __user *) arg2);
-		break;
-	case PR_SET_SHADOW_STACK_STATUS:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		error = arch_set_shadow_stack_status(me, arg2);
-		break;
-	case PR_LOCK_SHADOW_STACK_STATUS:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		error = arch_lock_shadow_stack_status(me, arg2);
-		break;
-	case PR_TIMER_CREATE_RESTORE_IDS:
-		if (arg3 || arg4 || arg5)
-			return -EINVAL;
-		error = posixtimer_create_prctl(arg2);
-		break;
-	case PR_FUTEX_HASH:
-		error = futex_hash_prctl(arg2, arg3, arg4);
-		break;
 	default:
-		trace_task_prctl_unknown(option, arg2, arg3, arg4, arg5);
 		error = -EINVAL;
 		break;
 	}

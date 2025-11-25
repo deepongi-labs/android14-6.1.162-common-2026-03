@@ -51,6 +51,7 @@
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/pci.h>
+#include <linux/aer.h>
 #include <linux/rtnetlink.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
@@ -1175,7 +1176,7 @@ static u16 cxgb_select_queue(struct net_device *dev, struct sk_buff *skb,
 		txq = netdev_pick_tx(dev, skb, sb_dev);
 		if (xfrm_offload(skb) || is_ptp_enabled(skb, dev) ||
 		    skb->encapsulation ||
-		    tls_is_skb_tx_device_offloaded(skb) ||
+		    cxgb4_is_ktls_skb(skb) ||
 		    (proto != IPPROTO_TCP && proto != IPPROTO_UDP))
 			txq = txq % pi->nqsets;
 
@@ -2191,6 +2192,18 @@ void cxgb4_get_tcp_stats(struct pci_dev *pdev, struct tp_tcp_stats *v4,
 }
 EXPORT_SYMBOL(cxgb4_get_tcp_stats);
 
+void cxgb4_iscsi_init(struct net_device *dev, unsigned int tag_mask,
+		      const unsigned int *pgsz_order)
+{
+	struct adapter *adap = netdev2adap(dev);
+
+	t4_write_reg(adap, ULP_RX_ISCSI_TAGMASK_A, tag_mask);
+	t4_write_reg(adap, ULP_RX_ISCSI_PSZ_A, HPZ0_V(pgsz_order[0]) |
+		     HPZ1_V(pgsz_order[1]) | HPZ2_V(pgsz_order[2]) |
+		     HPZ3_V(pgsz_order[3]));
+}
+EXPORT_SYMBOL(cxgb4_iscsi_init);
+
 int cxgb4_flush_eq_cache(struct net_device *dev)
 {
 	struct adapter *adap = netdev2adap(dev);
@@ -3171,7 +3184,7 @@ static int cxgb_change_mtu(struct net_device *dev, int new_mtu)
 	ret = t4_set_rxmode(pi->adapter, pi->adapter->mbox, pi->viid,
 			    pi->viid_mirror, new_mtu, -1, -1, -1, -1, true);
 	if (!ret)
-		WRITE_ONCE(dev->mtu, new_mtu);
+		dev->mtu = new_mtu;
 	return ret;
 }
 
@@ -3297,7 +3310,7 @@ static int cxgb4_mgmt_set_vf_rate(struct net_device *dev, int vf,
 	}
 
 	if (max_tx_rate == 0) {
-		/* unbind VF to any Traffic Class */
+		/* unbind VF to to any Traffic Class */
 		fw_pfvf =
 		    (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_PFVF) |
 		     FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_PFVF_SCHEDCLASS_ETH));
@@ -4816,7 +4829,7 @@ static int adap_init0(struct adapter *adap, int vpd_skip)
 			goto bye;
 		}
 
-		/* Get FW from /lib/firmware/ */
+		/* Get FW from from /lib/firmware/ */
 		ret = request_firmware(&fw, fw_info->fw_mod_name,
 				       adap->pdev_dev);
 		if (ret < 0) {
@@ -6480,23 +6493,21 @@ static const struct tlsdev_ops cxgb4_ktls_ops = {
 
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
 
-static int cxgb4_xfrm_add_state(struct net_device *dev,
-				struct xfrm_state *x,
-				struct netlink_ext_ack *extack)
+static int cxgb4_xfrm_add_state(struct xfrm_state *x)
 {
-	struct adapter *adap = netdev2adap(dev);
+	struct adapter *adap = netdev2adap(x->xso.dev);
 	int ret;
 
 	if (!mutex_trylock(&uld_mutex)) {
-		NL_SET_ERR_MSG_MOD(extack, "crypto uld critical resource is under use");
+		dev_dbg(adap->pdev_dev,
+			"crypto uld critical resource is under use\n");
 		return -EBUSY;
 	}
 	ret = chcr_offload_state(adap, CXGB4_XFRMDEV_OPS);
 	if (ret)
 		goto out_unlock;
 
-	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(dev, x,
-									extack);
+	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -6504,9 +6515,9 @@ out_unlock:
 	return ret;
 }
 
-static void cxgb4_xfrm_del_state(struct net_device *dev, struct xfrm_state *x)
+static void cxgb4_xfrm_del_state(struct xfrm_state *x)
 {
-	struct adapter *adap = netdev2adap(dev);
+	struct adapter *adap = netdev2adap(x->xso.dev);
 
 	if (!mutex_trylock(&uld_mutex)) {
 		dev_dbg(adap->pdev_dev,
@@ -6516,15 +6527,15 @@ static void cxgb4_xfrm_del_state(struct net_device *dev, struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_delete(dev, x);
+	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_delete(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
 }
 
-static void cxgb4_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
+static void cxgb4_xfrm_free_state(struct xfrm_state *x)
 {
-	struct adapter *adap = netdev2adap(dev);
+	struct adapter *adap = netdev2adap(x->xso.dev);
 
 	if (!mutex_trylock(&uld_mutex)) {
 		dev_dbg(adap->pdev_dev,
@@ -6534,18 +6545,35 @@ static void cxgb4_xfrm_free_state(struct net_device *dev, struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_free(dev, x);
+	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_free(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
+}
+
+static bool cxgb4_ipsec_offload_ok(struct sk_buff *skb, struct xfrm_state *x)
+{
+	struct adapter *adap = netdev2adap(x->xso.dev);
+	bool ret = false;
+
+	if (!mutex_trylock(&uld_mutex)) {
+		dev_dbg(adap->pdev_dev,
+			"crypto uld critical resource is under use\n");
+		return ret;
+	}
+	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
+		goto out_unlock;
+
+	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_offload_ok(skb, x);
+
+out_unlock:
+	mutex_unlock(&uld_mutex);
+	return ret;
 }
 
 static void cxgb4_advance_esn_state(struct xfrm_state *x)
 {
 	struct adapter *adap = netdev2adap(x->xso.dev);
-
-	if (x->xso.dir != XFRM_DEV_OFFLOAD_IN)
-		return;
 
 	if (!mutex_trylock(&uld_mutex)) {
 		dev_dbg(adap->pdev_dev,
@@ -6565,6 +6593,7 @@ static const struct xfrmdev_ops cxgb4_xfrmdev_ops = {
 	.xdo_dev_state_add      = cxgb4_xfrm_add_state,
 	.xdo_dev_state_delete   = cxgb4_xfrm_del_state,
 	.xdo_dev_state_free     = cxgb4_xfrm_free_state,
+	.xdo_dev_offload_ok     = cxgb4_ipsec_offload_ok,
 	.xdo_dev_state_advance_esn = cxgb4_advance_esn_state,
 };
 
@@ -6661,6 +6690,7 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_free_adapter;
 	}
 
+	pci_enable_pcie_error_reporting(pdev);
 	pci_set_master(pdev);
 	pci_save_state(pdev);
 	adap_idx++;
@@ -7065,6 +7095,7 @@ fw_attach_fail:
  out_unmap_bar0:
 	iounmap(regs);
  out_disable_device:
+	pci_disable_pcie_error_reporting(pdev);
 	pci_disable_device(pdev);
  out_release_regions:
 	pci_release_regions(pdev);
@@ -7143,6 +7174,7 @@ static void remove_one(struct pci_dev *pdev)
 	}
 #endif
 	iounmap(adapter->regs);
+	pci_disable_pcie_error_reporting(pdev);
 	if ((adapter->flags & CXGB4_DEV_ENABLED)) {
 		pci_disable_device(pdev);
 		adapter->flags &= ~CXGB4_DEV_ENABLED;

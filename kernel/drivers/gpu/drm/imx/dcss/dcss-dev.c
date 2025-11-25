@@ -4,9 +4,8 @@
  */
 
 #include <linux/clk.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_graph.h>
-#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <drm/drm_bridge_connector.h>
@@ -109,6 +108,8 @@ dtg_err:
 	dcss_ctxld_exit(dcss->ctxld);
 
 ctxld_err:
+	dcss_blkctl_exit(dcss->blkctl);
+
 	dcss_clocks_disable(dcss);
 
 	return ret;
@@ -122,6 +123,7 @@ static void dcss_submodules_stop(struct dcss_dev *dcss)
 	dcss_ss_exit(dcss->ss);
 	dcss_dtg_exit(dcss->dtg);
 	dcss_ctxld_exit(dcss->ctxld);
+	dcss_blkctl_exit(dcss->blkctl);
 	dcss_clocks_disable(dcss);
 }
 
@@ -180,12 +182,7 @@ struct dcss_dev *dcss_dev_create(struct device *dev, bool hdmi_output)
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (!devm_request_mem_region(dev, res->start, resource_size(res), "dcss")) {
-		dev_err(dev, "cannot request memory region\n");
-		return ERR_PTR(-EBUSY);
-	}
-
-	dcss = devm_kzalloc(dev, sizeof(*dcss), GFP_KERNEL);
+	dcss = kzalloc(sizeof(*dcss), GFP_KERNEL);
 	if (!dcss)
 		return ERR_PTR(-ENOMEM);
 
@@ -196,12 +193,12 @@ struct dcss_dev *dcss_dev_create(struct device *dev, bool hdmi_output)
 	ret = dcss_clks_init(dcss);
 	if (ret) {
 		dev_err(dev, "clocks initialization failed\n");
-		return ERR_PTR(ret);
+		goto err;
 	}
 
 	dcss->of_port = of_graph_get_port_by_id(dev->of_node, 0);
 	if (!dcss->of_port) {
-		dev_err(dev, "no port@0 node in %pOF\n", dev->of_node);
+		dev_err(dev, "no port@0 node in %s\n", dev->of_node->full_name);
 		ret = -ENODEV;
 		goto clks_err;
 	}
@@ -228,6 +225,9 @@ struct dcss_dev *dcss_dev_create(struct device *dev, bool hdmi_output)
 clks_err:
 	dcss_clks_release(dcss);
 
+err:
+	kfree(dcss);
+
 	return ERR_PTR(ret);
 }
 
@@ -245,13 +245,19 @@ void dcss_dev_destroy(struct dcss_dev *dcss)
 	dcss_submodules_stop(dcss);
 
 	dcss_clks_release(dcss);
+
+	kfree(dcss);
 }
 
-static int dcss_dev_suspend(struct device *dev)
+#ifdef CONFIG_PM_SLEEP
+int dcss_dev_suspend(struct device *dev)
 {
 	struct dcss_dev *dcss = dcss_drv_dev_to_dcss(dev);
 	struct drm_device *ddev = dcss_drv_dev_to_drm(dev);
+	struct dcss_kms_dev *kms = container_of(ddev, struct dcss_kms_dev, base);
 	int ret;
+
+	drm_bridge_connector_disable_hpd(kms->connector);
 
 	drm_mode_config_helper_suspend(ddev);
 
@@ -267,10 +273,11 @@ static int dcss_dev_suspend(struct device *dev)
 	return 0;
 }
 
-static int dcss_dev_resume(struct device *dev)
+int dcss_dev_resume(struct device *dev)
 {
 	struct dcss_dev *dcss = dcss_drv_dev_to_dcss(dev);
 	struct drm_device *ddev = dcss_drv_dev_to_drm(dev);
+	struct dcss_kms_dev *kms = container_of(ddev, struct dcss_kms_dev, base);
 
 	if (pm_runtime_suspended(dev)) {
 		drm_mode_config_helper_resume(ddev);
@@ -285,10 +292,14 @@ static int dcss_dev_resume(struct device *dev)
 
 	drm_mode_config_helper_resume(ddev);
 
+	drm_bridge_connector_enable_hpd(kms->connector);
+
 	return 0;
 }
+#endif /* CONFIG_PM_SLEEP */
 
-static int dcss_dev_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM
+int dcss_dev_runtime_suspend(struct device *dev)
 {
 	struct dcss_dev *dcss = dcss_drv_dev_to_dcss(dev);
 	int ret;
@@ -302,7 +313,7 @@ static int dcss_dev_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int dcss_dev_runtime_resume(struct device *dev)
+int dcss_dev_runtime_resume(struct device *dev)
 {
 	struct dcss_dev *dcss = dcss_drv_dev_to_dcss(dev);
 
@@ -314,8 +325,4 @@ static int dcss_dev_runtime_resume(struct device *dev)
 
 	return 0;
 }
-
-EXPORT_GPL_DEV_PM_OPS(dcss_dev_pm_ops) = {
-	RUNTIME_PM_OPS(dcss_dev_runtime_suspend, dcss_dev_runtime_resume, NULL)
-	SYSTEM_SLEEP_PM_OPS(dcss_dev_suspend, dcss_dev_resume)
-};
+#endif /* CONFIG_PM */

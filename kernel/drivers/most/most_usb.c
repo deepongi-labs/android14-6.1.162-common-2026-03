@@ -257,7 +257,7 @@ static int hdm_poison_channel(struct most_interface *iface, int channel)
 		mdev->padding_active[channel] = false;
 
 	if (mdev->conf[channel].data_type == MOST_CH_ASYNC) {
-		timer_delete_sync(&mdev->link_stat_timer);
+		del_timer_sync(&mdev->link_stat_timer);
 		cancel_work_sync(&mdev->poll_work_obj);
 	}
 	mutex_unlock(&mdev->io_mutex);
@@ -660,14 +660,14 @@ static void hdm_request_netinfo(struct most_interface *iface, int channel,
 
 /**
  * link_stat_timer_handler - schedule work obtaining mac address and link status
- * @t: pointer to timer_list which holds a pointer to the USB device instance
+ * @data: pointer to USB device instance
  *
  * The handler runs in interrupt context. That's why we need to defer the
  * tasks to a work queue.
  */
 static void link_stat_timer_handler(struct timer_list *t)
 {
-	struct most_dev *mdev = timer_container_of(mdev, t, link_stat_timer);
+	struct most_dev *mdev = from_timer(mdev, t, link_stat_timer);
 
 	schedule_work(&mdev->poll_work_obj);
 	mdev->link_stat_timer.expires = jiffies + (2 * HZ);
@@ -763,14 +763,14 @@ static void wq_clear_halt(struct work_struct *wq_obj)
 	mutex_unlock(&mdev->io_mutex);
 }
 
-/*
+/**
  * hdm_usb_fops - file operation table for USB driver
  */
 static const struct file_operations hdm_usb_fops = {
 	.owner = THIS_MODULE,
 };
 
-/*
+/**
  * usb_device_id - ID table for HCD device probing
  */
 static const struct usb_device_id usbid[] = {
@@ -929,10 +929,6 @@ static void release_mdev(struct device *dev)
 {
 	struct most_dev *mdev = to_mdev_from_dev(dev);
 
-	kfree(mdev->busy_urbs);
-	kfree(mdev->cap);
-	kfree(mdev->conf);
-	kfree(mdev->ep_address);
 	kfree(mdev);
 }
 /**
@@ -1097,7 +1093,7 @@ err_free_cap:
 err_free_conf:
 	kfree(mdev->conf);
 err_free_mdev:
-	kfree(mdev);
+	put_device(&mdev->dev);
 	return ret;
 }
 
@@ -1119,12 +1115,19 @@ static void hdm_disconnect(struct usb_interface *interface)
 	mdev->usb_device = NULL;
 	mutex_unlock(&mdev->io_mutex);
 
-	timer_delete_sync(&mdev->link_stat_timer);
+	del_timer_sync(&mdev->link_stat_timer);
 	cancel_work_sync(&mdev->poll_work_obj);
 
 	if (mdev->dci)
 		device_unregister(&mdev->dci->dev);
 	most_deregister_interface(&mdev->iface);
+
+	kfree(mdev->busy_urbs);
+	kfree(mdev->cap);
+	kfree(mdev->conf);
+	kfree(mdev->ep_address);
+	put_device(&mdev->dci->dev);
+	put_device(&mdev->dev);
 }
 
 static int hdm_suspend(struct usb_interface *interface, pm_message_t message)

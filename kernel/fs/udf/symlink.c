@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * symlink.c
  *
@@ -6,6 +5,11 @@
  *	Symlink handling routines for the OSTA-UDF(tm) filesystem.
  *
  * COPYRIGHT
+ *	This file is distributed under the terms of the GNU General Public
+ *	License (GPL). Copies of the GPL can be obtained from:
+ *		ftp://prep.ai.mit.edu/pub/gnu/GPL
+ *	Each contributing author retains all rights to their own work.
+ *
  *  (C) 1998-2001 Ben Fennema
  *  (C) 1999 Stelias Computing Inc
  *
@@ -99,50 +103,68 @@ static int udf_pc_to_char(struct super_block *sb, unsigned char *from,
 
 static int udf_symlink_filler(struct file *file, struct folio *folio)
 {
-	struct inode *inode = folio->mapping->host;
+	struct page *page = &folio->page;
+	struct inode *inode = page->mapping->host;
 	struct buffer_head *bh = NULL;
 	unsigned char *symlink;
-	int err = 0;
-	unsigned char *p = folio_address(folio);
-	struct udf_inode_info *iinfo = UDF_I(inode);
+	int err;
+	unsigned char *p = page_address(page);
+	struct udf_inode_info *iinfo;
+	uint32_t pos;
 
 	/* We don't support symlinks longer than one block */
 	if (inode->i_size > inode->i_sb->s_blocksize) {
 		err = -ENAMETOOLONG;
-		goto out;
+		goto out_unmap;
 	}
 
+	iinfo = UDF_I(inode);
+	pos = udf_block_map(inode, 0);
+
+	down_read(&iinfo->i_data_sem);
 	if (iinfo->i_alloc_type == ICBTAG_FLAG_AD_IN_ICB) {
 		symlink = iinfo->i_data + iinfo->i_lenEAttr;
 	} else {
-		bh = udf_bread(inode, 0, 0, &err);
+		bh = sb_bread(inode->i_sb, pos);
+
 		if (!bh) {
-			if (!err)
-				err = -EFSCORRUPTED;
-			goto out;
+			err = -EIO;
+			goto out_unlock_inode;
 		}
+
 		symlink = bh->b_data;
 	}
 
 	err = udf_pc_to_char(inode->i_sb, symlink, inode->i_size, p, PAGE_SIZE);
 	brelse(bh);
-out:
-	folio_end_read(folio, err == 0);
+	if (err)
+		goto out_unlock_inode;
+
+	up_read(&iinfo->i_data_sem);
+	SetPageUptodate(page);
+	unlock_page(page);
+	return 0;
+
+out_unlock_inode:
+	up_read(&iinfo->i_data_sem);
+	SetPageError(page);
+out_unmap:
+	unlock_page(page);
 	return err;
 }
 
-static int udf_symlink_getattr(struct mnt_idmap *idmap,
+static int udf_symlink_getattr(struct user_namespace *mnt_userns,
 			       const struct path *path, struct kstat *stat,
 			       u32 request_mask, unsigned int flags)
 {
 	struct dentry *dentry = path->dentry;
 	struct inode *inode = d_backing_inode(dentry);
-	struct folio *folio;
+	struct page *page;
 
-	generic_fillattr(&nop_mnt_idmap, request_mask, inode, stat);
-	folio = read_mapping_folio(inode->i_mapping, 0, NULL);
-	if (IS_ERR(folio))
-		return PTR_ERR(folio);
+	generic_fillattr(&init_user_ns, inode, stat);
+	page = read_mapping_page(inode->i_mapping, 0, NULL);
+	if (IS_ERR(page))
+		return PTR_ERR(page);
 	/*
 	 * UDF uses non-trivial encoding of symlinks so i_size does not match
 	 * number of characters reported by readlink(2) which apparently some
@@ -152,8 +174,8 @@ static int udf_symlink_getattr(struct mnt_idmap *idmap,
 	 * let's report the length of string returned by readlink(2) for
 	 * st_size.
 	 */
-	stat->size = strlen(folio_address(folio));
-	folio_put(folio);
+	stat->size = strlen(page_address(page));
+	put_page(page);
 
 	return 0;
 }

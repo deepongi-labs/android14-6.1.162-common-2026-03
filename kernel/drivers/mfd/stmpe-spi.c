@@ -135,14 +135,27 @@ static struct spi_driver stmpe_spi_driver = {
 	.driver = {
 		.name	= "stmpe-spi",
 		.of_match_table = of_match_ptr(stmpe_spi_of_match),
-		.pm	= pm_sleep_ptr(&stmpe_dev_pm_ops),
+#ifdef CONFIG_PM
+		.pm	= &stmpe_dev_pm_ops,
+#endif
 	},
 	.probe		= stmpe_spi_probe,
 	.remove		= stmpe_spi_remove,
 	.id_table	= stmpe_spi_id,
 };
-module_spi_driver(stmpe_spi_driver);
 
+static int __init stmpe_init(void)
+{
+	return spi_register_driver(&stmpe_spi_driver);
+}
+subsys_initcall(stmpe_init);
+
+static void __exit stmpe_exit(void)
+{
+	spi_unregister_driver(&stmpe_spi_driver);
+}
+module_exit(stmpe_exit);
+
+MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("STMPE MFD SPI Interface Driver");
 MODULE_AUTHOR("Viresh Kumar <vireshk@kernel.org>");
-MODULE_LICENSE("GPL");

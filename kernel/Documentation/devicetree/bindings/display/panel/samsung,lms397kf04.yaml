@@ -14,14 +14,12 @@ maintainers:
 
 allOf:
   - $ref: panel-common.yaml#
-  - $ref: /schemas/spi/spi-peripheral-props.yaml#
 
 properties:
   compatible:
     const: samsung,lms397kf04
 
-  reg:
-    maxItems: 1
+  reg: true
 
   reset-gpios: true
 
@@ -53,7 +51,7 @@ required:
   - spi-cpol
   - port
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |

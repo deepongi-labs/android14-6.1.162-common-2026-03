@@ -1,6 +1,7 @@
 [
     {
         "BriefDescription": "BACLEARs asserted for any branch type",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xE6",
         "EventName": "BACLEARS.ALL",
@@ -10,6 +11,7 @@
     },
     {
         "BriefDescription": "BACLEARs asserted for conditional branch",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xE6",
         "EventName": "BACLEARS.COND",
@@ -19,6 +21,7 @@
     },
     {
         "BriefDescription": "BACLEARs asserted for return branch",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xE6",
         "EventName": "BACLEARS.RETURN",
@@ -28,6 +31,7 @@
     },
     {
         "BriefDescription": "Decode restrictions due to predicting wrong instruction length",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xE9",
         "EventName": "DECODE_RESTRICTION.PREDECODE_WRONG",
@@ -37,6 +41,7 @@
     },
     {
         "BriefDescription": "References per ICache line. This event counts differently than Intel processors based on Silvermont microarchitecture",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0x80",
         "EventName": "ICACHE.ACCESSES",
@@ -46,6 +51,7 @@
     },
     {
         "BriefDescription": "References per ICache line that are available in the ICache (hit). This event counts differently than Intel processors based on Silvermont microarchitecture",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0x80",
         "EventName": "ICACHE.HIT",
@@ -55,6 +61,7 @@
     },
     {
         "BriefDescription": "References per ICache line that are not available in the ICache (miss). This event counts differently than Intel processors based on Silvermont microarchitecture",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0x80",
         "EventName": "ICACHE.MISSES",
@@ -64,6 +71,7 @@
     },
     {
         "BriefDescription": "MS decode starts",
+        "CollectPEBSRecord": "1",
         "Counter": "0,1,2,3",
         "EventCode": "0xE7",
         "EventName": "MS_DECODED.MS_ENTRY",

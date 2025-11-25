@@ -14,9 +14,9 @@
 #include <sys/mman.h>
 #include <linux/stringify.h>
 
+#include "build-id.h"
 #include "event.h"
 #include "debug.h"
-#include "dso.h"
 #include "evlist.h"
 #include "namespaces.h"
 #include "symbol.h"
@@ -235,11 +235,9 @@ jit_open(struct jit_buf_desc *jd, const char *name)
 	 */
 	strcpy(jd->dir, name);
 	dirname(jd->dir);
-	free(buf);
 
 	return 0;
 error:
-	free(buf);
 	funlockfile(jd->in);
 	fclose(jd->in);
 	return retval;
@@ -424,7 +422,7 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 {
 	struct perf_sample sample;
 	union perf_event *event;
-	const struct perf_tool *tool = jd->session->tool;
+	struct perf_tool *tool = jd->session->tool;
 	uint64_t code, addr;
 	uintptr_t uaddr;
 	char *filename;
@@ -516,7 +514,7 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 	 * create pseudo sample to induce dso hit increment
 	 * use first address as sample address
 	 */
-	perf_sample__init(&sample, /*all=*/true);
+	memset(&sample, 0, sizeof(sample));
 	sample.cpumode = PERF_RECORD_MISC_USER;
 	sample.pid  = pid;
 	sample.tid  = tid;
@@ -525,31 +523,15 @@ static int jit_repipe_code_load(struct jit_buf_desc *jd, union jr_entry *jr)
 
 	ret = perf_event__process_mmap2(tool, event, &sample, jd->machine);
 	if (ret)
-		goto out;
+		return ret;
 
 	ret = jit_inject_event(jd, event);
 	/*
 	 * mark dso as use to generate buildid in the header
 	 */
-	if (!ret) {
-		struct dso_id dso_id = {
-			{
-				.maj = event->mmap2.maj,
-				.min = event->mmap2.min,
-				.ino = event->mmap2.ino,
-				.ino_generation = event->mmap2.ino_generation,
-			},
-			.mmap2_valid = true,
-			.mmap2_ino_generation_valid = true,
-		};
-		struct dso *dso = machine__findnew_dso_id(jd->machine, filename, &dso_id);
+	if (!ret)
+		build_id__mark_dso_hit(tool, event, &sample, NULL, jd->machine);
 
-		if (dso)
-			dso__set_hit(dso);
-	}
-out:
-	perf_sample__exit(&sample);
-	free(event);
 	return ret;
 }
 
@@ -557,7 +539,7 @@ static int jit_repipe_code_move(struct jit_buf_desc *jd, union jr_entry *jr)
 {
 	struct perf_sample sample;
 	union perf_event *event;
-	const struct perf_tool *tool = jd->session->tool;
+	struct perf_tool *tool = jd->session->tool;
 	char *filename;
 	size_t size;
 	struct stat st;
@@ -625,7 +607,7 @@ static int jit_repipe_code_move(struct jit_buf_desc *jd, union jr_entry *jr)
 	 * create pseudo sample to induce dso hit increment
 	 * use first address as sample address
 	 */
-	perf_sample__init(&sample, /*all=*/true);
+	memset(&sample, 0, sizeof(sample));
 	sample.cpumode = PERF_RECORD_MISC_USER;
 	sample.pid  = pid;
 	sample.tid  = tid;
@@ -634,13 +616,12 @@ static int jit_repipe_code_move(struct jit_buf_desc *jd, union jr_entry *jr)
 
 	ret = perf_event__process_mmap2(tool, event, &sample, jd->machine);
 	if (ret)
-		goto out;
+		return ret;
 
 	ret = jit_inject_event(jd, event);
 	if (!ret)
 		build_id__mark_dso_hit(tool, event, &sample, NULL, jd->machine);
-out:
-	perf_sample__exit(&sample);
+
 	return ret;
 }
 
@@ -690,7 +671,6 @@ jit_repipe_unwinding_info(struct jit_buf_desc *jd, union jr_entry *jr)
 	jd->eh_frame_hdr_size = jr->unwinding.eh_frame_hdr_size;
 	jd->unwinding_size = jr->unwinding.unwinding_size;
 	jd->unwinding_mapped_size = jr->unwinding.mapped_size;
-	free(jd->unwinding_data);
 	jd->unwinding_data = unwinding_data;
 
 	return 0;
@@ -725,7 +705,7 @@ jit_process_dump(struct jit_buf_desc *jd)
 }
 
 static int
-jit_inject(struct jit_buf_desc *jd, const char *path)
+jit_inject(struct jit_buf_desc *jd, char *path)
 {
 	int ret;
 
@@ -752,7 +732,7 @@ jit_inject(struct jit_buf_desc *jd, const char *path)
  * as captured in the RECORD_MMAP record
  */
 static int
-jit_detect(const char *mmap_name, pid_t pid, struct nsinfo *nsi, bool *in_pidns)
+jit_detect(char *mmap_name, pid_t pid, struct nsinfo *nsi)
  {
 	char *p;
 	char *end = NULL;
@@ -788,16 +768,11 @@ jit_detect(const char *mmap_name, pid_t pid, struct nsinfo *nsi, bool *in_pidns)
 	if (!end)
 		return -1;
 
-	*in_pidns = pid == nsinfo__nstgid(nsi);
 	/*
 	 * pid does not match mmap pid
 	 * pid==0 in system-wide mode (synthesized)
-	 *
-	 * If the pid in the file name is equal to the nstgid, then
-	 * the agent ran inside a container and perf outside the
-	 * container, so record it for further use in jit_inject().
 	 */
-	if (pid && !(pid2 == pid || *in_pidns))
+	if (pid && pid2 != nsinfo__nstgid(nsi))
 		return -1;
 	/*
 	 * validate suffix
@@ -820,28 +795,24 @@ static void jit_add_pid(struct machine *machine, pid_t pid)
 		return;
 	}
 
-	thread__set_priv(thread, (void *)true);
-	thread__put(thread);
+	thread->priv = (void *)1;
 }
 
 static bool jit_has_pid(struct machine *machine, pid_t pid)
 {
 	struct thread *thread = machine__find_thread(machine, pid, pid);
-	void *priv;
 
 	if (!thread)
-		return false;
+		return 0;
 
-	priv = thread__priv(thread);
-	thread__put(thread);
-	return (bool)priv;
+	return (bool)thread->priv;
 }
 
 int
 jit_process(struct perf_session *session,
 	    struct perf_data *output,
 	    struct machine *machine,
-	    const char *filename,
+	    char *filename,
 	    pid_t pid,
 	    pid_t tid,
 	    u64 *nbytes)
@@ -850,7 +821,6 @@ jit_process(struct perf_session *session,
 	struct nsinfo *nsi;
 	struct evsel *first;
 	struct jit_buf_desc jd;
-	bool in_pidns = false;
 	int ret;
 
 	thread = machine__findnew_thread(machine, pid, tid);
@@ -859,13 +829,13 @@ jit_process(struct perf_session *session,
 		return 0;
 	}
 
-	nsi = nsinfo__get(thread__nsinfo(thread));
+	nsi = nsinfo__get(thread->nsinfo);
 	thread__put(thread);
 
 	/*
 	 * first, detect marker mmap (i.e., the jitdump mmap)
 	 */
-	if (jit_detect(filename, pid, nsi, &in_pidns)) {
+	if (jit_detect(filename, pid, nsi)) {
 		nsinfo__put(nsi);
 
 		/*
@@ -887,9 +857,6 @@ jit_process(struct perf_session *session,
 	jd.machine = machine;
 	jd.nsi = nsi;
 
-	if (in_pidns)
-		nsinfo__set_in_pidns(nsi);
-
 	/*
 	 * track sample_type to compute id_all layout
 	 * perf sets the same sample type to all events as of now
@@ -907,7 +874,6 @@ jit_process(struct perf_session *session,
 	}
 
 	nsinfo__put(jd.nsi);
-	free(jd.buf);
 
 	return ret;
 }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2004-2005 IBM Corp.  All Rights Reserved.
  * Copyright (C) 2006-2009 NEC Corporation.
@@ -123,8 +122,8 @@ static int ql_add_path(struct path_selector *ps, struct dm_path *path,
 
 	/*
 	 * Arguments: [<repeat_count>]
-	 *	<repeat_count>: The number of I/Os before switching path.
-	 *			If not given, default (QL_MIN_IO) is used.
+	 * 	<repeat_count>: The number of I/Os before switching path.
+	 * 			If not given, default (QL_MIN_IO) is used.
 	 */
 	if (argc > 1) {
 		*error = "queue-length ps: incorrect number of arguments";
@@ -260,10 +259,8 @@ static int __init dm_ql_init(void)
 {
 	int r = dm_register_path_selector(&ql_ps);
 
-	if (r < 0) {
+	if (r < 0)
 		DMERR("register failed %d", r);
-		return r;
-	}
 
 	DMINFO("version " QL_VERSION " loaded");
 
@@ -272,7 +269,10 @@ static int __init dm_ql_init(void)
 
 static void __exit dm_ql_exit(void)
 {
-	dm_unregister_path_selector(&ql_ps);
+	int r = dm_unregister_path_selector(&ql_ps);
+
+	if (r < 0)
+		DMERR("unregister failed %d", r);
 }
 
 module_init(dm_ql_init);

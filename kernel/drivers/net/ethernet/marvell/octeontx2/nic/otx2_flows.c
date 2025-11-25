@@ -12,6 +12,8 @@
 
 #define OTX2_DEFAULT_ACTION	0x1
 
+static int otx2_mcam_entry_init(struct otx2_nic *pfvf);
+
 struct otx2_flow {
 	struct ethtool_rx_flow_spec flow_spec;
 	struct list_head list;
@@ -62,6 +64,11 @@ static int otx2_free_ntuple_mcam_entries(struct otx2_nic *pfvf)
 	mutex_unlock(&pfvf->mbox.lock);
 	otx2_clear_ntuple_flow_info(pfvf, flow_cfg);
 	return 0;
+}
+
+static int mcam_entry_cmp(const void *a, const void *b)
+{
+	return *(u16 *)a - *(u16 *)b;
 }
 
 int otx2_alloc_mcam_entries(struct otx2_nic *pfvf, u16 count)
@@ -156,7 +163,7 @@ exit:
 }
 EXPORT_SYMBOL(otx2_alloc_mcam_entries);
 
-int otx2_mcam_entry_init(struct otx2_nic *pfvf)
+static int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 {
 	struct otx2_flow_config *flow_cfg = pfvf->flow_cfg;
 	struct npc_get_field_status_req *freq;
@@ -167,7 +174,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 	int ent, count;
 
 	vf_vlan_max_flows = pfvf->total_vfs * OTX2_PER_VF_VLAN_FLOWS;
-	count = flow_cfg->ucast_flt_cnt +
+	count = OTX2_MAX_UNICAST_FLOWS +
 			OTX2_MAX_VLAN_FLOWS + vf_vlan_max_flows;
 
 	flow_cfg->def_ent = devm_kmalloc_array(pfvf->dev, count,
@@ -213,7 +220,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 	flow_cfg->vf_vlan_offset = 0;
 	flow_cfg->unicast_offset = vf_vlan_max_flows;
 	flow_cfg->rx_vlan_offset = flow_cfg->unicast_offset +
-					flow_cfg->ucast_flt_cnt;
+					OTX2_MAX_UNICAST_FLOWS;
 	pfvf->flags |= OTX2_FLAG_UCAST_FLTR_SUPPORT;
 
 	/* Check if NPC_DMAC field is supported
@@ -247,7 +254,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 	mutex_unlock(&pfvf->mbox.lock);
 
 	/* Allocate entries for Ntuple filters */
-	count = otx2_alloc_mcam_entries(pfvf, flow_cfg->ntuple_cnt);
+	count = otx2_alloc_mcam_entries(pfvf, OTX2_DEFAULT_FLOWCOUNT);
 	if (count <= 0) {
 		otx2_clear_ntuple_flow_info(pfvf, flow_cfg);
 		return 0;
@@ -255,10 +262,8 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 
 	pfvf->flags |= OTX2_FLAG_TC_FLOWER_SUPPORT;
 
-	refcount_set(&flow_cfg->mark_flows, 1);
 	return 0;
 }
-EXPORT_SYMBOL(otx2_mcam_entry_init);
 
 /* TODO : revisit on size */
 #define OTX2_DMAC_FLTR_BITMAP_SZ (4 * 2048 + 32)
@@ -306,9 +311,6 @@ int otx2_mcam_flow_init(struct otx2_nic *pf)
 	INIT_LIST_HEAD(&pf->flow_cfg->flow_list);
 	INIT_LIST_HEAD(&pf->flow_cfg->flow_list_tc);
 
-	pf->flow_cfg->ucast_flt_cnt = OTX2_DEFAULT_UNICAST_FLOWS;
-	pf->flow_cfg->ntuple_cnt = OTX2_DEFAULT_FLOWCOUNT;
-
 	/* Allocate bare minimum number of MCAM entries needed for
 	 * unicast and ntuple filters.
 	 */
@@ -321,7 +323,7 @@ int otx2_mcam_flow_init(struct otx2_nic *pf)
 		return 0;
 
 	pf->mac_table = devm_kzalloc(pf->dev, sizeof(struct otx2_mac_table)
-					* pf->flow_cfg->ucast_flt_cnt, GFP_KERNEL);
+					* OTX2_MAX_UNICAST_FLOWS, GFP_KERNEL);
 	if (!pf->mac_table)
 		return -ENOMEM;
 
@@ -363,7 +365,7 @@ static int otx2_do_add_macfilter(struct otx2_nic *pf, const u8 *mac)
 		return -ENOMEM;
 
 	/* dont have free mcam entries or uc list is greater than alloted */
-	if (netdev_uc_count(pf->netdev) > pf->flow_cfg->ucast_flt_cnt)
+	if (netdev_uc_count(pf->netdev) > OTX2_MAX_UNICAST_FLOWS)
 		return -ENOMEM;
 
 	mutex_lock(&pf->mbox.lock);
@@ -374,7 +376,7 @@ static int otx2_do_add_macfilter(struct otx2_nic *pf, const u8 *mac)
 	}
 
 	/* unicast offset starts with 32 0..31 for ntuple */
-	for (i = 0; i <  pf->flow_cfg->ucast_flt_cnt; i++) {
+	for (i = 0; i <  OTX2_MAX_UNICAST_FLOWS; i++) {
 		if (pf->mac_table[i].inuse)
 			continue;
 		ether_addr_copy(pf->mac_table[i].addr, mac);
@@ -417,7 +419,7 @@ static bool otx2_get_mcamentry_for_mac(struct otx2_nic *pf, const u8 *mac,
 {
 	int i;
 
-	for (i = 0; i < pf->flow_cfg->ucast_flt_cnt; i++) {
+	for (i = 0; i < OTX2_MAX_UNICAST_FLOWS; i++) {
 		if (!pf->mac_table[i].inuse)
 			continue;
 
@@ -721,11 +723,6 @@ static int otx2_prepare_ipv6_flow(struct ethtool_rx_flow_spec *fsp,
 			       sizeof(pmask->ip6dst));
 			req->features |= BIT_ULL(NPC_DIP_IPV6);
 		}
-		if (ipv6_usr_hdr->l4_proto == IPPROTO_FRAGMENT) {
-			pkt->next_header = ipv6_usr_hdr->l4_proto;
-			pmask->next_header = ipv6_usr_mask->l4_proto;
-			req->features |= BIT_ULL(NPC_IPFRAG_IPV6);
-		}
 		pkt->etype = cpu_to_be16(ETH_P_IPV6);
 		pmask->etype = cpu_to_be16(0xFFFF);
 		req->features |= BIT_ULL(NPC_ETYPE);
@@ -914,22 +911,10 @@ static int otx2_prepare_flow_request(struct ethtool_rx_flow_spec *fsp,
 			req->features |= BIT_ULL(NPC_OUTER_VID);
 		}
 
-		if (fsp->m_ext.data[1]) {
-			if (flow_type == IP_USER_FLOW) {
-				if (be32_to_cpu(fsp->h_ext.data[1]) != IPV4_FLAG_MORE)
-					return -EINVAL;
-
-				pkt->ip_flag = be32_to_cpu(fsp->h_ext.data[1]);
-				pmask->ip_flag = be32_to_cpu(fsp->m_ext.data[1]);
-				req->features |= BIT_ULL(NPC_IPFRAG_IPV4);
-			} else if (fsp->h_ext.data[1] ==
-					cpu_to_be32(OTX2_DEFAULT_ACTION)) {
-				/* Not Drop/Direct to queue but use action
-				 * in default entry
-				 */
-				req->op = NIX_RX_ACTION_DEFAULT;
-			}
-		}
+		/* Not Drop/Direct to queue but use action in default entry */
+		if (fsp->m_ext.data[1] &&
+		    fsp->h_ext.data[1] == cpu_to_be32(OTX2_DEFAULT_ACTION))
+			req->op = NIX_RX_ACTION_DEFAULT;
 	}
 
 	if (fsp->flow_type & FLOW_MAC_EXT &&
@@ -1401,7 +1386,6 @@ int otx2_destroy_mcam_flows(struct otx2_nic *pfvf)
 	}
 
 	pfvf->flags &= ~OTX2_FLAG_MCAM_ENTRIES_ALLOC;
-	flow_cfg->max_flows = 0;
 	mutex_unlock(&pfvf->mbox.lock);
 
 	return 0;

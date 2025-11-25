@@ -76,19 +76,9 @@ static int do_one_sme_vl(struct tdescr *td, siginfo_t *si, ucontext_t *uc,
 		return 1;
 	}
 
-	if (!(ssve->flags & SVE_SIG_FLAG_SM)) {
-		fprintf(stderr, "SVE_SIG_FLAG_SM not set in SVE record\n");
-		return 1;
-	}
-
 	/* The actual size validation is done in get_current_context() */
 	fprintf(stderr, "Got expected size %u and VL %d\n",
 		head->size, ssve->vl);
-
-	if (get_svcr() != 0) {
-		fprintf(stderr, "Unexpected SVCR %lx\n", get_svcr());
-		return 1;
-	}
 
 	return 0;
 }
@@ -110,7 +100,12 @@ static int sme_regs(struct tdescr *td, siginfo_t *si, ucontext_t *uc)
 struct tdescr tde = {
 	.name = "Streaming SVE registers",
 	.descr = "Check that we get the right Streaming SVE registers reported",
-	.feats_required = FEAT_SME,
+	/*
+	 * We shouldn't require FA64 but things like memset() used in the
+	 * helpers might use unsupported instructions so for now disable
+	 * the test unless we've got the full instruction set.
+	 */
+	.feats_required = FEAT_SME | FEAT_SME_FA64,
 	.timeout = 3,
 	.init = sme_get_vls,
 	.run = sme_regs,

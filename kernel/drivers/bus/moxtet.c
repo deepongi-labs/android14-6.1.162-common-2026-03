@@ -83,10 +83,10 @@ static const struct attribute_group *moxtet_dev_groups[] = {
 	NULL,
 };
 
-static int moxtet_match(struct device *dev, const struct device_driver *drv)
+static int moxtet_match(struct device *dev, struct device_driver *drv)
 {
 	struct moxtet_device *mdev = to_moxtet_device(dev);
-	const struct moxtet_driver *tdrv = to_moxtet_driver(drv);
+	struct moxtet_driver *tdrv = to_moxtet_driver(drv);
 	const enum turris_mox_module_id *t;
 
 	if (of_driver_match_device(dev, drv))
@@ -102,7 +102,7 @@ static int moxtet_match(struct device *dev, const struct device_driver *drv)
 	return 0;
 }
 
-static const struct bus_type moxtet_bus_type = {
+static struct bus_type moxtet_bus_type = {
 	.name		= "moxtet",
 	.dev_groups	= moxtet_dev_groups,
 	.match		= moxtet_match,
@@ -484,6 +484,7 @@ static const struct file_operations input_fops = {
 	.owner	= THIS_MODULE,
 	.open	= moxtet_debug_open,
 	.read	= input_read,
+	.llseek	= no_llseek,
 };
 
 static ssize_t output_read(struct file *file, char __user *buf, size_t len,
@@ -548,6 +549,7 @@ static const struct file_operations output_fops = {
 	.open	= moxtet_debug_open,
 	.read	= output_read,
 	.write	= output_write,
+	.llseek	= no_llseek,
 };
 
 static int moxtet_register_debugfs(struct moxtet *moxtet)
@@ -657,7 +659,7 @@ static void moxtet_irq_print_chip(struct irq_data *d, struct seq_file *p)
 
 	id = moxtet->modules[pos->idx];
 
-	seq_printf(p, "moxtet-%s.%i#%i", mox_module_name(id), pos->idx,
+	seq_printf(p, " moxtet-%s.%i#%i", mox_module_name(id), pos->idx,
 		   pos->bit);
 }
 
@@ -737,8 +739,9 @@ static int moxtet_irq_setup(struct moxtet *moxtet)
 {
 	int i, ret;
 
-	moxtet->irq.domain = irq_domain_create_simple(dev_fwnode(moxtet->dev), MOXTET_NIRQS, 0,
-						      &moxtet_irq_domain, moxtet);
+	moxtet->irq.domain = irq_domain_add_simple(moxtet->dev->of_node,
+						   MOXTET_NIRQS, 0,
+						   &moxtet_irq_domain, moxtet);
 	if (moxtet->irq.domain == NULL) {
 		dev_err(moxtet->dev, "Could not add IRQ domain\n");
 		return -ENOMEM;
@@ -752,7 +755,7 @@ static int moxtet_irq_setup(struct moxtet *moxtet)
 	moxtet->irq.masked = ~0;
 
 	ret = request_threaded_irq(moxtet->dev_irq, NULL, moxtet_irq_thread_fn,
-				   IRQF_SHARED | IRQF_ONESHOT, "moxtet", moxtet);
+				   IRQF_ONESHOT, "moxtet", moxtet);
 	if (ret < 0)
 		goto err_free;
 

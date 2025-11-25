@@ -7,20 +7,17 @@
  *          Michael Thayer <michael.thayer@oracle.com,
  *          Hans de Goede <hdegoede@redhat.com>
  */
-
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/vt_kern.h>
 
-#include <drm/clients/drm_client_setup.h>
-#include <drm/drm_atomic_helper.h>
+#include <drm/drm_aperture.h>
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_ttm.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_file.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_managed.h>
-#include <drm/drm_modeset_helper.h>
 #include <drm/drm_module.h>
 
 #include "vbox_drv.h"
@@ -46,7 +43,7 @@ static int vbox_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (!vbox_check_supported(VBE_DISPI_ID_HGSMI))
 		return -ENODEV;
 
-	ret = aperture_remove_conflicting_pci_devices(pdev, driver.name);
+	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &driver);
 	if (ret)
 		return ret;
 
@@ -82,7 +79,7 @@ static int vbox_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		goto err_irq_fini;
 
-	drm_client_setup(&vbox->ddev, NULL);
+	drm_fbdev_generic_setup(&vbox->ddev, 32);
 
 	return 0;
 
@@ -100,19 +97,12 @@ static void vbox_pci_remove(struct pci_dev *pdev)
 	struct vbox_private *vbox = pci_get_drvdata(pdev);
 
 	drm_dev_unregister(&vbox->ddev);
-	drm_atomic_helper_shutdown(&vbox->ddev);
 	vbox_irq_fini(vbox);
 	vbox_mode_fini(vbox);
 	vbox_hw_fini(vbox);
 }
 
-static void vbox_pci_shutdown(struct pci_dev *pdev)
-{
-	struct vbox_private *vbox = pci_get_drvdata(pdev);
-
-	drm_atomic_helper_shutdown(&vbox->ddev);
-}
-
+#ifdef CONFIG_PM_SLEEP
 static int vbox_pm_suspend(struct device *dev)
 {
 	struct vbox_private *vbox = dev_get_drvdata(dev);
@@ -170,31 +160,35 @@ static const struct dev_pm_ops vbox_pm_ops = {
 	.poweroff = vbox_pm_poweroff,
 	.restore = vbox_pm_resume,
 };
+#endif
 
 static struct pci_driver vbox_pci_driver = {
 	.name = DRIVER_NAME,
 	.id_table = pciidlist,
 	.probe = vbox_pci_probe,
 	.remove = vbox_pci_remove,
-	.shutdown = vbox_pci_shutdown,
-	.driver.pm = pm_sleep_ptr(&vbox_pm_ops),
+#ifdef CONFIG_PM_SLEEP
+	.driver.pm = &vbox_pm_ops,
+#endif
 };
 
 DEFINE_DRM_GEM_FOPS(vbox_fops);
 
 static const struct drm_driver driver = {
 	.driver_features =
-	    DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC | DRIVER_CURSOR_HOTSPOT,
+	    DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+
+	.lastclose = drm_fb_helper_lastclose,
 
 	.fops = &vbox_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
+	.date = DRIVER_DATE,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
 	DRM_GEM_VRAM_DRIVER,
-	DRM_FBDEV_TTM_DRIVER_OPS,
 };
 
 drm_module_pci_driver_if_modeset(vbox_pci_driver, vbox_modeset);

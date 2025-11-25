@@ -37,7 +37,6 @@
 #define SVC_NUM_CHANNEL				3
 #define FPGA_CONFIG_DATA_CLAIM_TIMEOUT_MS	200
 #define FPGA_CONFIG_STATUS_TIMEOUT_SEC		30
-#define BYTE_TO_WORD_SIZE              4
 
 /* stratix10 service layer clients */
 #define STRATIX10_RSU				"stratix10-rsu"
@@ -362,13 +361,6 @@ static void svc_thread_recv_status_ok(struct stratix10_svc_data *p_data,
 		cb_data->kaddr2 = svc_pa_to_va(res.a2);
 		cb_data->kaddr3 = &res.a3;
 		break;
-	case COMMAND_MBOX_SEND_CMD:
-		cb_data->status = BIT(SVC_STATUS_OK);
-		cb_data->kaddr1 = &res.a1;
-		/* SDM return size in u8. Convert size to u32 word */
-		res.a2 = res.a2 * BYTE_TO_WORD_SIZE;
-		cb_data->kaddr2 = &res.a2;
-		break;
 	default:
 		pr_warn("it shouldn't happen\n");
 		break;
@@ -542,15 +534,6 @@ static int svc_normal_to_secure_thread(void *data)
 			a1 = 0;
 			a2 = 0;
 			break;
-		case COMMAND_MBOX_SEND_CMD:
-			a0 = INTEL_SIP_SMC_MBOX_SEND_CMD;
-			a1 = pdata->arg[0];
-			a2 = (unsigned long)pdata->paddr;
-			a3 = (unsigned long)pdata->size / BYTE_TO_WORD_SIZE;
-			a4 = pdata->arg[1];
-			a5 = (unsigned long)pdata->paddr_output;
-			a6 = (unsigned long)pdata->size_output / BYTE_TO_WORD_SIZE;
-			break;
 		default:
 			pr_warn("it shouldn't happen\n");
 			break;
@@ -614,7 +597,6 @@ static int svc_normal_to_secure_thread(void *data)
 			case COMMAND_FCS_DATA_ENCRYPTION:
 			case COMMAND_FCS_DATA_DECRYPTION:
 			case COMMAND_FCS_RANDOM_NUMBER_GEN:
-			case COMMAND_MBOX_SEND_CMD:
 				cbdata->status = BIT(SVC_STATUS_INVALID_PARAM);
 				cbdata->kaddr1 = NULL;
 				cbdata->kaddr2 = NULL;
@@ -967,15 +949,18 @@ int stratix10_svc_send(struct stratix10_svc_chan *chan, void *msg)
 	/* first client will create kernel thread */
 	if (!chan->ctrl->task) {
 		chan->ctrl->task =
-			kthread_run_on_cpu(svc_normal_to_secure_thread,
-					   (void *)chan->ctrl,
-					   cpu, "svc_smc_hvc_thread");
+			kthread_create_on_node(svc_normal_to_secure_thread,
+					      (void *)chan->ctrl,
+					      cpu_to_node(cpu),
+					      "svc_smc_hvc_thread");
 			if (IS_ERR(chan->ctrl->task)) {
 				dev_err(chan->ctrl->dev,
 					"failed to create svc_smc_hvc_thread\n");
 				kfree(p_data);
 				return -EINVAL;
 			}
+		kthread_bind(chan->ctrl->task, cpu);
+		wake_up_process(chan->ctrl->task);
 	}
 
 	pr_debug("%s: sent P-va=%p, P-com=%x, P-size=%u\n", __func__,
@@ -1224,18 +1209,14 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 	if (!svc->intel_svc_fcs) {
 		dev_err(dev, "failed to allocate %s device\n", INTEL_FCS);
 		ret = -ENOMEM;
-		goto err_unregister_rsu_dev;
+		goto err_unregister_dev;
 	}
 
 	ret = platform_device_add(svc->intel_svc_fcs);
 	if (ret) {
 		platform_device_put(svc->intel_svc_fcs);
-		goto err_unregister_rsu_dev;
+		goto err_unregister_dev;
 	}
-
-	ret = of_platform_default_populate(dev_of_node(dev), NULL, dev);
-	if (ret)
-		goto err_unregister_fcs_dev;
 
 	dev_set_drvdata(dev, svc);
 
@@ -1243,9 +1224,7 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 
 	return 0;
 
-err_unregister_fcs_dev:
-	platform_device_unregister(svc->intel_svc_fcs);
-err_unregister_rsu_dev:
+err_unregister_dev:
 	platform_device_unregister(svc->stratix10_svc_rsu);
 err_free_kfifo:
 	kfifo_free(&controller->svc_fifo);
@@ -1254,12 +1233,10 @@ err_destroy_pool:
 	return ret;
 }
 
-static void stratix10_svc_drv_remove(struct platform_device *pdev)
+static int stratix10_svc_drv_remove(struct platform_device *pdev)
 {
 	struct stratix10_svc *svc = dev_get_drvdata(&pdev->dev);
 	struct stratix10_svc_controller *ctrl = platform_get_drvdata(pdev);
-
-	of_platform_depopulate(ctrl->dev);
 
 	platform_device_unregister(svc->intel_svc_fcs);
 	platform_device_unregister(svc->stratix10_svc_rsu);
@@ -1272,6 +1249,8 @@ static void stratix10_svc_drv_remove(struct platform_device *pdev)
 	if (ctrl->genpool)
 		gen_pool_destroy(ctrl->genpool);
 	list_del(&ctrl->node);
+
+	return 0;
 }
 
 static struct platform_driver stratix10_svc_driver = {

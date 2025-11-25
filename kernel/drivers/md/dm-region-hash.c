@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2003 Sistina Software Limited.
  * Copyright (C) 2004-2008 Red Hat, Inc. All rights reserved.
@@ -19,8 +18,7 @@
 
 #define	DM_MSG_PREFIX	"region hash"
 
-/*
- *------------------------------------------------------------------
+/*-----------------------------------------------------------------
  * Region hash
  *
  * The mirror splits itself up into discrete regions.  Each
@@ -55,8 +53,7 @@
  *   lists in the region_hash, with the 'state', 'list' and
  *   'delayed_bios' fields of the regions.  This is used from irq
  *   context, so all other uses will have to suspend local irqs.
- *------------------------------------------------------------------
- */
+ *---------------------------------------------------------------*/
 struct dm_region_hash {
 	uint32_t region_size;
 	unsigned int region_shift;
@@ -206,7 +203,7 @@ struct dm_region_hash *dm_region_hash_create(
 	rh->shift = RH_HASH_SHIFT;
 	rh->prime = RH_HASH_MULT;
 
-	rh->buckets = vmalloc_array(nr_buckets, sizeof(*rh->buckets));
+	rh->buckets = vmalloc(array_size(nr_buckets, sizeof(*rh->buckets)));
 	if (!rh->buckets) {
 		DMERR("unable to allocate region hash bucket memory");
 		kfree(rh);
@@ -723,5 +720,5 @@ void dm_rh_start_recovery(struct dm_region_hash *rh)
 EXPORT_SYMBOL_GPL(dm_rh_start_recovery);
 
 MODULE_DESCRIPTION(DM_NAME " region hash");
-MODULE_AUTHOR("Joe Thornber/Heinz Mauelshagen <dm-devel@lists.linux.dev>");
+MODULE_AUTHOR("Joe Thornber/Heinz Mauelshagen <dm-devel@redhat.com>");
 MODULE_LICENSE("GPL");

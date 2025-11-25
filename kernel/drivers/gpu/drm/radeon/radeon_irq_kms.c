@@ -29,6 +29,7 @@
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_device.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_probe_helper.h>
@@ -80,7 +81,7 @@ static void radeon_hotplug_work_func(struct work_struct *work)
 {
 	struct radeon_device *rdev = container_of(work, struct radeon_device,
 						  hotplug_work.work);
-	struct drm_device *dev = rdev_to_drm(rdev);
+	struct drm_device *dev = rdev->ddev;
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_connector *connector;
 
@@ -101,7 +102,7 @@ static void radeon_dp_work_func(struct work_struct *work)
 {
 	struct radeon_device *rdev = container_of(work, struct radeon_device,
 						  dp_work);
-	struct drm_device *dev = rdev_to_drm(rdev);
+	struct drm_device *dev = rdev->ddev;
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_connector *connector;
 
@@ -197,7 +198,7 @@ static void radeon_driver_irq_uninstall_kms(struct drm_device *dev)
 
 static int radeon_irq_install(struct radeon_device *rdev, int irq)
 {
-	struct drm_device *dev = rdev_to_drm(rdev);
+	struct drm_device *dev = rdev->ddev;
 	int ret;
 
 	if (irq == IRQ_NOTCONNECTED)
@@ -218,7 +219,7 @@ static int radeon_irq_install(struct radeon_device *rdev, int irq)
 
 static void radeon_irq_uninstall(struct radeon_device *rdev)
 {
-	struct drm_device *dev = rdev_to_drm(rdev);
+	struct drm_device *dev = rdev->ddev;
 	struct pci_dev *pdev = to_pci_dev(dev->dev);
 
 	radeon_driver_irq_uninstall_kms(dev);
@@ -322,9 +323,9 @@ int radeon_irq_kms_init(struct radeon_device *rdev)
 	spin_lock_init(&rdev->irq.lock);
 
 	/* Disable vblank irqs aggressively for power-saving */
-	rdev_to_drm(rdev)->vblank_disable_immediate = true;
+	rdev->ddev->vblank_disable_immediate = true;
 
-	r = drm_vblank_init(rdev_to_drm(rdev), rdev->num_crtc);
+	r = drm_vblank_init(rdev->ddev, rdev->num_crtc);
 	if (r) {
 		return r;
 	}

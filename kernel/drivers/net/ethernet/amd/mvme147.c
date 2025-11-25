@@ -177,7 +177,6 @@ static int m147lance_close(struct net_device *dev)
 	return 0;
 }
 
-MODULE_DESCRIPTION("MVME147 LANCE Ethernet driver");
 MODULE_LICENSE("GPL");
 
 static struct net_device *dev_mvme147_lance;

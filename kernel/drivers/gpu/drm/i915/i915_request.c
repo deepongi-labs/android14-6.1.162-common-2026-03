@@ -43,15 +43,16 @@
 #include "gt/intel_rps.h"
 
 #include "i915_active.h"
-#include "i915_config.h"
 #include "i915_deps.h"
 #include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_trace.h"
+#include "intel_pm.h"
 
 struct execute_cb {
 	struct irq_work work;
 	struct i915_sw_fence *fence;
+	struct i915_request *signal;
 };
 
 static struct kmem_cache *slab_requests;
@@ -273,6 +274,11 @@ i915_request_active_engine(struct i915_request *rq,
 	return ret;
 }
 
+static void __rq_init_watchdog(struct i915_request *rq)
+{
+	rq->watchdog.timer.function = NULL;
+}
+
 static enum hrtimer_restart __rq_watchdog_expired(struct hrtimer *hrtimer)
 {
 	struct i915_request *rq =
@@ -281,19 +287,12 @@ static enum hrtimer_restart __rq_watchdog_expired(struct hrtimer *hrtimer)
 
 	if (!i915_request_completed(rq)) {
 		if (llist_add(&rq->watchdog.link, &gt->watchdog.list))
-			queue_work(gt->i915->unordered_wq, &gt->watchdog.work);
+			schedule_work(&gt->watchdog.work);
 	} else {
 		i915_request_put(rq);
 	}
 
 	return HRTIMER_NORESTART;
-}
-
-static void __rq_init_watchdog(struct i915_request *rq)
-{
-	struct i915_request_watchdog *wdg = &rq->watchdog;
-
-	hrtimer_setup(&wdg->timer, __rq_watchdog_expired, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 }
 
 static void __rq_arm_watchdog(struct i915_request *rq)
@@ -306,6 +305,8 @@ static void __rq_arm_watchdog(struct i915_request *rq)
 
 	i915_request_get(rq);
 
+	hrtimer_init(&wdg->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	wdg->timer.function = __rq_watchdog_expired;
 	hrtimer_start_range_ns(&wdg->timer,
 			       ns_to_ktime(ce->watchdog.timeout_us *
 					   NSEC_PER_USEC),
@@ -317,7 +318,7 @@ static void __rq_cancel_watchdog(struct i915_request *rq)
 {
 	struct i915_request_watchdog *wdg = &rq->watchdog;
 
-	if (hrtimer_try_to_cancel(&wdg->timer) > 0)
+	if (wdg->timer.function && hrtimer_try_to_cancel(&wdg->timer) > 0)
 		i915_request_put(rq);
 }
 
@@ -472,7 +473,7 @@ static bool __request_in_flight(const struct i915_request *signal)
 	 * to avoid tearing.]
 	 *
 	 * Note that the read of *execlists->active may race with the promotion
-	 * of execlists->pending[] to execlists->inflight[], overwriting
+	 * of execlists->pending[] to execlists->inflight[], overwritting
 	 * the value at *execlists->active. This is fine. The promotion implies
 	 * that we received an ACK from the HW, and so the context is not
 	 * stuck -- if we do not see ourselves in *active, the inflight status
@@ -1216,7 +1217,7 @@ emit_semaphore_wait(struct i915_request *to,
 	/*
 	 * If this or its dependents are waiting on an external fence
 	 * that may fail catastrophically, then we want to avoid using
-	 * semaphores as they bypass the fence signaling metadata, and we
+	 * sempahores as they bypass the fence signaling metadata, and we
 	 * lose the fence->error propagation.
 	 */
 	if (from->sched.flags & I915_SCHED_HAS_EXTERNAL_CHAIN)
@@ -1349,7 +1350,7 @@ __i915_request_await_external(struct i915_request *rq, struct dma_fence *fence)
 {
 	mark_external(rq);
 	return i915_sw_fence_await_dma_fence(&rq->submit, fence,
-					     i915_fence_context_timeout(rq->i915,
+					     i915_fence_context_timeout(rq->engine->i915,
 									fence->context),
 					     I915_FENCE_GFP);
 }
@@ -1617,20 +1618,6 @@ i915_request_await_object(struct i915_request *to,
 	return ret;
 }
 
-static void i915_request_await_huc(struct i915_request *rq)
-{
-	struct intel_huc *huc = &rq->context->engine->gt->uc.huc;
-
-	/* don't stall kernel submissions! */
-	if (!rcu_access_pointer(rq->context->gem_context))
-		return;
-
-	if (intel_huc_wait_required(huc))
-		i915_sw_fence_await_sw_fence(&rq->submit,
-					     &huc->delayed_load.fence,
-					     &rq->hucq);
-}
-
 static struct i915_request *
 __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 					struct intel_timeline *timeline)
@@ -1720,16 +1707,6 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 {
 	struct intel_timeline *timeline = i915_request_timeline(rq);
 	struct i915_request *prev;
-
-	/*
-	 * Media workloads may require HuC, so stall them until HuC loading is
-	 * complete. Note that HuC not being loaded when a user submission
-	 * arrives can only happen when HuC is loaded via GSC and in that case
-	 * we still expect the window between us starting to accept submissions
-	 * and HuC loading completion to be small (a few hundred ms).
-	 */
-	if (rq->engine->class == VIDEO_DECODE_CLASS)
-		i915_request_await_huc(rq);
 
 	/*
 	 * Dependency tracking and request ordering along the timeline
@@ -2184,7 +2161,7 @@ void i915_request_show(struct drm_printer *m,
 		       const char *prefix,
 		       int indent)
 {
-	const char __rcu *timeline;
+	const char *name = rq->fence.ops->get_timeline_name((struct dma_fence *)&rq->fence);
 	char buf[80] = "";
 	int x = 0;
 
@@ -2220,8 +2197,6 @@ void i915_request_show(struct drm_printer *m,
 
 	x = print_sched_attr(&rq->sched.attr, buf, x, sizeof(buf));
 
-	rcu_read_lock();
-	timeline = dma_fence_timeline_name((struct dma_fence *)&rq->fence);
 	drm_printf(m, "%s%.*s%c %llx:%lld%s%s %s @ %dms: %s\n",
 		   prefix, indent, "                ",
 		   queue_status(rq),
@@ -2230,8 +2205,7 @@ void i915_request_show(struct drm_printer *m,
 		   fence_status(rq),
 		   buf,
 		   jiffies_to_msecs(jiffies - rq->emitted_jiffies),
-		   rcu_dereference(timeline));
-	rcu_read_unlock();
+		   name);
 }
 
 static bool engine_match_ring(struct intel_engine_cs *engine, struct i915_request *rq)

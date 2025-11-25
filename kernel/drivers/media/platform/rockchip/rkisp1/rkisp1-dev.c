@@ -8,16 +8,13 @@
  * Copyright (C) 2017 Rockchip Electronics Co., Ltd.
  */
 
-#include <linux/build_bug.h>
 #include <linux/clk.h>
 #include <linux/interrupt.h>
-#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/pinctrl/consumer.h>
-#include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-mc.h>
@@ -126,12 +123,12 @@ struct rkisp1_isr_data {
 
 static int rkisp1_subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 					struct v4l2_subdev *sd,
-					struct v4l2_async_connection *asc)
+					struct v4l2_async_subdev *asd)
 {
 	struct rkisp1_device *rkisp1 =
 		container_of(notifier, struct rkisp1_device, notifier);
 	struct rkisp1_sensor_async *s_asd =
-		container_of(asc, struct rkisp1_sensor_async, asd);
+		container_of(asd, struct rkisp1_sensor_async, asd);
 	int source_pad;
 	int ret;
 
@@ -169,10 +166,10 @@ static int rkisp1_subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 	return v4l2_device_register_subdev_nodes(&rkisp1->v4l2_dev);
 }
 
-static void rkisp1_subdev_notifier_destroy(struct v4l2_async_connection *asc)
+static void rkisp1_subdev_notifier_destroy(struct v4l2_async_subdev *asd)
 {
 	struct rkisp1_sensor_async *rk_asd =
-		container_of(asc, struct rkisp1_sensor_async, asd);
+		container_of(asd, struct rkisp1_sensor_async, asd);
 
 	fwnode_handle_put(rk_asd->source_ep);
 }
@@ -191,7 +188,7 @@ static int rkisp1_subdev_notifier_register(struct rkisp1_device *rkisp1)
 	unsigned int index = 0;
 	int ret = 0;
 
-	v4l2_async_nf_init(ntf, &rkisp1->v4l2_dev);
+	v4l2_async_nf_init(ntf);
 
 	ntf->ops = &rkisp1_subdev_notifier_ops;
 
@@ -210,7 +207,7 @@ static int rkisp1_subdev_notifier_register(struct rkisp1_device *rkisp1)
 		switch (reg) {
 		case 0:
 			/* MIPI CSI-2 port */
-			if (!rkisp1_has_feature(rkisp1, MIPI_CSI2)) {
+			if (!(rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2)) {
 				dev_err(rkisp1->dev,
 					"internal CSI must be available for port 0\n");
 				ret = -EINVAL;
@@ -229,9 +226,6 @@ static int rkisp1_subdev_notifier_register(struct rkisp1_device *rkisp1)
 			vep.bus_type = V4L2_MBUS_UNKNOWN;
 			break;
 		}
-
-		if (ret)
-			break;
 
 		/* Parse the endpoint and validate the bus type. */
 		ret = v4l2_fwnode_endpoint_parse(ep, &vep);
@@ -294,7 +288,7 @@ static int rkisp1_subdev_notifier_register(struct rkisp1_device *rkisp1)
 	if (!index)
 		dev_dbg(rkisp1->dev, "no remote subdevice found\n");
 
-	ret = v4l2_async_nf_register(ntf);
+	ret = v4l2_async_nf_register(&rkisp1->v4l2_dev, ntf);
 	if (ret) {
 		v4l2_async_nf_cleanup(ntf);
 		return ret;
@@ -364,11 +358,10 @@ static const struct dev_pm_ops rkisp1_pm_ops = {
 
 static int rkisp1_create_links(struct rkisp1_device *rkisp1)
 {
-	unsigned int dev_count = rkisp1_path_count(rkisp1);
 	unsigned int i;
 	int ret;
 
-	if (rkisp1_has_feature(rkisp1, MIPI_CSI2)) {
+	if (rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2) {
 		/* Link the CSI receiver to the ISP. */
 		ret = media_create_pad_link(&rkisp1->csi.sd.entity,
 					    RKISP1_CSI_PAD_SRC,
@@ -380,7 +373,7 @@ static int rkisp1_create_links(struct rkisp1_device *rkisp1)
 	}
 
 	/* create ISP->RSZ->CAP links */
-	for (i = 0; i < dev_count; i++) {
+	for (i = 0; i < 2; i++) {
 		struct media_entity *resizer =
 			&rkisp1->resizer_devs[i].sd.entity;
 		struct media_entity *capture =
@@ -420,7 +413,7 @@ static int rkisp1_create_links(struct rkisp1_device *rkisp1)
 
 static void rkisp1_entities_unregister(struct rkisp1_device *rkisp1)
 {
-	if (rkisp1_has_feature(rkisp1, MIPI_CSI2))
+	if (rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2)
 		rkisp1_csi_unregister(rkisp1);
 	rkisp1_params_unregister(rkisp1);
 	rkisp1_stats_unregister(rkisp1);
@@ -453,7 +446,7 @@ static int rkisp1_entities_register(struct rkisp1_device *rkisp1)
 	if (ret)
 		goto error;
 
-	if (rkisp1_has_feature(rkisp1, MIPI_CSI2)) {
+	if (rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2) {
 		ret = rkisp1_csi_register(rkisp1);
 		if (ret)
 			goto error;
@@ -493,6 +486,13 @@ static irqreturn_t rkisp1_isr(int irq, void *ctx)
 	return ret;
 }
 
+static const char * const px30_isp_clks[] = {
+	"isp",
+	"aclk",
+	"hclk",
+	"pclk",
+};
+
 static const struct rkisp1_isr_data px30_isp_isrs[] = {
 	{ "isp", rkisp1_isp_isr, BIT(RKISP1_IRQ_ISP) },
 	{ "mi", rkisp1_capture_isr, BIT(RKISP1_IRQ_MI) },
@@ -500,16 +500,18 @@ static const struct rkisp1_isr_data px30_isp_isrs[] = {
 };
 
 static const struct rkisp1_info px30_isp_info = {
-	.num_clocks = 4,
+	.clks = px30_isp_clks,
+	.clk_size = ARRAY_SIZE(px30_isp_clks),
 	.isrs = px30_isp_isrs,
 	.isr_size = ARRAY_SIZE(px30_isp_isrs),
 	.isp_ver = RKISP1_V12,
-	.features = RKISP1_FEATURE_MIPI_CSI2
-		  | RKISP1_FEATURE_SELF_PATH
-		  | RKISP1_FEATURE_DUAL_CROP
-		  | RKISP1_FEATURE_BLS,
-	.max_width = 3264,
-	.max_height = 2448,
+	.features = RKISP1_FEATURE_MIPI_CSI2,
+};
+
+static const char * const rk3399_isp_clks[] = {
+	"isp",
+	"aclk",
+	"hclk",
 };
 
 static const struct rkisp1_isr_data rk3399_isp_isrs[] = {
@@ -517,41 +519,12 @@ static const struct rkisp1_isr_data rk3399_isp_isrs[] = {
 };
 
 static const struct rkisp1_info rk3399_isp_info = {
-	.num_clocks = 3,
+	.clks = rk3399_isp_clks,
+	.clk_size = ARRAY_SIZE(rk3399_isp_clks),
 	.isrs = rk3399_isp_isrs,
 	.isr_size = ARRAY_SIZE(rk3399_isp_isrs),
 	.isp_ver = RKISP1_V10,
-	.features = RKISP1_FEATURE_MIPI_CSI2
-		  | RKISP1_FEATURE_SELF_PATH
-		  | RKISP1_FEATURE_DUAL_CROP
-		  | RKISP1_FEATURE_BLS,
-	.max_width = 4416,
-	.max_height = 3312,
-};
-
-static const struct rkisp1_isr_data imx8mp_isp_isrs[] = {
-	{ NULL, rkisp1_isr, BIT(RKISP1_IRQ_ISP) | BIT(RKISP1_IRQ_MI) },
-};
-
-static const char * const imx8mp_isp_pm_domains[] = {
-	"isp",
-	"csi2",
-};
-
-static const struct rkisp1_info imx8mp_isp_info = {
-	.num_clocks = 3,
-	.isrs = imx8mp_isp_isrs,
-	.isr_size = ARRAY_SIZE(imx8mp_isp_isrs),
-	.isp_ver = RKISP1_V_IMX8MP,
-	.features = RKISP1_FEATURE_MAIN_STRIDE
-		  | RKISP1_FEATURE_DMA_34BIT
-		  | RKISP1_FEATURE_COMPAND,
-	.max_width = 4096,
-	.max_height = 3072,
-	.pm_domains = {
-		.names = imx8mp_isp_pm_domains,
-		.count = ARRAY_SIZE(imx8mp_isp_pm_domains),
-	},
+	.features = RKISP1_FEATURE_MIPI_CSI2,
 };
 
 static const struct of_device_id rkisp1_of_match[] = {
@@ -563,88 +536,9 @@ static const struct of_device_id rkisp1_of_match[] = {
 		.compatible = "rockchip,rk3399-cif-isp",
 		.data = &rk3399_isp_info,
 	},
-	{
-		.compatible = "fsl,imx8mp-isp",
-		.data = &imx8mp_isp_info,
-	},
 	{},
 };
 MODULE_DEVICE_TABLE(of, rkisp1_of_match);
-
-static const char * const rkisp1_clk_names[] = {
-	"isp",
-	"aclk",
-	"hclk",
-	"pclk",
-};
-
-static int rkisp1_init_clocks(struct rkisp1_device *rkisp1)
-{
-	const struct rkisp1_info *info = rkisp1->info;
-	unsigned int i;
-	int ret;
-
-	static_assert(ARRAY_SIZE(rkisp1_clk_names) == ARRAY_SIZE(rkisp1->clks));
-
-	for (i = 0; i < info->num_clocks; i++)
-		rkisp1->clks[i].id = rkisp1_clk_names[i];
-
-	ret = devm_clk_bulk_get(rkisp1->dev, info->num_clocks, rkisp1->clks);
-	if (ret)
-		return ret;
-
-	rkisp1->clk_size = info->num_clocks;
-
-	/*
-	 * On i.MX8MP the pclk clock is needed to access the HDR stitching
-	 * registers, but wasn't required by DT bindings. Try to acquire it as
-	 * an optional clock to avoid breaking backward compatibility.
-	 */
-	if (info->isp_ver == RKISP1_V_IMX8MP) {
-		struct clk *clk;
-
-		clk = devm_clk_get_optional(rkisp1->dev, "pclk");
-		if (IS_ERR(clk))
-			return dev_err_probe(rkisp1->dev, PTR_ERR(clk),
-					     "Failed to acquire pclk clock\n");
-
-		if (clk)
-			rkisp1->clks[rkisp1->clk_size++].clk = clk;
-	}
-
-	return 0;
-}
-
-static int rkisp1_init_pm_domains(struct rkisp1_device *rkisp1)
-{
-	const struct rkisp1_info *info = rkisp1->info;
-	struct dev_pm_domain_attach_data pm_domain_data = {
-		.pd_names = info->pm_domains.names,
-		.num_pd_names = info->pm_domains.count,
-	};
-	int ret;
-
-	/*
-	 * Most platforms have a single power domain, which the PM domain core
-	 * automatically attaches at probe time. When that's the case there's
-	 * nothing to do here.
-	 */
-	if (rkisp1->dev->pm_domain)
-		return 0;
-
-	if (!pm_domain_data.num_pd_names)
-		return 0;
-
-	ret = devm_pm_domain_attach_list(rkisp1->dev, &pm_domain_data,
-					 &rkisp1->pm_domains);
-	if (ret < 0) {
-		dev_err_probe(rkisp1->dev, ret,
-			      "Failed to attach power domains\n");
-		return ret;
-	}
-
-	return 0;
-}
 
 static int rkisp1_probe(struct platform_device *pdev)
 {
@@ -653,7 +547,6 @@ static int rkisp1_probe(struct platform_device *pdev)
 	struct rkisp1_device *rkisp1;
 	struct v4l2_device *v4l2_dev;
 	unsigned int i;
-	u64 dma_mask;
 	int ret, irq;
 	u32 cif_id;
 
@@ -666,13 +559,6 @@ static int rkisp1_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(dev, rkisp1);
 	rkisp1->dev = dev;
-
-	dma_mask = rkisp1_has_feature(rkisp1, DMA_34BIT) ? DMA_BIT_MASK(34) :
-							   DMA_BIT_MASK(32);
-
-	ret = dma_set_mask_and_coherent(dev, dma_mask);
-	if (ret)
-		return ret;
 
 	mutex_init(&rkisp1->stream_lock);
 
@@ -703,28 +589,12 @@ static int rkisp1_probe(struct platform_device *pdev)
 		}
 	}
 
-	ret = rkisp1_init_clocks(rkisp1);
+	for (i = 0; i < info->clk_size; i++)
+		rkisp1->clks[i].id = info->clks[i];
+	ret = devm_clk_bulk_get(dev, info->clk_size, rkisp1->clks);
 	if (ret)
 		return ret;
-
-	ret = rkisp1_init_pm_domains(rkisp1);
-	if (ret)
-		return ret;
-
-	if (info->isp_ver == RKISP1_V_IMX8MP) {
-		unsigned int id;
-
-		rkisp1->gasket = syscon_regmap_lookup_by_phandle_args(dev->of_node,
-								      "fsl,blk-ctrl",
-								      1, &id);
-		if (IS_ERR(rkisp1->gasket)) {
-			ret = PTR_ERR(rkisp1->gasket);
-			dev_err(dev, "failed to get gasket: %d\n", ret);
-			return ret;
-		}
-
-		rkisp1->gasket_id = id;
-	}
+	rkisp1->clk_size = info->clk_size;
 
 	pm_runtime_enable(&pdev->dev);
 
@@ -780,7 +650,7 @@ static int rkisp1_probe(struct platform_device *pdev)
 err_unreg_entities:
 	rkisp1_entities_unregister(rkisp1);
 err_cleanup_csi:
-	if (rkisp1_has_feature(rkisp1, MIPI_CSI2))
+	if (rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2)
 		rkisp1_csi_cleanup(rkisp1);
 err_unreg_media_dev:
 	media_device_unregister(&rkisp1->media_dev);
@@ -793,7 +663,7 @@ err_pm_runtime_disable:
 	return ret;
 }
 
-static void rkisp1_remove(struct platform_device *pdev)
+static int rkisp1_remove(struct platform_device *pdev)
 {
 	struct rkisp1_device *rkisp1 = platform_get_drvdata(pdev);
 
@@ -801,7 +671,7 @@ static void rkisp1_remove(struct platform_device *pdev)
 	v4l2_async_nf_cleanup(&rkisp1->notifier);
 
 	rkisp1_entities_unregister(rkisp1);
-	if (rkisp1_has_feature(rkisp1, MIPI_CSI2))
+	if (rkisp1->info->features & RKISP1_FEATURE_MIPI_CSI2)
 		rkisp1_csi_cleanup(rkisp1);
 	rkisp1_debug_cleanup(rkisp1);
 
@@ -811,6 +681,8 @@ static void rkisp1_remove(struct platform_device *pdev)
 	media_device_cleanup(&rkisp1->media_dev);
 
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static struct platform_driver rkisp1_drv = {

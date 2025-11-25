@@ -4,10 +4,11 @@
 
 #include <uapi/asm/setup.h>
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 extern void ppc_printk_progress(char *s, unsigned short hex);
 
 extern unsigned long long memory_limit;
+extern void *zalloc_maybe_bootmem(size_t size, gfp_t mask);
 
 struct device_node;
 
@@ -89,7 +90,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 
 extern struct seq_buf ppc_hw_desc;
 
-#endif /* !__ASSEMBLER__ */
+#endif /* !__ASSEMBLY__ */
 
 #endif	/* _ASM_POWERPC_SETUP_H */
 

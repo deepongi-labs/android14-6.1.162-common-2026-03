@@ -85,8 +85,12 @@ int blk_crypto_profile_init(struct blk_crypto_profile *profile,
 	 * of a device-mapper device, so use a dynamic lock class to avoid
 	 * false-positive lockdep reports.
 	 */
+#ifdef CONFIG_LOCKDEP
 	lockdep_register_key(&profile->lockdep_key);
 	__init_rwsem(&profile->lock, "&profile->lock", &profile->lockdep_key);
+#else
+	init_rwsem(&profile->lock);
+#endif
 
 	if (num_slots == 0)
 		return 0;
@@ -234,12 +238,13 @@ EXPORT_SYMBOL_GPL(blk_crypto_keyslot_index);
  * @profile: the crypto profile of the device the key will be used on
  * @key: the key that will be used
  * @slot_ptr: If a keyslot is allocated, an opaque pointer to the keyslot struct
- *	      will be stored here.  blk_crypto_put_keyslot() must be called
- *	      later to release it.  Otherwise, NULL will be stored here.
+ *	      will be stored here; otherwise NULL will be stored here.
  *
  * If the device has keyslots, this gets a keyslot that's been programmed with
  * the specified key.  If the key is already in a slot, this reuses it;
  * otherwise this waits for a slot to become idle and programs the key into it.
+ *
+ * This must be paired with a call to blk_crypto_put_keyslot().
  *
  * Context: Process context. Takes and releases profile->lock.
  * Return: BLK_STS_OK on success, meaning that either a keyslot was allocated or
@@ -318,14 +323,19 @@ success:
 
 /**
  * blk_crypto_put_keyslot() - Release a reference to a keyslot
- * @slot: The keyslot to release the reference of
+ * @slot: The keyslot to release the reference of (may be NULL).
  *
  * Context: Any context.
  */
 void blk_crypto_put_keyslot(struct blk_crypto_keyslot *slot)
 {
-	struct blk_crypto_profile *profile = slot->profile;
+	struct blk_crypto_profile *profile;
 	unsigned long flags;
+
+	if (!slot)
+		return;
+
+	profile = slot->profile;
 
 	if (atomic_dec_and_lock_irqsave(&slot->slot_refs,
 					&profile->idle_slots_lock, flags)) {
@@ -444,7 +454,9 @@ void blk_crypto_profile_destroy(struct blk_crypto_profile *profile)
 {
 	if (!profile)
 		return;
+#ifdef CONFIG_LOCKDEP
 	lockdep_unregister_key(&profile->lockdep_key);
+#endif
 	kvfree(profile->slot_hashtable);
 	kvfree_sensitive(profile->slots,
 			 sizeof(profile->slots[0]) * profile->num_slots);
@@ -467,7 +479,7 @@ EXPORT_SYMBOL_GPL(blk_crypto_register);
 /**
  * blk_crypto_derive_sw_secret() - Derive software secret from wrapped key
  * @bdev: a block device that supports hardware-wrapped keys
- * @eph_key: a hardware-wrapped key in ephemerally-wrapped form
+ * @eph_key: the hardware-wrapped key in ephemerally-wrapped form
  * @eph_key_size: size of @eph_key in bytes
  * @sw_secret: (output) the software secret
  *
@@ -479,7 +491,7 @@ EXPORT_SYMBOL_GPL(blk_crypto_register);
  *
  * Return: 0 on success, -EOPNOTSUPP if the block device doesn't support
  *	   hardware-wrapped keys, -EBADMSG if the key isn't a valid
- *	   ephemerally-wrapped key, or another -errno code.
+ *	   hardware-wrapped key, or another -errno code.
  */
 int blk_crypto_derive_sw_secret(struct block_device *bdev,
 				const u8 *eph_key, size_t eph_key_size,
@@ -502,64 +514,6 @@ int blk_crypto_derive_sw_secret(struct block_device *bdev,
 	return err;
 }
 EXPORT_SYMBOL_GPL(blk_crypto_derive_sw_secret);
-
-int blk_crypto_import_key(struct blk_crypto_profile *profile,
-			  const u8 *raw_key, size_t raw_key_size,
-			  u8 lt_key[BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE])
-{
-	int ret;
-
-	if (!profile)
-		return -EOPNOTSUPP;
-	if (!(profile->key_types_supported & BLK_CRYPTO_KEY_TYPE_HW_WRAPPED))
-		return -EOPNOTSUPP;
-	if (!profile->ll_ops.import_key)
-		return -EOPNOTSUPP;
-	blk_crypto_hw_enter(profile);
-	ret = profile->ll_ops.import_key(profile, raw_key, raw_key_size,
-					 lt_key);
-	blk_crypto_hw_exit(profile);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(blk_crypto_import_key);
-
-int blk_crypto_generate_key(struct blk_crypto_profile *profile,
-			    u8 lt_key[BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE])
-{
-	int ret;
-
-	if (!profile)
-		return -EOPNOTSUPP;
-	if (!(profile->key_types_supported & BLK_CRYPTO_KEY_TYPE_HW_WRAPPED))
-		return -EOPNOTSUPP;
-	if (!profile->ll_ops.generate_key)
-		return -EOPNOTSUPP;
-	blk_crypto_hw_enter(profile);
-	ret = profile->ll_ops.generate_key(profile, lt_key);
-	blk_crypto_hw_exit(profile);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(blk_crypto_generate_key);
-
-int blk_crypto_prepare_key(struct blk_crypto_profile *profile,
-			   const u8 *lt_key, size_t lt_key_size,
-			   u8 eph_key[BLK_CRYPTO_MAX_HW_WRAPPED_KEY_SIZE])
-{
-	int ret;
-
-	if (!profile)
-		return -EOPNOTSUPP;
-	if (!(profile->key_types_supported & BLK_CRYPTO_KEY_TYPE_HW_WRAPPED))
-		return -EOPNOTSUPP;
-	if (!profile->ll_ops.prepare_key)
-		return -EOPNOTSUPP;
-	blk_crypto_hw_enter(profile);
-	ret = profile->ll_ops.prepare_key(profile, lt_key, lt_key_size,
-					  eph_key);
-	blk_crypto_hw_exit(profile);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(blk_crypto_prepare_key);
 
 /**
  * blk_crypto_intersect_capabilities() - restrict supported crypto capabilities

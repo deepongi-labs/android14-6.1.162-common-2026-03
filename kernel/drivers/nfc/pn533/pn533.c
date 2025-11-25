@@ -1233,7 +1233,7 @@ static int pn533_init_target_complete(struct pn533 *dev, struct sk_buff *resp)
 
 static void pn533_listen_mode_timer(struct timer_list *t)
 {
-	struct pn533 *dev = timer_container_of(dev, t, listen_timer);
+	struct pn533 *dev = from_timer(dev, t, listen_timer);
 
 	dev->cancel_listen = 1;
 
@@ -1412,9 +1412,11 @@ static int pn533_autopoll_complete(struct pn533 *dev, void *arg,
 			if (dev->poll_mod_count != 0)
 				return rc;
 			goto stop_poll;
+		} else if (rc < 0) {
+			nfc_err(dev->dev,
+				"Error %d when running autopoll\n", rc);
+			goto stop_poll;
 		}
-		nfc_err(dev->dev, "Error %d when running autopoll\n", rc);
-		goto stop_poll;
 	}
 
 	nbtg = resp->data[0];
@@ -1503,15 +1505,17 @@ static int pn533_poll_complete(struct pn533 *dev, void *arg,
 			if (dev->poll_mod_count != 0)
 				return rc;
 			goto stop_poll;
+		} else if (rc < 0) {
+			nfc_err(dev->dev,
+				"Error %d when running poll\n", rc);
+			goto stop_poll;
 		}
-		nfc_err(dev->dev, "Error %d when running poll\n", rc);
-		goto stop_poll;
 	}
 
 	cur_mod = dev->poll_mod_active[dev->poll_mod_curr];
 
 	if (cur_mod->len == 0) { /* Target mode */
-		timer_delete(&dev->listen_timer);
+		del_timer(&dev->listen_timer);
 		rc = pn533_init_target_complete(dev, resp);
 		goto done;
 	}
@@ -1745,7 +1749,7 @@ static void pn533_stop_poll(struct nfc_dev *nfc_dev)
 {
 	struct pn533 *dev = nfc_get_drvdata(nfc_dev);
 
-	timer_delete(&dev->listen_timer);
+	del_timer(&dev->listen_timer);
 
 	if (!dev->poll_mod_count) {
 		dev_dbg(dev->dev,
@@ -2793,7 +2797,7 @@ void pn53x_common_clean(struct pn533 *priv)
 	struct pn533_cmd *cmd, *n;
 
 	/* delete the timer before cleanup the worker */
-	timer_shutdown_sync(&priv->listen_timer);
+	del_timer_sync(&priv->listen_timer);
 
 	flush_delayed_work(&priv->poll_work);
 	destroy_workqueue(priv->wq);

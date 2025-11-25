@@ -24,14 +24,26 @@
 #include <sys/timex.h>
 #include <string.h>
 #include <signal.h>
-#include <include/vdso/time64.h>
 #include "../kselftest.h"
-#include "helpers.h"
+
+#define NSEC_PER_SEC 1000000000ULL
 
 #define UNRESONABLE_LATENCY 40000000 /* 40ms in nanosecs */
 
-/* CLOCK_HWSPECIFIC == CLOCK_SGI_CYCLE (Deprecated) */
+
+#define CLOCK_REALTIME			0
+#define CLOCK_MONOTONIC			1
+#define CLOCK_PROCESS_CPUTIME_ID	2
+#define CLOCK_THREAD_CPUTIME_ID		3
+#define CLOCK_MONOTONIC_RAW		4
+#define CLOCK_REALTIME_COARSE		5
+#define CLOCK_MONOTONIC_COARSE		6
+#define CLOCK_BOOTTIME			7
+#define CLOCK_REALTIME_ALARM		8
+#define CLOCK_BOOTTIME_ALARM		9
 #define CLOCK_HWSPECIFIC		10
+#define CLOCK_TAI			11
+#define NR_CLOCKIDS			12
 
 #define UNSUPPORTED 0xf00f
 
@@ -75,6 +87,14 @@ struct timespec timespec_add(struct timespec ts, unsigned long long ns)
 }
 
 
+long long timespec_sub(struct timespec a, struct timespec b)
+{
+	long long ret = NSEC_PER_SEC * b.tv_sec + b.tv_nsec;
+
+	ret -= NSEC_PER_SEC * a.tv_sec + a.tv_nsec;
+	return ret;
+}
+
 int nanosleep_lat_test(int clockid, long long ns)
 {
 	struct timespec start, end, target;
@@ -98,7 +118,7 @@ int nanosleep_lat_test(int clockid, long long ns)
 	clock_gettime(clockid, &end);
 
 	if (((timespec_sub(start, end)/count)-ns) > UNRESONABLE_LATENCY) {
-		ksft_print_msg("Large rel latency: %lld ns :", (timespec_sub(start, end)/count)-ns);
+		printf("Large rel latency: %lld ns :", (timespec_sub(start, end)/count)-ns);
 		return -1;
 	}
 
@@ -112,25 +132,21 @@ int nanosleep_lat_test(int clockid, long long ns)
 	}
 
 	if (latency/count > UNRESONABLE_LATENCY) {
-		ksft_print_msg("Large abs latency: %lld ns :", latency/count);
+		printf("Large abs latency: %lld ns :", latency/count);
 		return -1;
 	}
 
 	return 0;
 }
 
-#define SKIPPED_CLOCK_COUNT 3
+
 
 int main(int argc, char **argv)
 {
 	long long length;
 	int clockid, ret;
-	int max_clocks = CLOCK_TAI + 1;
 
-	ksft_print_header();
-	ksft_set_plan(max_clocks - CLOCK_REALTIME - SKIPPED_CLOCK_COUNT);
-
-	for (clockid = CLOCK_REALTIME; clockid < max_clocks; clockid++) {
+	for (clockid = CLOCK_REALTIME; clockid < NR_CLOCKIDS; clockid++) {
 
 		/* Skip cputime clockids since nanosleep won't increment cputime */
 		if (clockid == CLOCK_PROCESS_CPUTIME_ID ||
@@ -138,8 +154,11 @@ int main(int argc, char **argv)
 				clockid == CLOCK_HWSPECIFIC)
 			continue;
 
+		printf("nsleep latency %-26s ", clockstring(clockid));
+		fflush(stdout);
+
 		length = 10;
-		while (length <= (NSEC_PER_SEC * 10LL)) {
+		while (length <= (NSEC_PER_SEC * 10)) {
 			ret = nanosleep_lat_test(clockid, length);
 			if (ret)
 				break;
@@ -148,12 +167,14 @@ int main(int argc, char **argv)
 		}
 
 		if (ret == UNSUPPORTED) {
-			ksft_test_result_skip("%s\n", clockstring(clockid));
-		} else {
-			ksft_test_result(ret >= 0, "%s\n",
-					 clockstring(clockid));
+			printf("[UNSUPPORTED]\n");
+			continue;
 		}
+		if (ret < 0) {
+			printf("[FAILED]\n");
+			return ksft_exit_fail();
+		}
+		printf("[OK]\n");
 	}
-
-	ksft_finished();
+	return ksft_exit_pass();
 }

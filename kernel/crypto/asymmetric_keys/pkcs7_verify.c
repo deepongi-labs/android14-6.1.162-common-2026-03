@@ -429,7 +429,6 @@ int pkcs7_verify(struct pkcs7_message *pkcs7,
 		/* Authattr presence checked in parser */
 		break;
 	case VERIFYING_UNSPECIFIED_SIGNATURE:
-	case VERIFYING_BPF_SIGNATURE:
 		if (pkcs7->data_type != OID_data) {
 			pr_warn("Invalid unspecified sig (not pkcs7-data)\n");
 			return -EKEYREJECTED;
@@ -486,4 +485,3 @@ int pkcs7_supply_detached_data(struct pkcs7_message *pkcs7,
 	pkcs7->data_len = datalen;
 	return 0;
 }
-EXPORT_SYMBOL_GPL(pkcs7_supply_detached_data);

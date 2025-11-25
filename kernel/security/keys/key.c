@@ -13,6 +13,7 @@
 #include <linux/security.h>
 #include <linux/workqueue.h>
 #include <linux/random.h>
+#include <linux/ima.h>
 #include <linux/err.h>
 #include "internal.h"
 
@@ -230,7 +231,6 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 	struct key *key;
 	size_t desclen, quotalen;
 	int ret;
-	unsigned long irqflags;
 
 	key = ERR_PTR(-EINVAL);
 	if (!desc || !*desc)
@@ -260,7 +260,7 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 		unsigned maxbytes = uid_eq(uid, GLOBAL_ROOT_UID) ?
 			key_quota_root_maxbytes : key_quota_maxbytes;
 
-		spin_lock_irqsave(&user->lock, irqflags);
+		spin_lock(&user->lock);
 		if (!(flags & KEY_ALLOC_QUOTA_OVERRUN)) {
 			if (user->qnkeys + 1 > maxkeys ||
 			    user->qnbytes + quotalen > maxbytes ||
@@ -270,7 +270,7 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 
 		user->qnkeys++;
 		user->qnbytes += quotalen;
-		spin_unlock_irqrestore(&user->lock, irqflags);
+		spin_unlock(&user->lock);
 	}
 
 	/* allocate and initialise the key and its description */
@@ -298,7 +298,6 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 	key->restrict_link = restrict_link;
 	key->last_used_at = ktime_get_real_seconds();
 
-	key->flags |= 1 << KEY_FLAG_USER_ALIVE;
 	if (!(flags & KEY_ALLOC_NOT_IN_QUOTA))
 		key->flags |= 1 << KEY_FLAG_IN_QUOTA;
 	if (flags & KEY_ALLOC_BUILT_IN)
@@ -329,10 +328,10 @@ security_error:
 	kfree(key->description);
 	kmem_cache_free(key_jar, key);
 	if (!(flags & KEY_ALLOC_NOT_IN_QUOTA)) {
-		spin_lock_irqsave(&user->lock, irqflags);
+		spin_lock(&user->lock);
 		user->qnkeys--;
 		user->qnbytes -= quotalen;
-		spin_unlock_irqrestore(&user->lock, irqflags);
+		spin_unlock(&user->lock);
 	}
 	key_user_put(user);
 	key = ERR_PTR(ret);
@@ -342,10 +341,10 @@ no_memory_3:
 	kmem_cache_free(key_jar, key);
 no_memory_2:
 	if (!(flags & KEY_ALLOC_NOT_IN_QUOTA)) {
-		spin_lock_irqsave(&user->lock, irqflags);
+		spin_lock(&user->lock);
 		user->qnkeys--;
 		user->qnbytes -= quotalen;
-		spin_unlock_irqrestore(&user->lock, irqflags);
+		spin_unlock(&user->lock);
 	}
 	key_user_put(user);
 no_memory_1:
@@ -353,7 +352,7 @@ no_memory_1:
 	goto error;
 
 no_quota:
-	spin_unlock_irqrestore(&user->lock, irqflags);
+	spin_unlock(&user->lock);
 	key_user_put(user);
 	key = ERR_PTR(-EDQUOT);
 	goto error;
@@ -382,9 +381,8 @@ int key_payload_reserve(struct key *key, size_t datalen)
 	if (delta != 0 && test_bit(KEY_FLAG_IN_QUOTA, &key->flags)) {
 		unsigned maxbytes = uid_eq(key->user->uid, GLOBAL_ROOT_UID) ?
 			key_quota_root_maxbytes : key_quota_maxbytes;
-		unsigned long flags;
 
-		spin_lock_irqsave(&key->user->lock, flags);
+		spin_lock(&key->user->lock);
 
 		if (delta > 0 &&
 		    (key->user->qnbytes + delta > maxbytes ||
@@ -395,7 +393,7 @@ int key_payload_reserve(struct key *key, size_t datalen)
 			key->user->qnbytes += delta;
 			key->quotalen += delta;
 		}
-		spin_unlock_irqrestore(&key->user->lock, flags);
+		spin_unlock(&key->user->lock);
 	}
 
 	/* change the recorded data length if that didn't generate an error */
@@ -649,20 +647,8 @@ void key_put(struct key *key)
 	if (key) {
 		key_check(key);
 
-		if (refcount_dec_and_test(&key->usage)) {
-			unsigned long flags;
-
-			/* deal with the user's key tracking and quota */
-			if (test_bit(KEY_FLAG_IN_QUOTA, &key->flags)) {
-				spin_lock_irqsave(&key->user->lock, flags);
-				key->user->qnkeys--;
-				key->user->qnbytes -= key->quotalen;
-				spin_unlock_irqrestore(&key->user->lock, flags);
-			}
-			/* Mark key as safe for GC after key->user done. */
-			clear_bit_unlock(KEY_FLAG_USER_ALIVE, &key->flags);
+		if (refcount_dec_and_test(&key->usage))
 			schedule_work(&key_gc_work);
-		}
 	}
 }
 EXPORT_SYMBOL(key_put);
@@ -705,7 +691,6 @@ error:
 	spin_unlock(&key_serial_lock);
 	return key;
 }
-EXPORT_SYMBOL(key_lookup);
 
 /*
  * Find and lock the specified key type against removal.
@@ -799,18 +784,38 @@ error:
 	goto out;
 }
 
-/*
- * Create or potentially update a key. The combined logic behind
- * key_create_or_update() and key_create()
+/**
+ * key_create_or_update - Update or create and instantiate a key.
+ * @keyring_ref: A pointer to the destination keyring with possession flag.
+ * @type: The type of key.
+ * @description: The searchable description for the key.
+ * @payload: The data to use to instantiate or update the key.
+ * @plen: The length of @payload.
+ * @perm: The permissions mask for a new key.
+ * @flags: The quota flags for a new key.
+ *
+ * Search the destination keyring for a key of the same description and if one
+ * is found, update it, otherwise create and instantiate a new one and create a
+ * link to it from that keyring.
+ *
+ * If perm is KEY_PERM_UNDEF then an appropriate key permissions mask will be
+ * concocted.
+ *
+ * Returns a pointer to the new key if successful, -ENODEV if the key type
+ * wasn't available, -ENOTDIR if the keyring wasn't a keyring, -EACCES if the
+ * caller isn't permitted to modify the keyring or the LSM did not permit
+ * creation of the key.
+ *
+ * On success, the possession flag from the keyring ref will be tacked on to
+ * the key ref before it is returned.
  */
-static key_ref_t __key_create_or_update(key_ref_t keyring_ref,
-					const char *type,
-					const char *description,
-					const void *payload,
-					size_t plen,
-					key_perm_t perm,
-					unsigned long flags,
-					bool allow_update)
+key_ref_t key_create_or_update(key_ref_t keyring_ref,
+			       const char *type,
+			       const char *description,
+			       const void *payload,
+			       size_t plen,
+			       key_perm_t perm,
+			       unsigned long flags)
 {
 	struct keyring_index_key index_key = {
 		.description	= description,
@@ -897,23 +902,14 @@ static key_ref_t __key_create_or_update(key_ref_t keyring_ref,
 		goto error_link_end;
 	}
 
-	/* if it's requested and possible to update this type of key, search
-	 * for an existing key of the same type and description in the
-	 * destination keyring and update that instead if possible
+	/* if it's possible to update this type of key, search for an existing
+	 * key of the same type and description in the destination keyring and
+	 * update that instead if possible
 	 */
-	if (allow_update) {
-		if (index_key.type->update) {
-			key_ref = find_key_to_update(keyring_ref, &index_key);
-			if (key_ref)
-				goto found_matching_key;
-		}
-	} else {
+	if (index_key.type->update) {
 		key_ref = find_key_to_update(keyring_ref, &index_key);
-		if (key_ref) {
-			key_ref_put(key_ref);
-			key_ref = ERR_PTR(-EEXIST);
-			goto error_link_end;
-		}
+		if (key_ref)
+			goto found_matching_key;
 	}
 
 	/* if the client doesn't provide, decide on the permissions we want */
@@ -945,8 +941,8 @@ static key_ref_t __key_create_or_update(key_ref_t keyring_ref,
 		goto error_link_end;
 	}
 
-	security_key_post_create_or_update(keyring, key, payload, plen, flags,
-					   true);
+	ima_post_key_create_or_update(keyring, key, payload, plen,
+				      flags, true);
 
 	key_ref = make_key_ref(key, is_key_possessed(keyring_ref));
 
@@ -979,86 +975,13 @@ error:
 	key_ref = __key_update(key_ref, &prep);
 
 	if (!IS_ERR(key_ref))
-		security_key_post_create_or_update(keyring, key, payload, plen,
-						   flags, false);
+		ima_post_key_create_or_update(keyring, key,
+					      payload, plen,
+					      flags, false);
 
 	goto error_free_prep;
 }
-
-/**
- * key_create_or_update - Update or create and instantiate a key.
- * @keyring_ref: A pointer to the destination keyring with possession flag.
- * @type: The type of key.
- * @description: The searchable description for the key.
- * @payload: The data to use to instantiate or update the key.
- * @plen: The length of @payload.
- * @perm: The permissions mask for a new key.
- * @flags: The quota flags for a new key.
- *
- * Search the destination keyring for a key of the same description and if one
- * is found, update it, otherwise create and instantiate a new one and create a
- * link to it from that keyring.
- *
- * If perm is KEY_PERM_UNDEF then an appropriate key permissions mask will be
- * concocted.
- *
- * Returns a pointer to the new key if successful, -ENODEV if the key type
- * wasn't available, -ENOTDIR if the keyring wasn't a keyring, -EACCES if the
- * caller isn't permitted to modify the keyring or the LSM did not permit
- * creation of the key.
- *
- * On success, the possession flag from the keyring ref will be tacked on to
- * the key ref before it is returned.
- */
-key_ref_t key_create_or_update(key_ref_t keyring_ref,
-			       const char *type,
-			       const char *description,
-			       const void *payload,
-			       size_t plen,
-			       key_perm_t perm,
-			       unsigned long flags)
-{
-	return __key_create_or_update(keyring_ref, type, description, payload,
-				      plen, perm, flags, true);
-}
 EXPORT_SYMBOL(key_create_or_update);
-
-/**
- * key_create - Create and instantiate a key.
- * @keyring_ref: A pointer to the destination keyring with possession flag.
- * @type: The type of key.
- * @description: The searchable description for the key.
- * @payload: The data to use to instantiate or update the key.
- * @plen: The length of @payload.
- * @perm: The permissions mask for a new key.
- * @flags: The quota flags for a new key.
- *
- * Create and instantiate a new key and link to it from the destination keyring.
- *
- * If perm is KEY_PERM_UNDEF then an appropriate key permissions mask will be
- * concocted.
- *
- * Returns a pointer to the new key if successful, -EEXIST if a key with the
- * same description already exists, -ENODEV if the key type wasn't available,
- * -ENOTDIR if the keyring wasn't a keyring, -EACCES if the caller isn't
- * permitted to modify the keyring or the LSM did not permit creation of the
- * key.
- *
- * On success, the possession flag from the keyring ref will be tacked on to
- * the key ref before it is returned.
- */
-key_ref_t key_create(key_ref_t keyring_ref,
-		     const char *type,
-		     const char *description,
-		     const void *payload,
-		     size_t plen,
-		     key_perm_t perm,
-		     unsigned long flags)
-{
-	return __key_create_or_update(keyring_ref, type, description, payload,
-				      plen, perm, flags, false);
-}
-EXPORT_SYMBOL(key_create);
 
 /**
  * key_update - Update a key's contents.

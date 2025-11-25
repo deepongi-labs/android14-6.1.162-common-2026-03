@@ -19,13 +19,13 @@
 #include <linux/extable.h>
 #include <linux/kdebug.h>
 #include <linux/slab.h>
-#include <linux/set_memory.h>
-#include <linux/execmem.h>
-#include <asm/text-patching.h>
+#include <linux/moduleloader.h>
+#include <asm/code-patching.h>
 #include <asm/cacheflush.h>
 #include <asm/sstep.h>
 #include <asm/sections.h>
 #include <asm/inst.h>
+#include <asm/set_memory.h>
 #include <linux/uaccess.h>
 
 DEFINE_PER_CPU(struct kprobe *, current_kprobe) = NULL;
@@ -105,23 +105,40 @@ kprobe_opcode_t *kprobe_lookup_name(const char *name, unsigned int offset)
 	return addr;
 }
 
-static bool arch_kprobe_on_func_entry(unsigned long addr, unsigned long offset)
+static bool arch_kprobe_on_func_entry(unsigned long offset)
 {
-	unsigned long ip = ftrace_location(addr);
-
-	if (ip)
-		return offset <= (ip - addr);
-	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2) && !IS_ENABLED(CONFIG_PPC_KERNEL_PCREL))
-		return offset <= 8;
+#ifdef CONFIG_PPC64_ELF_ABI_V2
+#ifdef CONFIG_KPROBES_ON_FTRACE
+	return offset <= 16;
+#else
+	return offset <= 8;
+#endif
+#else
 	return !offset;
+#endif
 }
 
 /* XXX try and fold the magic of kprobe_lookup_name() in this */
 kprobe_opcode_t *arch_adjust_kprobe_addr(unsigned long addr, unsigned long offset,
 					 bool *on_func_entry)
 {
-	*on_func_entry = arch_kprobe_on_func_entry(addr, offset);
+	*on_func_entry = arch_kprobe_on_func_entry(offset);
 	return (kprobe_opcode_t *)(addr + offset);
+}
+
+void *alloc_insn_page(void)
+{
+	void *page;
+
+	page = module_alloc(PAGE_SIZE);
+	if (!page)
+		return NULL;
+
+	if (strict_module_rwx_enabled()) {
+		set_memory_ro((unsigned long)page, 1);
+		set_memory_x((unsigned long)page, 1);
+	}
+	return page;
 }
 
 int arch_prepare_kprobe(struct kprobe *p)
@@ -141,7 +158,9 @@ int arch_prepare_kprobe(struct kprobe *p)
 		printk("Cannot register a kprobe on the second word of prefixed instruction\n");
 		ret = -EINVAL;
 	}
+	preempt_disable();
 	prev = get_kprobe(p->addr - 1);
+	preempt_enable_no_resched();
 
 	/*
 	 * When prev is a ftrace-based kprobe, we don't have an insn, and it
@@ -225,6 +244,16 @@ static nokprobe_inline void set_current_kprobe(struct kprobe *p, struct pt_regs 
 	__this_cpu_write(current_kprobe, p);
 	kcb->kprobe_saved_msr = regs->msr;
 }
+
+void arch_prepare_kretprobe(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+	ri->ret_addr = (kprobe_opcode_t *)regs->link;
+	ri->fp = NULL;
+
+	/* Replace the return addr with trampoline addr */
+	regs->link = (unsigned long)__kretprobe_trampoline;
+}
+NOKPROBE_SYMBOL(arch_prepare_kretprobe);
 
 static int try_to_emulate(struct kprobe *p, struct pt_regs *regs)
 {
@@ -342,7 +371,7 @@ int kprobe_handler(struct pt_regs *regs)
 
 			if (ret > 0) {
 				restore_previous_kprobe(kcb);
-				preempt_enable();
+				preempt_enable_no_resched();
 				return 1;
 			}
 		}
@@ -355,7 +384,7 @@ int kprobe_handler(struct pt_regs *regs)
 	if (p->pre_handler && p->pre_handler(p, regs)) {
 		/* handler changed execution path, so skip ss setup */
 		reset_current_kprobe();
-		preempt_enable();
+		preempt_enable_no_resched();
 		return 1;
 	}
 
@@ -368,7 +397,7 @@ int kprobe_handler(struct pt_regs *regs)
 
 			kcb->kprobe_status = KPROBE_HIT_SSDONE;
 			reset_current_kprobe();
-			preempt_enable();
+			preempt_enable_no_resched();
 			return 1;
 		}
 	}
@@ -377,10 +406,53 @@ int kprobe_handler(struct pt_regs *regs)
 	return 1;
 
 no_kprobe:
-	preempt_enable();
+	preempt_enable_no_resched();
 	return ret;
 }
 NOKPROBE_SYMBOL(kprobe_handler);
+
+/*
+ * Function return probe trampoline:
+ * 	- init_kprobes() establishes a probepoint here
+ * 	- When the probed function returns, this probe
+ * 		causes the handlers to fire
+ */
+asm(".global __kretprobe_trampoline\n"
+	".type __kretprobe_trampoline, @function\n"
+	"__kretprobe_trampoline:\n"
+	"nop\n"
+	"blr\n"
+	".size __kretprobe_trampoline, .-__kretprobe_trampoline\n");
+
+/*
+ * Called when the probe at kretprobe trampoline is hit
+ */
+static int trampoline_probe_handler(struct kprobe *p, struct pt_regs *regs)
+{
+	unsigned long orig_ret_address;
+
+	orig_ret_address = __kretprobe_trampoline_handler(regs, NULL);
+	/*
+	 * We get here through one of two paths:
+	 * 1. by taking a trap -> kprobe_handler() -> here
+	 * 2. by optprobe branch -> optimized_callback() -> opt_pre_handler() -> here
+	 *
+	 * When going back through (1), we need regs->nip to be setup properly
+	 * as it is used to determine the return address from the trap.
+	 * For (2), since nip is not honoured with optprobes, we instead setup
+	 * the link register properly so that the subsequent 'blr' in
+	 * __kretprobe_trampoline jumps back to the right instruction.
+	 *
+	 * For nip, we should set the address to the previous instruction since
+	 * we end up emulating it in kprobe_handler(), which increments the nip
+	 * again.
+	 */
+	regs_set_return_ip(regs, orig_ret_address - 4);
+	regs->link = orig_ret_address;
+
+	return 0;
+}
+NOKPROBE_SYMBOL(trampoline_probe_handler);
 
 /*
  * Called after single-stepping.  p->addr is the address of the
@@ -420,7 +492,7 @@ int kprobe_post_handler(struct pt_regs *regs)
 	}
 	reset_current_kprobe();
 out:
-	preempt_enable();
+	preempt_enable_no_resched();
 
 	/*
 	 * if somebody else is singlestepping across a probe point, msr
@@ -459,7 +531,7 @@ int kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 			restore_previous_kprobe(kcb);
 		else
 			reset_current_kprobe();
-		preempt_enable();
+		preempt_enable_no_resched();
 		break;
 	case KPROBE_HIT_ACTIVE:
 	case KPROBE_HIT_SSDONE:
@@ -484,9 +556,19 @@ int kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 }
 NOKPROBE_SYMBOL(kprobe_fault_handler);
 
+static struct kprobe trampoline_p = {
+	.addr = (kprobe_opcode_t *) &__kretprobe_trampoline,
+	.pre_handler = trampoline_probe_handler
+};
+
+int __init arch_init_kprobes(void)
+{
+	return register_kprobe(&trampoline_p);
+}
+
 int arch_trampoline_kprobe(struct kprobe *p)
 {
-	if (p->addr == (kprobe_opcode_t *)&arch_rethook_trampoline)
+	if (p->addr == (kprobe_opcode_t *)&__kretprobe_trampoline)
 		return 1;
 
 	return 0;

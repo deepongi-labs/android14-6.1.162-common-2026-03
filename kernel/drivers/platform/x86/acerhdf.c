@@ -46,8 +46,6 @@
  * measured by the on-die thermal monitor are within 0 <= Tj <= 90. So,
  * assume 89°C is critical temperature.
  */
-#define ACERHDF_DEFAULT_TEMP_FANON 60000
-#define ACERHDF_DEFAULT_TEMP_FANOFF 53000
 #define ACERHDF_TEMP_CRIT 89000
 #define ACERHDF_FAN_OFF 0
 #define ACERHDF_FAN_AUTO 1
@@ -72,13 +70,14 @@ static int kernelmode;
 #endif
 
 static unsigned int interval = 10;
-static unsigned int fanon = ACERHDF_DEFAULT_TEMP_FANON;
-static unsigned int fanoff = ACERHDF_DEFAULT_TEMP_FANOFF;
+static unsigned int fanon = 60000;
+static unsigned int fanoff = 53000;
 static unsigned int verbose;
 static unsigned int list_supported;
 static unsigned int fanstate = ACERHDF_FAN_AUTO;
 static char force_bios[16];
 static char force_product[16];
+static unsigned int prev_interval;
 static struct thermal_zone_device *thz_dev;
 static struct thermal_cooling_device *cl_dev;
 static struct platform_device *acerhdf_dev;
@@ -136,15 +135,6 @@ struct ctrl_settings {
 	u8 tempreg;
 	struct fancmd cmd;
 	int mcmd_enable;
-};
-
-static struct thermal_trip trips[] = {
-	[0] = { .temperature = ACERHDF_DEFAULT_TEMP_FANON,
-		.hysteresis = ACERHDF_DEFAULT_TEMP_FANON - ACERHDF_DEFAULT_TEMP_FANOFF,
-		.type = THERMAL_TRIP_ACTIVE },
-
-	[1] = { .temperature = ACERHDF_TEMP_CRIT,
-		.type = THERMAL_TRIP_CRITICAL }
 };
 
 static struct ctrl_settings ctrl_cfg __read_mostly;
@@ -271,7 +261,7 @@ static const struct bios_settings bios_tbl[] __initconst = {
  * this struct is used to instruct thermal layer to use bang_bang instead of
  * default governor for acerhdf
  */
-static const struct thermal_zone_params acerhdf_zone_params = {
+static struct thermal_zone_params acerhdf_zone_params = {
 	.governor_name = "bang_bang",
 };
 
@@ -336,24 +326,20 @@ static void acerhdf_check_param(struct thermal_zone_device *thermal)
 		fanon = ACERHDF_MAX_FANON;
 	}
 
-	if (fanon < fanoff) {
-		pr_err("fanoff temperature (%d) is above fanon temperature (%d), clamping to %d\n",
-		       fanoff, fanon, fanon);
-		fanoff = fanon;
-	}
-
-	trips[0].temperature = fanon;
-	trips[0].hysteresis  = fanon - fanoff;
-
-	if (kernelmode) {
+	if (kernelmode && prev_interval != interval) {
 		if (interval > ACERHDF_MAX_INTERVAL) {
 			pr_err("interval too high, set to %d\n",
 			       ACERHDF_MAX_INTERVAL);
 			interval = ACERHDF_MAX_INTERVAL;
 		}
-
 		if (verbose)
 			pr_notice("interval changed to: %d\n", interval);
+
+		if (thermal)
+			thermal->polling_delay_jiffies =
+				round_jiffies(msecs_to_jiffies(interval * 1000));
+
+		prev_interval = interval;
 	}
 }
 
@@ -378,13 +364,33 @@ static int acerhdf_get_ec_temp(struct thermal_zone_device *thermal, int *t)
 	return 0;
 }
 
-static bool acerhdf_should_bind(struct thermal_zone_device *thermal,
-				const struct thermal_trip *trip,
-				struct thermal_cooling_device *cdev,
-				struct cooling_spec *c)
+static int acerhdf_bind(struct thermal_zone_device *thermal,
+			struct thermal_cooling_device *cdev)
 {
 	/* if the cooling device is the one from acerhdf bind it */
-	return cdev == cl_dev && trip->type == THERMAL_TRIP_ACTIVE;
+	if (cdev != cl_dev)
+		return 0;
+
+	if (thermal_zone_bind_cooling_device(thermal, 0, cdev,
+			THERMAL_NO_LIMIT, THERMAL_NO_LIMIT,
+			THERMAL_WEIGHT_DEFAULT)) {
+		pr_err("error binding cooling dev\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int acerhdf_unbind(struct thermal_zone_device *thermal,
+			  struct thermal_cooling_device *cdev)
+{
+	if (cdev != cl_dev)
+		return 0;
+
+	if (thermal_zone_unbind_cooling_device(thermal, 0, cdev)) {
+		pr_err("error unbinding cooling dev\n");
+		return -EINVAL;
+	}
+	return 0;
 }
 
 static inline void acerhdf_revert_to_bios_mode(void)
@@ -418,6 +424,43 @@ static int acerhdf_change_mode(struct thermal_zone_device *thermal,
 	return 0;
 }
 
+static int acerhdf_get_trip_type(struct thermal_zone_device *thermal, int trip,
+				 enum thermal_trip_type *type)
+{
+	if (trip == 0)
+		*type = THERMAL_TRIP_ACTIVE;
+	else if (trip == 1)
+		*type = THERMAL_TRIP_CRITICAL;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
+static int acerhdf_get_trip_hyst(struct thermal_zone_device *thermal, int trip,
+				 int *temp)
+{
+	if (trip != 0)
+		return -EINVAL;
+
+	*temp = fanon - fanoff;
+
+	return 0;
+}
+
+static int acerhdf_get_trip_temp(struct thermal_zone_device *thermal, int trip,
+				 int *temp)
+{
+	if (trip == 0)
+		*temp = fanon;
+	else if (trip == 1)
+		*temp = ACERHDF_TEMP_CRIT;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
 static int acerhdf_get_crit_temp(struct thermal_zone_device *thermal,
 				 int *temperature)
 {
@@ -426,12 +469,17 @@ static int acerhdf_get_crit_temp(struct thermal_zone_device *thermal,
 }
 
 /* bind callback functions to thermalzone */
-static const struct thermal_zone_device_ops acerhdf_dev_ops = {
-	.should_bind = acerhdf_should_bind,
+static struct thermal_zone_device_ops acerhdf_dev_ops = {
+	.bind = acerhdf_bind,
+	.unbind = acerhdf_unbind,
 	.get_temp = acerhdf_get_ec_temp,
 	.change_mode = acerhdf_change_mode,
+	.get_trip_type = acerhdf_get_trip_type,
+	.get_trip_hyst = acerhdf_get_trip_hyst,
+	.get_trip_temp = acerhdf_get_trip_temp,
 	.get_crit_temp = acerhdf_get_crit_temp,
 };
+
 
 /*
  * cooling device callback functions
@@ -517,6 +565,11 @@ static int acerhdf_probe(struct platform_device *device)
 	return 0;
 }
 
+static int acerhdf_remove(struct platform_device *device)
+{
+	return 0;
+}
+
 static const struct dev_pm_ops acerhdf_pm_ops = {
 	.suspend = acerhdf_suspend,
 	.freeze  = acerhdf_suspend,
@@ -528,6 +581,7 @@ static struct platform_driver acerhdf_driver = {
 		.pm    = &acerhdf_pm_ops,
 	},
 	.probe = acerhdf_probe,
+	.remove = acerhdf_remove,
 };
 
 /* check hardware */
@@ -656,10 +710,10 @@ static int __init acerhdf_register_thermal(void)
 	if (IS_ERR(cl_dev))
 		return -EINVAL;
 
-	thz_dev = thermal_zone_device_register_with_trips("acerhdf", trips, ARRAY_SIZE(trips),
-							  NULL, &acerhdf_dev_ops,
-							  &acerhdf_zone_params, 0,
-							  (kernelmode) ? interval*1000 : 0);
+	thz_dev = thermal_zone_device_register("acerhdf", 2, 0, NULL,
+					      &acerhdf_dev_ops,
+					      &acerhdf_zone_params, 0,
+					      (kernelmode) ? interval*1000 : 0);
 	if (IS_ERR(thz_dev))
 		return -EINVAL;
 
@@ -669,6 +723,13 @@ static int __init acerhdf_register_thermal(void)
 		ret = thermal_zone_device_disable(thz_dev);
 	if (ret)
 		return ret;
+
+	if (strcmp(thz_dev->governor->name,
+				acerhdf_zone_params.governor_name)) {
+		pr_err("Didn't get thermal governor %s, perhaps not compiled into thermal subsystem.\n",
+				acerhdf_zone_params.governor_name);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -767,5 +828,5 @@ static const struct kernel_param_ops interval_ops = {
 	.get = param_get_uint,
 };
 
-module_param_cb(interval, &interval_ops, &interval, 0000);
+module_param_cb(interval, &interval_ops, &interval, 0600);
 MODULE_PARM_DESC(interval, "Polling interval of temperature check");

@@ -4,16 +4,8 @@
  * Masami Hiramatsu <mhiramat@kernel.org>
  */
 
-/*
- * NOTE: This is only for tools/bootconfig, because tools/bootconfig will
- * run the parser sanity test.
- * This does NOT mean lib/bootconfig.c is available in the user space.
- * However, if you change this file, please make sure the tools/bootconfig
- * has no issue on building and running.
- */
-#include <linux/bootconfig.h>
-
 #ifdef __KERNEL__
+#include <linux/bootconfig.h>
 #include <linux/bug.h>
 #include <linux/ctype.h>
 #include <linux/errno.h>
@@ -32,6 +24,16 @@ const char * __init xbc_get_embedded_bootconfig(size_t *size)
 	return (*size) ? embedded_bootconfig_data : NULL;
 }
 #endif
+
+#else /* !__KERNEL__ */
+/*
+ * NOTE: This is only for tools/bootconfig, because tools/bootconfig will
+ * run the parser sanity test.
+ * This does NOT mean lib/bootconfig.c is available in the user space.
+ * However, if you change this file, please make sure the tools/bootconfig
+ * has no issue on building and running.
+ */
+#include <linux/bootconfig.h>
 #endif
 
 /*

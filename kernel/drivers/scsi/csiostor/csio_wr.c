@@ -960,7 +960,7 @@ csio_wr_copy_to_wrp(void *data_buf, struct csio_wr_pair *wrp,
 	memcpy((uint8_t *) wrp->addr1 + wr_off, data_buf, nbytes);
 	data_len -= nbytes;
 
-	/* Write the remaining data from the beginning of circular buffer */
+	/* Write the remaining data from the begining of circular buffer */
 	if (data_len) {
 		CSIO_DB_ASSERT(data_len <= wrp->size2);
 		CSIO_DB_ASSERT(wrp->addr2 != NULL);
@@ -1051,6 +1051,7 @@ csio_wr_process_fl(struct csio_hw *hw, struct csio_q *q,
 	struct csio_fl_dma_buf flb;
 	struct csio_dma_buf *buf, *fbuf;
 	uint32_t bufsz, len, lastlen = 0;
+	int n;
 	struct csio_q *flq = hw->wrm.q_arr[q->un.iq.flq_idx];
 
 	CSIO_DB_ASSERT(flq != NULL);
@@ -1070,7 +1071,7 @@ csio_wr_process_fl(struct csio_hw *hw, struct csio_q *q,
 	flb.totlen = len;
 
 	/* Consume all freelist buffers used for len bytes */
-	for (fbuf = flb.flbufs; ; fbuf++) {
+	for (n = 0, fbuf = flb.flbufs; ; n++, fbuf++) {
 		buf = &flq->un.fl.bufs[flq->cidx];
 		bufsz = csio_wr_fl_bufsz(sge, buf);
 
@@ -1224,7 +1225,7 @@ csio_wr_process_iq(struct csio_hw *hw, struct csio_q *q,
 
 	/*
 	 * We need to re-arm SGE interrupts in case we got a stray interrupt,
-	 * especially in msix mode. With INTx, this may be a common occurrence.
+	 * especially in msix mode. With INTx, this may be a common occurence.
 	 */
 	if (unlikely(!q->inc_idx)) {
 		CSIO_INC_STATS(q, n_stray_comp);

@@ -4,12 +4,11 @@
  * Copyright 2020 Google LLC.
  */
 
+#include "bpf_misc.h"
 #include "vmlinux.h"
-#include <errno.h>
-#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include "bpf_misc.h"
+#include  <errno.h>
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -92,7 +91,7 @@ int BPF_PROG(test_int_hook, struct vm_area_struct *vma,
 	if (ret != 0)
 		return ret;
 
-	__s32 pid = bpf_get_current_pid_tgid() >> 32;
+	__u32 pid = bpf_get_current_pid_tgid() >> 32;
 	int is_stack = 0;
 
 	is_stack = (vma->vm_start <= vma->vm_mm->start_stack &&
@@ -165,8 +164,8 @@ int copy_test = 0;
 SEC("fentry.s/" SYS_PREFIX "sys_setdomainname")
 int BPF_PROG(test_sys_setdomainname, struct pt_regs *regs)
 {
-	void *ptr = (void *)PT_REGS_PARM1_SYSCALL(regs);
-	int len = PT_REGS_PARM2_SYSCALL(regs);
+	void *ptr = (void *)PT_REGS_PARM1(regs);
+	int len = PT_REGS_PARM2(regs);
 	int buf = 0;
 	long ret;
 

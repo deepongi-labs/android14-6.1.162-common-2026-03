@@ -427,14 +427,16 @@ EXPORT_SYMBOL_GPL(gnttab_grant_foreign_access);
 
 static int gnttab_end_foreign_access_ref_v1(grant_ref_t ref)
 {
-	u16 *pflags = &gnttab_shared.v1[ref].flags;
-	u16 flags;
+	u16 flags, nflags;
+	u16 *pflags;
 
-	flags = *pflags;
+	pflags = &gnttab_shared.v1[ref].flags;
+	nflags = *pflags;
 	do {
+		flags = nflags;
 		if (flags & (GTF_reading|GTF_writing))
 			return 0;
-	} while (!sync_try_cmpxchg(pflags, &flags, 0));
+	} while ((nflags = sync_cmpxchg(pflags, flags, 0)) != flags);
 
 	return 1;
 }
@@ -1042,7 +1044,7 @@ EXPORT_SYMBOL_GPL(gnttab_pages_clear_private);
 
 /**
  * gnttab_free_pages - free pages allocated by gnttab_alloc_pages()
- * @nr_pages: number of pages to free
+ * @nr_pages; number of pages to free
  * @pages: the pages
  */
 void gnttab_free_pages(int nr_pages, struct page **pages)
@@ -1449,7 +1451,7 @@ static int gnttab_map(unsigned int start_idx, unsigned int end_idx)
 	unsigned int nr_gframes = end_idx + 1;
 	int rc;
 
-	if (!xen_pv_domain()) {
+	if (xen_feature(XENFEAT_auto_translated_physmap)) {
 		struct xen_add_to_physmap xatp;
 		unsigned int i = end_idx;
 		rc = 0;
@@ -1570,7 +1572,7 @@ static int gnttab_setup(void)
 	if (max_nr_gframes < nr_grant_frames)
 		return -ENOSYS;
 
-	if (!xen_pv_domain() && gnttab_shared.addr == NULL) {
+	if (xen_feature(XENFEAT_auto_translated_physmap) && gnttab_shared.addr == NULL) {
 		gnttab_shared.addr = xen_auto_xlat_grant_frames.vaddr;
 		if (gnttab_shared.addr == NULL) {
 			pr_warn("gnttab share frames is not mapped!\n");
@@ -1588,7 +1590,7 @@ int gnttab_resume(void)
 
 int gnttab_suspend(void)
 {
-	if (xen_pv_domain())
+	if (!xen_feature(XENFEAT_auto_translated_physmap))
 		gnttab_interface->unmap_frames();
 	return 0;
 }

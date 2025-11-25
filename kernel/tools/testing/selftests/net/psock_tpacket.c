@@ -12,7 +12,7 @@
  *
  * Datapath:
  *   Open a pair of packet sockets and send resp. receive an a priori known
- *   packet pattern across the sockets and check if it was received resp.
+ *   packet pattern accross the sockets and check if it was received resp.
  *   sent correctly. Fanout in combination with RX_RING is currently not
  *   tested here.
  *
@@ -22,7 +22,6 @@
  *   - TPACKET_V3: RX_RING
  */
 
-#undef NDEBUG
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -34,6 +33,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <bits/wordsize.h>
 #include <net/ethernet.h>
 #include <netinet/ip.h>
 #include <arpa/inet.h>
@@ -470,7 +470,7 @@ static void walk_tx(int sock, struct ring *ring)
 
 	bug_on(total_packets != 0);
 
-	ret = sendto(sock, "", 0, 0, NULL, 0);
+	ret = sendto(sock, NULL, 0, 0, NULL, 0);
 	if (ret == -1) {
 		perror("sendto");
 		exit(1);
@@ -785,7 +785,7 @@ static int test_kernel_bit_width(void)
 
 static int test_user_bit_width(void)
 {
-	return sizeof(long) * 8;
+	return __WORDSIZE;
 }
 
 static const char *tpacket_str[] = {

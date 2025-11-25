@@ -9,6 +9,8 @@
 #include <linux/list.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/time64.h>
 #include <media/videobuf2-v4l2.h>
@@ -499,7 +501,6 @@ struct windsor_pic_info {
 	u32 proc_dacc_rng_wr_cnt;
 	s32 tv_s;
 	u32 tv_ns;
-	u32 average_qp;
 };
 
 u32 vpu_windsor_get_data_size(void)
@@ -735,7 +736,6 @@ static void vpu_windsor_unpack_pic_info(struct vpu_rpc_event *pkt, void *data)
 	info->wptr = get_ptr(windsor->str_buff_wptr);
 	info->crc = windsor->frame_crc;
 	info->timestamp = timespec64_to_ns(&ts);
-	info->average_qp = windsor->average_qp;
 }
 
 static void vpu_windsor_unpack_mem_req(struct vpu_rpc_event *pkt, void *data)
@@ -776,8 +776,6 @@ static int vpu_windsor_fill_yuv_frame(struct vpu_shared_addr *shared,
 				      u32 instance,
 				      struct vb2_buffer *vb)
 {
-	struct vpu_inst *inst = vb2_get_drv_priv(vb->vb2_queue);
-	struct vpu_format *out_fmt;
 	struct vpu_enc_yuv_desc *desc;
 	struct vb2_v4l2_buffer *vbuf;
 
@@ -785,7 +783,6 @@ static int vpu_windsor_fill_yuv_frame(struct vpu_shared_addr *shared,
 		return -EINVAL;
 
 	desc = get_yuv_desc(shared, instance);
-	out_fmt = vpu_get_format(inst, vb->type);
 
 	vbuf = to_vb2_v4l2_buffer(vb);
 	desc->frame_id = vbuf->sequence;
@@ -794,10 +791,7 @@ static int vpu_windsor_fill_yuv_frame(struct vpu_shared_addr *shared,
 	else
 		desc->key_frame = 0;
 	desc->luma_base = vpu_get_vb_phy_addr(vb, 0);
-	if (vb->num_planes > 1)
-		desc->chroma_base = vpu_get_vb_phy_addr(vb, 1);
-	else
-		desc->chroma_base = desc->luma_base + out_fmt->sizeimage[0];
+	desc->chroma_base = vpu_get_vb_phy_addr(vb, 1);
 
 	return 0;
 }

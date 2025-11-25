@@ -11,6 +11,7 @@
 #define _PLATFORM_DEVICE_H_
 
 #include <linux/device.h>
+#include <linux/android_kabi.h>
 
 #define PLATFORM_DEVID_NONE	(-1)
 #define PLATFORM_DEVID_AUTO	(-2)
@@ -42,6 +43,9 @@ struct platform_device {
 
 	/* arch specific additions */
 	struct pdev_archdata	archdata;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 #define platform_get_device_id(pdev)	((pdev)->id_entry)
@@ -52,7 +56,7 @@ struct platform_device {
 extern int platform_device_register(struct platform_device *);
 extern void platform_device_unregister(struct platform_device *);
 
-extern const struct bus_type platform_bus_type;
+extern struct bus_type platform_bus_type;
 extern struct device platform_bus;
 
 extern struct resource *platform_get_resource(struct platform_device *,
@@ -63,8 +67,6 @@ extern struct resource *platform_get_mem_or_io(struct platform_device *,
 extern struct device *
 platform_find_device_by_driver(struct device *start,
 			       const struct device_driver *drv);
-
-#ifdef CONFIG_HAS_IOMEM
 extern void __iomem *
 devm_platform_get_and_ioremap_resource(struct platform_device *pdev,
 				unsigned int index, struct resource **res);
@@ -74,32 +76,6 @@ devm_platform_ioremap_resource(struct platform_device *pdev,
 extern void __iomem *
 devm_platform_ioremap_resource_byname(struct platform_device *pdev,
 				      const char *name);
-#else
-
-static inline void __iomem *
-devm_platform_get_and_ioremap_resource(struct platform_device *pdev,
-				unsigned int index, struct resource **res)
-{
-	return ERR_PTR(-EINVAL);
-}
-
-
-static inline void __iomem *
-devm_platform_ioremap_resource(struct platform_device *pdev,
-			       unsigned int index)
-{
-	return ERR_PTR(-EINVAL);
-}
-
-static inline void __iomem *
-devm_platform_ioremap_resource_byname(struct platform_device *pdev,
-				      const char *name)
-{
-	return ERR_PTR(-EINVAL);
-}
-
-#endif
-
 extern int platform_get_irq(struct platform_device *, unsigned int);
 extern int platform_get_irq_optional(struct platform_device *, unsigned int);
 extern int platform_irq_count(struct platform_device *);
@@ -132,6 +108,8 @@ struct platform_device_info {
 		u64 dma_mask;
 
 		const struct property_entry *properties;
+
+		ANDROID_KABI_RESERVE(1);
 };
 extern struct platform_device *platform_device_register_full(
 		const struct platform_device_info *pdevinfo);
@@ -235,7 +213,18 @@ extern void platform_device_put(struct platform_device *pdev);
 
 struct platform_driver {
 	int (*probe)(struct platform_device *);
-	void (*remove)(struct platform_device *);
+
+	/*
+	 * Traditionally the remove callback returned an int which however is
+	 * ignored by the driver core. This led to wrong expectations by driver
+	 * authors who thought returning an error code was a valid error
+	 * handling strategy. To convert to a callback returning void, new
+	 * drivers should implement .remove_new() until the conversion it done
+	 * that eventually makes .remove() return void.
+	 */
+	int (*remove)(struct platform_device *);
+	void (*remove_new)(struct platform_device *);
+
 	void (*shutdown)(struct platform_device *);
 	int (*suspend)(struct platform_device *, pm_message_t state);
 	int (*resume)(struct platform_device *);
@@ -250,6 +239,8 @@ struct platform_driver {
 	 * to setup and manage their own I/O address space.
 	 */
 	bool driver_managed_dma;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #define to_platform_driver(drv)	(container_of((drv), struct platform_driver, \

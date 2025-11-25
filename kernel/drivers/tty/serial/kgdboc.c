@@ -186,6 +186,8 @@ static void cleanup_kgdboc(void)
 	if (configured != 1)
 		return;
 
+	if (kgdb_unregister_nmi_console())
+		return;
 	kgdboc_unregister_kbd();
 	kgdb_unregister_io_module(&kgdboc_io_ops);
 }
@@ -197,7 +199,6 @@ static int configure_kgdboc(void)
 	int err = -ENODEV;
 	char *cptr = config;
 	struct console *cons;
-	int cookie;
 
 	if (!strlen(config) || isspace(config[0])) {
 		err = 0;
@@ -220,15 +221,7 @@ static int configure_kgdboc(void)
 	if (!p)
 		goto noconfig;
 
-	/*
-	 * Take console_lock to serialize device() callback with
-	 * other console operations. For example, fg_console is
-	 * modified under console_lock when switching vt.
-	 */
-	console_lock();
-
-	cookie = console_srcu_read_lock();
-	for_each_console_srcu(cons) {
+	for_each_console(cons) {
 		int idx;
 		if (cons->device && cons->device(cons, &idx) == p &&
 		    idx == tty_line) {
@@ -236,9 +229,6 @@ static int configure_kgdboc(void)
 			break;
 		}
 	}
-	console_srcu_read_unlock(cookie);
-
-	console_unlock();
 
 	kgdb_tty_driver = p;
 	kgdb_tty_line = tty_line;
@@ -248,10 +238,16 @@ do_register:
 	if (err)
 		goto noconfig;
 
+	err = kgdb_register_nmi_console();
+	if (err)
+		goto nmi_con_failed;
+
 	configured = 1;
 
 	return 0;
 
+nmi_con_failed:
+	kgdb_unregister_io_module(&kgdboc_io_ops);
 noconfig:
 	kgdboc_unregister_kbd();
 	configured = 0;
@@ -481,7 +477,6 @@ static void kgdboc_earlycon_pre_exp_handler(void)
 {
 	struct console *con;
 	static bool already_warned;
-	int cookie;
 
 	if (already_warned)
 		return;
@@ -494,14 +489,9 @@ static void kgdboc_earlycon_pre_exp_handler(void)
 	 * serial drivers might be OK with this, print a warning once per
 	 * boot if we detect this case.
 	 */
-	cookie = console_srcu_read_lock();
-	for_each_console_srcu(con) {
+	for_each_console(con)
 		if (con == kgdboc_earlycon_io_ops.cons)
-			break;
-	}
-	console_srcu_read_unlock(cookie);
-	if (con)
-		return;
+			return;
 
 	already_warned = true;
 	pr_warn("kgdboc_earlycon is still using bootconsole\n");
@@ -566,15 +556,7 @@ static int __init kgdboc_earlycon_init(char *opt)
 	 * Look for a matching console, or if the name was left blank just
 	 * pick the first one we find.
 	 */
-
-	/*
-	 * Hold the console_list_lock to guarantee that no consoles are
-	 * unregistered until the kgdboc_earlycon setup is complete.
-	 * Trapping the exit() callback relies on exit() not being
-	 * called until the trap is setup. This also allows safe
-	 * traversal of the console list and race-free reading of @flags.
-	 */
-	console_list_lock();
+	console_lock();
 	for_each_console(con) {
 		if (con->write && con->read &&
 		    (con->flags & (CON_BOOT | CON_ENABLED)) &&
@@ -616,7 +598,7 @@ static int __init kgdboc_earlycon_init(char *opt)
 	}
 
 unlock:
-	console_list_unlock();
+	console_unlock();
 
 	/* Non-zero means malformed option so we always return zero */
 	return 0;

@@ -10,6 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -160,7 +161,7 @@ static int imx_dsp_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void imx_dsp_remove(struct platform_device *pdev)
+static int imx_dsp_remove(struct platform_device *pdev)
 {
 	struct imx_dsp_chan *dsp_chan;
 	struct imx_dsp_ipc *dsp_ipc;
@@ -173,6 +174,8 @@ static void imx_dsp_remove(struct platform_device *pdev)
 		mbox_free_channel(dsp_chan->ch);
 		kfree(dsp_chan->name);
 	}
+
+	return 0;
 }
 
 static struct platform_driver imx_dsp_driver = {

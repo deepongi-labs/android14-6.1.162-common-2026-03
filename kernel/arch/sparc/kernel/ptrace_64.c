@@ -332,8 +332,8 @@ static int genregs64_set(struct task_struct *target,
 	}
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  36 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						36 * sizeof(u64), -1);
 
 	return ret;
 }
@@ -406,8 +406,8 @@ static int fpregs64_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  35 * sizeof(u64), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						35 * sizeof(u64), -1);
 	return ret;
 }
 
@@ -420,7 +420,7 @@ static const struct user_regset sparc64_regsets[] = {
 	 *	TSTATE, TPC, TNPC, Y
 	 */
 	[REGSET_GENERAL] = {
-		USER_REGSET_NOTE_TYPE(PRSTATUS),
+		.core_note_type = NT_PRSTATUS,
 		.n = 36,
 		.size = sizeof(u64), .align = sizeof(u64),
 		.regset_get = genregs64_get, .set = genregs64_set
@@ -432,7 +432,7 @@ static const struct user_regset sparc64_regsets[] = {
 	 *	FPRS
 	 */
 	[REGSET_FP] = {
-		USER_REGSET_NOTE_TYPE(PRFPREG),
+		.core_note_type = NT_PRFPREG,
 		.n = 35,
 		.size = sizeof(u64), .align = sizeof(u64),
 		.regset_get = fpregs64_get, .set = fpregs64_set
@@ -473,8 +473,10 @@ static int setregs64_set(struct task_struct *target,
 				 15 * sizeof(u64));
 	if (ret)
 		return ret;
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  15 * sizeof(u64), 16 * sizeof(u64));
+	ret =user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+				 15 * sizeof(u64), 16 * sizeof(u64));
+	if (ret)
+		return ret;
 	/* TSTATE */
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				 &tstate,
@@ -668,9 +670,8 @@ finish:
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
 
-	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-				  38 * sizeof(reg), -1);
-	return 0;
+	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					 38 * sizeof(reg), -1);
 }
 
 static int fpregs32_get(struct task_struct *target,
@@ -736,8 +737,8 @@ static int fpregs32_set(struct task_struct *target,
 	task_thread_info(target)->fpsaved[0] = fprs;
 
 	if (!ret)
-		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					  34 * sizeof(u32), -1);
+		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+						34 * sizeof(u32), -1);
 	return ret;
 }
 
@@ -750,7 +751,7 @@ static const struct user_regset sparc32_regsets[] = {
 	 *	PSR, PC, nPC, Y, WIM, TBR
 	 */
 	[REGSET_GENERAL] = {
-		USER_REGSET_NOTE_TYPE(PRSTATUS),
+		.core_note_type = NT_PRSTATUS,
 		.n = 38,
 		.size = sizeof(u32), .align = sizeof(u32),
 		.regset_get = genregs32_get, .set = genregs32_set
@@ -766,7 +767,7 @@ static const struct user_regset sparc32_regsets[] = {
 	 *	FPU QUEUE (64 32-bit ints)
 	 */
 	[REGSET_FP] = {
-		USER_REGSET_NOTE_TYPE(PRFPREG),
+		.core_note_type = NT_PRFPREG,
 		.n = 99,
 		.size = sizeof(u32), .align = sizeof(u32),
 		.regset_get = fpregs32_get, .set = fpregs32_set

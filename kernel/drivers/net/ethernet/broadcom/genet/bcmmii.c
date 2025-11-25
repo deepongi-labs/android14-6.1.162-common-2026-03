@@ -2,7 +2,7 @@
 /*
  * Broadcom GENET MDIO routines
  *
- * Copyright (c) 2014-2025 Broadcom
+ * Copyright (c) 2014-2024 Broadcom
  */
 
 #include <linux/acpi.h>
@@ -30,7 +30,6 @@ static void bcmgenet_mac_config(struct net_device *dev)
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	struct phy_device *phydev = dev->phydev;
 	u32 reg, cmd_bits = 0;
-	bool active;
 
 	/* speed */
 	if (phydev->speed == SPEED_1000)
@@ -91,9 +90,9 @@ static void bcmgenet_mac_config(struct net_device *dev)
 	bcmgenet_umac_writel(priv, reg, UMAC_CMD);
 	spin_unlock_bh(&priv->reg_lock);
 
-	active = phy_init_eee(phydev, 0) >= 0;
+	priv->eee.eee_active = phy_init_eee(phydev, 0) >= 0;
 	bcmgenet_eee_enable_set(dev,
-				priv->eee.eee_enabled && active,
+				priv->eee.eee_enabled && priv->eee.eee_active,
 				priv->eee.tx_lpi_enabled);
 }
 
@@ -154,7 +153,7 @@ void bcmgenet_phy_power_set(struct net_device *dev, bool enable)
 	u32 reg = 0;
 
 	/* EXT_GPHY_CTRL is only valid for GENETv4 and onward */
-	if (GENET_IS_V4(priv) || bcmgenet_has_ephy_16nm(priv)) {
+	if (GENET_IS_V4(priv) || priv->ephy_16nm) {
 		reg = bcmgenet_ext_readl(priv, EXT_GPHY_CTRL);
 		if (enable) {
 			reg &= ~EXT_CK25_DIS;
@@ -169,15 +168,10 @@ void bcmgenet_phy_power_set(struct net_device *dev, bool enable)
 
 			reg &= ~EXT_GPHY_RESET;
 		} else {
-			reg |= EXT_GPHY_RESET;
-			bcmgenet_ext_writel(priv, reg, EXT_GPHY_CTRL);
-			mdelay(1);
-
 			reg |= EXT_CFG_IDDQ_BIAS | EXT_CFG_PWR_DOWN |
-			       EXT_CFG_IDDQ_GLOBAL_PWR;
+			       EXT_GPHY_RESET | EXT_CFG_IDDQ_GLOBAL_PWR;
 			bcmgenet_ext_writel(priv, reg, EXT_GPHY_CTRL);
 			mdelay(1);
-
 			reg |= EXT_CK25_DIS;
 		}
 		bcmgenet_ext_writel(priv, reg, EXT_GPHY_CTRL);
@@ -189,7 +183,7 @@ void bcmgenet_phy_power_set(struct net_device *dev, bool enable)
 
 static void bcmgenet_moca_phy_setup(struct bcmgenet_priv *priv)
 {
-	if (bcmgenet_has_moca_link_det(priv))
+	if (priv->hw_params->flags & GENET_HAS_MOCA_LINK_DET)
 		fixed_phy_set_link_update(priv->dev->phydev,
 					  bcmgenet_fixed_phy_link_update);
 }
@@ -485,10 +479,6 @@ static int bcmgenet_mii_register(struct bcmgenet_priv *priv)
 	ppd.wait_func = bcmgenet_mii_wait;
 	ppd.wait_func_data = priv;
 	ppd.bus_name = "bcmgenet MII bus";
-	/* Pass a reference to our "main" clock which is used for MDIO
-	 * transfers
-	 */
-	ppd.clk = priv->clk;
 
 	/* Unimac MDIO bus controller starts at UniMAC offset + MDIO_CMD
 	 * and is 2 * 32-bits word long, 8 bytes total.
@@ -630,10 +620,10 @@ static int bcmgenet_mii_pd_init(struct bcmgenet_priv *priv)
 			.asym_pause = 0,
 		};
 
-		phydev = fixed_phy_register(&fphy_status, NULL);
+		phydev = fixed_phy_register(PHY_POLL, &fphy_status, NULL);
 		if (IS_ERR(phydev)) {
 			dev_err(kdev, "failed to register fixed PHY device\n");
-			return PTR_ERR(phydev);
+			return -ENODEV;
 		}
 
 		/* Make sure we initialize MoCA PHYs with a link down */
@@ -687,5 +677,7 @@ void bcmgenet_mii_exit(struct net_device *dev)
 	if (of_phy_is_fixed_link(dn))
 		of_phy_deregister_fixed_link(dn);
 	of_node_put(priv->phy_dn);
+	clk_prepare_enable(priv->clk);
 	platform_device_unregister(priv->mii_pdev);
+	clk_disable_unprepare(priv->clk);
 }

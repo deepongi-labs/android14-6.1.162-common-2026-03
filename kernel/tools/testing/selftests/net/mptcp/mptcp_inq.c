@@ -72,22 +72,13 @@ static const char *getxinfo_strerr(int err)
 }
 
 static void xgetaddrinfo(const char *node, const char *service,
-			 struct addrinfo *hints,
+			 const struct addrinfo *hints,
 			 struct addrinfo **res)
 {
-	int err;
+	int err = getaddrinfo(node, service, hints, res);
 
-again:
-	err = getaddrinfo(node, service, hints, res);
 	if (err) {
-		const char *errstr;
-
-		if (err == EAI_SOCKTYPE) {
-			hints->ai_protocol = IPPROTO_TCP;
-			goto again;
-		}
-
-		errstr = getxinfo_strerr(err);
+		const char *errstr = getxinfo_strerr(err);
 
 		fprintf(stderr, "Fatal: getaddrinfo(%s:%s): %s\n",
 			node ? node : "", service ? service : "", errstr);
@@ -100,7 +91,7 @@ static int sock_listen_mptcp(const char * const listenaddr,
 {
 	int sock = -1;
 	struct addrinfo hints = {
-		.ai_protocol = IPPROTO_MPTCP,
+		.ai_protocol = IPPROTO_TCP,
 		.ai_socktype = SOCK_STREAM,
 		.ai_flags = AI_PASSIVE | AI_NUMERICHOST
 	};
@@ -145,7 +136,7 @@ static int sock_connect_mptcp(const char * const remoteaddr,
 			      const char * const port, int proto)
 {
 	struct addrinfo hints = {
-		.ai_protocol = IPPROTO_MPTCP,
+		.ai_protocol = IPPROTO_TCP,
 		.ai_socktype = SOCK_STREAM,
 	};
 	struct addrinfo *a, *addr;
@@ -502,7 +493,6 @@ static int server(int unixfd)
 
 	process_one_client(r, unixfd);
 
-	close(fd);
 	return 0;
 }
 
@@ -581,12 +571,8 @@ int main(int argc, char *argv[])
 		die_perror("pipe");
 
 	s = xfork();
-	if (s == 0) {
-		close(unixfds[0]);
-		ret = server(unixfds[1]);
-		close(unixfds[1]);
-		return ret;
-	}
+	if (s == 0)
+		return server(unixfds[1]);
 
 	close(unixfds[1]);
 

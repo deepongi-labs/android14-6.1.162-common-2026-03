@@ -494,7 +494,8 @@ static const struct v4l2_subdev_ops s2250_ops = {
 
 /* --------------------------------------------------------------------------*/
 
-static int s2250_probe(struct i2c_client *client)
+static int s2250_probe(struct i2c_client *client,
+		       const struct i2c_device_id *id)
 {
 	struct i2c_client *audio;
 	struct i2c_adapter *adapter = client->adapter;
@@ -611,7 +612,7 @@ static void s2250_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id s2250_id[] = {
-	{ "s2250" },
+	{ "s2250", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, s2250_id);

@@ -3,9 +3,8 @@
  * Common place for both 32- and 64-bit entry routines.
  */
 
-#include <linux/export.h>
 #include <linux/linkage.h>
-#include <linux/objtool.h>
+#include <asm/export.h>
 #include <asm/msr-index.h>
 #include <asm/unwind_hints.h>
 #include <asm/segment.h>
@@ -13,13 +12,9 @@
 #include <asm/cpufeatures.h>
 #include <asm/nospec-branch.h>
 
-#include "calling.h"
-
 .pushsection .noinstr.text, "ax"
 
-/* Clobbers AX, CX, DX */
-SYM_FUNC_START(write_ibpb)
-	ANNOTATE_NOENDBR
+SYM_FUNC_START(entry_ibpb)
 	movl	$MSR_IA32_PRED_CMD, %ecx
 	movl	_ASM_RIP(x86_pred_cmd), %eax
 	xorl	%edx, %edx
@@ -28,9 +23,9 @@ SYM_FUNC_START(write_ibpb)
 	/* Make sure IBPB clears return stack preductions too. */
 	FILL_RETURN_BUFFER %rax, RSB_CLEAR_LOOPS, X86_BUG_IBPB_NO_RET
 	RET
-SYM_FUNC_END(write_ibpb)
+SYM_FUNC_END(entry_ibpb)
 /* For KVM */
-EXPORT_SYMBOL_GPL(write_ibpb);
+EXPORT_SYMBOL_GPL(entry_ibpb);
 
 .popsection
 
@@ -43,7 +38,7 @@ EXPORT_SYMBOL_GPL(write_ibpb);
 
 .align L1_CACHE_BYTES, 0xcc
 SYM_CODE_START_NOALIGN(x86_verw_sel)
-	UNWIND_HINT_UNDEFINED
+	UNWIND_HINT_EMPTY
 	ANNOTATE_NOENDBR
 	.word __KERNEL_DS
 .align L1_CACHE_BYTES, 0xcc
@@ -53,18 +48,3 @@ EXPORT_SYMBOL_GPL(x86_verw_sel);
 
 .popsection
 
-THUNK warn_thunk_thunk, __warn_thunk
-
-/*
- * Clang's implementation of TLS stack cookies requires the variable in
- * question to be a TLS variable. If the variable happens to be defined as an
- * ordinary variable with external linkage in the same compilation unit (which
- * amounts to the whole of vmlinux with LTO enabled), Clang will drop the
- * segment register prefix from the references, resulting in broken code. Work
- * around this by avoiding the symbol used in -mstack-protector-guard-symbol=
- * entirely in the C code, and use an alias emitted by the linker script
- * instead.
- */
-#if defined(CONFIG_STACKPROTECTOR) && defined(CONFIG_SMP)
-EXPORT_SYMBOL(__ref_stack_chk_guard);
-#endif

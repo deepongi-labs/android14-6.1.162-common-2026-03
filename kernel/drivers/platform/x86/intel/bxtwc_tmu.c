@@ -79,7 +79,7 @@ static int bxt_wcove_tmu_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void bxt_wcove_tmu_remove(struct platform_device *pdev)
+static int bxt_wcove_tmu_remove(struct platform_device *pdev)
 {
 	struct wcove_tmu *wctmu = platform_get_drvdata(pdev);
 	unsigned int val;
@@ -91,6 +91,7 @@ static void bxt_wcove_tmu_remove(struct platform_device *pdev)
 	regmap_read(wctmu->regmap, BXTWC_MTMUIRQ_REG, &val);
 	regmap_write(wctmu->regmap, BXTWC_MTMUIRQ_REG,
 			val | BXTWC_TMU_ALRM_MASK);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

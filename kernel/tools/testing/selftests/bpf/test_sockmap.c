@@ -65,8 +65,7 @@ int passed;
 int failed;
 int map_fd[9];
 struct bpf_map *maps[9];
-struct bpf_program *progs[9];
-struct bpf_link *links[9];
+int prog_fd[9];
 
 int txmsg_pass;
 int txmsg_redir;
@@ -1048,8 +1047,7 @@ enum {
 
 static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 {
-	int i, key, next_key, err, zero = 0;
-	struct bpf_program *tx_prog;
+	int i, key, next_key, err, tx_prog_fd = -1, zero = 0;
 
 	/* If base test skip BPF setup */
 	if (test == BASE || test == BASE_SENDPAGE)
@@ -1057,44 +1055,48 @@ static int run_options(struct sockmap_options *options, int cg_fd,  int test)
 
 	/* Attach programs to sockmap */
 	if (!txmsg_omit_skb_parser) {
-		links[0] = bpf_program__attach_sockmap(progs[0], map_fd[0]);
-		if (!links[0]) {
+		err = bpf_prog_attach(prog_fd[0], map_fd[0],
+				      BPF_SK_SKB_STREAM_PARSER, 0);
+		if (err) {
 			fprintf(stderr,
-				"ERROR: bpf_program__attach_sockmap (sockmap %i->%i): (%s)\n",
-				bpf_program__fd(progs[0]), map_fd[0], strerror(errno));
-			return -1;
+				"ERROR: bpf_prog_attach (sockmap %i->%i): %d (%s)\n",
+				prog_fd[0], map_fd[0], err, strerror(errno));
+			return err;
 		}
 	}
 
-	links[1] = bpf_program__attach_sockmap(progs[1], map_fd[0]);
-	if (!links[1]) {
-		fprintf(stderr, "ERROR: bpf_program__attach_sockmap (sockmap): (%s)\n",
-			strerror(errno));
-		return -1;
+	err = bpf_prog_attach(prog_fd[1], map_fd[0],
+				BPF_SK_SKB_STREAM_VERDICT, 0);
+	if (err) {
+		fprintf(stderr, "ERROR: bpf_prog_attach (sockmap): %d (%s)\n",
+			err, strerror(errno));
+		return err;
 	}
 
 	/* Attach programs to TLS sockmap */
 	if (txmsg_ktls_skb) {
 		if (!txmsg_omit_skb_parser) {
-			links[2] = bpf_program__attach_sockmap(progs[0], map_fd[8]);
-			if (!links[2]) {
+			err = bpf_prog_attach(prog_fd[0], map_fd[8],
+					      BPF_SK_SKB_STREAM_PARSER, 0);
+			if (err) {
 				fprintf(stderr,
-					"ERROR: bpf_program__attach_sockmap (TLS sockmap %i->%i): (%s)\n",
-					bpf_program__fd(progs[0]), map_fd[8], strerror(errno));
-				return -1;
+					"ERROR: bpf_prog_attach (TLS sockmap %i->%i): %d (%s)\n",
+					prog_fd[0], map_fd[8], err, strerror(errno));
+				return err;
 			}
 		}
 
-		links[3] = bpf_program__attach_sockmap(progs[2], map_fd[8]);
-		if (!links[3]) {
-			fprintf(stderr, "ERROR: bpf_program__attach_sockmap (TLS sockmap): (%s)\n",
-				strerror(errno));
-			return -1;
+		err = bpf_prog_attach(prog_fd[2], map_fd[8],
+				      BPF_SK_SKB_STREAM_VERDICT, 0);
+		if (err) {
+			fprintf(stderr, "ERROR: bpf_prog_attach (TLS sockmap): %d (%s)\n",
+				err, strerror(errno));
+			return err;
 		}
 	}
 
 	/* Attach to cgroups */
-	err = bpf_prog_attach(bpf_program__fd(progs[3]), cg_fd, BPF_CGROUP_SOCK_OPS, 0);
+	err = bpf_prog_attach(prog_fd[3], cg_fd, BPF_CGROUP_SOCK_OPS, 0);
 	if (err) {
 		fprintf(stderr, "ERROR: bpf_prog_attach (groups): %d (%s)\n",
 			err, strerror(errno));
@@ -1110,31 +1112,30 @@ run:
 
 	/* Attach txmsg program to sockmap */
 	if (txmsg_pass)
-		tx_prog = progs[4];
+		tx_prog_fd = prog_fd[4];
 	else if (txmsg_redir)
-		tx_prog = progs[5];
+		tx_prog_fd = prog_fd[5];
 	else if (txmsg_apply)
-		tx_prog = progs[6];
+		tx_prog_fd = prog_fd[6];
 	else if (txmsg_cork)
-		tx_prog = progs[7];
+		tx_prog_fd = prog_fd[7];
 	else if (txmsg_drop)
-		tx_prog = progs[8];
+		tx_prog_fd = prog_fd[8];
 	else
-		tx_prog = NULL;
+		tx_prog_fd = 0;
 
-	if (tx_prog) {
-		int redir_fd;
+	if (tx_prog_fd) {
+		int redir_fd, i = 0;
 
-		links[4] = bpf_program__attach_sockmap(tx_prog, map_fd[1]);
-		if (!links[4]) {
+		err = bpf_prog_attach(tx_prog_fd,
+				      map_fd[1], BPF_SK_MSG_VERDICT, 0);
+		if (err) {
 			fprintf(stderr,
-				"ERROR: bpf_program__attach_sockmap (txmsg): (%s)\n",
-				strerror(errno));
-			err = -1;
+				"ERROR: bpf_prog_attach (txmsg): %d (%s)\n",
+				err, strerror(errno));
 			goto out;
 		}
 
-		i = 0;
 		err = bpf_map_update_elem(map_fd[1], &i, &c1, BPF_ANY);
 		if (err) {
 			fprintf(stderr,
@@ -1372,15 +1373,17 @@ run:
 	} else
 		fprintf(stderr, "unknown test\n");
 out:
-	/* Detach and zero all the maps */
-	bpf_prog_detach2(bpf_program__fd(progs[3]), cg_fd, BPF_CGROUP_SOCK_OPS);
+	/* Detatch and zero all the maps */
+	bpf_prog_detach2(prog_fd[3], cg_fd, BPF_CGROUP_SOCK_OPS);
+	bpf_prog_detach2(prog_fd[0], map_fd[0], BPF_SK_SKB_STREAM_PARSER);
+	bpf_prog_detach2(prog_fd[1], map_fd[0], BPF_SK_SKB_STREAM_VERDICT);
+	bpf_prog_detach2(prog_fd[0], map_fd[8], BPF_SK_SKB_STREAM_PARSER);
+	bpf_prog_detach2(prog_fd[2], map_fd[8], BPF_SK_SKB_STREAM_VERDICT);
 
-	for (i = 0; i < ARRAY_SIZE(links); i++) {
-		if (links[i])
-			bpf_link__detach(links[i]);
-	}
+	if (tx_prog_fd >= 0)
+		bpf_prog_detach2(tx_prog_fd, map_fd[1], BPF_SK_MSG_VERDICT);
 
-	for (i = 0; i < ARRAY_SIZE(map_fd); i++) {
+	for (i = 0; i < 8; i++) {
 		key = next_key = 0;
 		bpf_map_update_elem(map_fd[i], &key, &zero, BPF_ANY);
 		while (bpf_map_get_next_key(map_fd[i], &key, &next_key) == 0) {
@@ -1579,12 +1582,8 @@ static void test_txmsg_redir(int cgrp, struct sockmap_options *opt)
 
 static void test_txmsg_redir_wait_sndmem(int cgrp, struct sockmap_options *opt)
 {
+	txmsg_redir = 1;
 	opt->tx_wait_mem = true;
-	txmsg_redir = 1;
-	test_send_large(opt, cgrp);
-
-	txmsg_redir = 1;
-	txmsg_apply = 4097;
 	test_send_large(opt, cgrp);
 	opt->tx_wait_mem = false;
 }
@@ -1799,45 +1798,8 @@ static void test_txmsg_push(int cgrp, struct sockmap_options *opt)
 
 static void test_txmsg_push_pop(int cgrp, struct sockmap_options *opt)
 {
-	/* Test push/pop range overlapping */
 	txmsg_pass = 1;
 	txmsg_start_push = 1;
-	txmsg_end_push = 10;
-	txmsg_start_pop = 5;
-	txmsg_pop = 4;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 1;
-	txmsg_start_push = 1;
-	txmsg_end_push = 10;
-	txmsg_start_pop = 5;
-	txmsg_pop = 16;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 1;
-	txmsg_start_push = 5;
-	txmsg_end_push = 4;
-	txmsg_start_pop = 1;
-	txmsg_pop = 10;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 1;
-	txmsg_start_push = 5;
-	txmsg_end_push = 16;
-	txmsg_start_pop = 1;
-	txmsg_pop = 10;
-	test_send_large(opt, cgrp);
-
-	/* Test push/pop range non-overlapping */
-	txmsg_pass = 1;
-	txmsg_start_push = 1;
-	txmsg_end_push = 10;
-	txmsg_start_pop = 16;
-	txmsg_pop = 4;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 1;
-	txmsg_start_push = 16;
 	txmsg_end_push = 10;
 	txmsg_start_pop = 5;
 	txmsg_pop = 4;
@@ -1848,42 +1810,24 @@ static void test_txmsg_apply(int cgrp, struct sockmap_options *opt)
 {
 	txmsg_pass = 1;
 	txmsg_redir = 0;
-	txmsg_ingress = 0;
 	txmsg_apply = 1;
 	txmsg_cork = 0;
 	test_send_one(opt, cgrp);
 
 	txmsg_pass = 0;
 	txmsg_redir = 1;
-	txmsg_ingress = 0;
-	txmsg_apply = 1;
-	txmsg_cork = 0;
-	test_send_one(opt, cgrp);
-
-	txmsg_pass = 0;
-	txmsg_redir = 1;
-	txmsg_ingress = 1;
 	txmsg_apply = 1;
 	txmsg_cork = 0;
 	test_send_one(opt, cgrp);
 
 	txmsg_pass = 1;
 	txmsg_redir = 0;
-	txmsg_ingress = 0;
 	txmsg_apply = 1024;
 	txmsg_cork = 0;
 	test_send_large(opt, cgrp);
 
 	txmsg_pass = 0;
 	txmsg_redir = 1;
-	txmsg_ingress = 0;
-	txmsg_apply = 1024;
-	txmsg_cork = 0;
-	test_send_large(opt, cgrp);
-
-	txmsg_pass = 0;
-	txmsg_redir = 1;
-	txmsg_ingress = 1;
 	txmsg_apply = 1024;
 	txmsg_cork = 0;
 	test_send_large(opt, cgrp);
@@ -1941,6 +1885,30 @@ char *map_names[] = {
 	"tls_sock_map",
 };
 
+int prog_attach_type[] = {
+	BPF_SK_SKB_STREAM_PARSER,
+	BPF_SK_SKB_STREAM_VERDICT,
+	BPF_SK_SKB_STREAM_VERDICT,
+	BPF_CGROUP_SOCK_OPS,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+	BPF_SK_MSG_VERDICT,
+};
+
+int prog_type[] = {
+	BPF_PROG_TYPE_SK_SKB,
+	BPF_PROG_TYPE_SK_SKB,
+	BPF_PROG_TYPE_SK_SKB,
+	BPF_PROG_TYPE_SOCK_OPS,
+	BPF_PROG_TYPE_SK_MSG,
+	BPF_PROG_TYPE_SK_MSG,
+	BPF_PROG_TYPE_SK_MSG,
+	BPF_PROG_TYPE_SK_MSG,
+	BPF_PROG_TYPE_SK_MSG,
+};
+
 static int populate_progs(char *bpf_file)
 {
 	struct bpf_program *prog;
@@ -1959,10 +1927,17 @@ static int populate_progs(char *bpf_file)
 		return -1;
 	}
 
+	bpf_object__for_each_program(prog, obj) {
+		bpf_program__set_type(prog, prog_type[i]);
+		bpf_program__set_expected_attach_type(prog,
+						      prog_attach_type[i]);
+		i++;
+	}
+
 	i = bpf_object__load(obj);
 	i = 0;
 	bpf_object__for_each_program(prog, obj) {
-		progs[i] = prog;
+		prog_fd[i] = bpf_program__fd(prog);
 		i++;
 	}
 
@@ -1975,9 +1950,6 @@ static int populate_progs(char *bpf_file)
 			return -1;
 		}
 	}
-
-	for (i = 0; i < ARRAY_SIZE(links); i++)
-		links[i] = NULL;
 
 	return 0;
 }
@@ -2013,13 +1985,10 @@ static int check_whitelist(struct _test *t, struct sockmap_options *opt)
 	while (entry) {
 		if ((opt->prepend && strstr(opt->prepend, entry) != 0) ||
 		    strstr(opt->map, entry) != 0 ||
-		    strstr(t->title, entry) != 0) {
-			free(ptr);
+		    strstr(t->title, entry) != 0)
 			return 0;
-		}
 		entry = strtok(NULL, ",");
 	}
-	free(ptr);
 	return -EINVAL;
 }
 
@@ -2036,13 +2005,10 @@ static int check_blacklist(struct _test *t, struct sockmap_options *opt)
 	while (entry) {
 		if ((opt->prepend && strstr(opt->prepend, entry) != 0) ||
 		    strstr(opt->map, entry) != 0 ||
-		    strstr(t->title, entry) != 0) {
-			free(ptr);
+		    strstr(t->title, entry) != 0)
 			return 0;
-		}
 		entry = strtok(NULL, ",");
 	}
-	free(ptr);
 	return -EINVAL;
 }
 
@@ -2096,6 +2062,7 @@ static void test_selftests_ktls(int cg_fd, struct sockmap_options *opt)
 
 static int test_selftest(int cg_fd, struct sockmap_options *opt)
 {
+
 	test_selftests_sockmap(cg_fd, opt);
 	test_selftests_sockhash(cg_fd, opt);
 	test_selftests_ktls(cg_fd, opt);

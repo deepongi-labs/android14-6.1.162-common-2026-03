@@ -15,26 +15,26 @@ static int none_init_connection_security(struct rxrpc_connection *conn,
 }
 
 /*
- * Allocate an appropriately sized buffer for the amount of data remaining.
+ * Work out how much data we can put in an unsecured packet.
  */
-static struct rxrpc_txbuf *none_alloc_txbuf(struct rxrpc_call *call, size_t remain, gfp_t gfp)
+static int none_how_much_data(struct rxrpc_call *call, size_t remain,
+			       size_t *_buf_size, size_t *_data_size, size_t *_offset)
 {
-	return rxrpc_alloc_data_txbuf(call, umin(remain, RXRPC_JUMBO_DATALEN), 1, gfp);
-}
-
-static int none_secure_packet(struct rxrpc_call *call, struct rxrpc_txbuf *txb)
-{
-	txb->pkt_len = txb->len;
-	if (txb->len == RXRPC_JUMBO_DATALEN)
-		txb->jumboable = true;
+	*_buf_size = *_data_size = min_t(size_t, remain, RXRPC_JUMBO_DATALEN);
+	*_offset = 0;
 	return 0;
 }
 
-static int none_verify_packet(struct rxrpc_call *call, struct sk_buff *skb)
+static int none_secure_packet(struct rxrpc_call *call, struct sk_buff *skb,
+			      size_t data_size)
 {
-	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+	return 0;
+}
 
-	sp->flags |= RXRPC_RX_VERIFIED;
+static int none_verify_packet(struct rxrpc_call *call, struct sk_buff *skb,
+			      unsigned int offset, unsigned int len,
+			      rxrpc_seq_t seq, u16 expected_cksum)
+{
 	return 0;
 }
 
@@ -42,25 +42,31 @@ static void none_free_call_crypto(struct rxrpc_call *call)
 {
 }
 
-static bool none_validate_challenge(struct rxrpc_connection *conn,
-				    struct sk_buff *skb)
+static void none_locate_data(struct rxrpc_call *call, struct sk_buff *skb,
+			     unsigned int *_offset, unsigned int *_len)
 {
-	rxrpc_abort_conn(conn, skb, RX_PROTOCOL_ERROR, -EPROTO,
-			 rxrpc_eproto_rxnull_challenge);
-	return true;
 }
 
-static int none_sendmsg_respond_to_challenge(struct sk_buff *challenge,
-					     struct msghdr *msg)
+static int none_respond_to_challenge(struct rxrpc_connection *conn,
+				     struct sk_buff *skb,
+				     u32 *_abort_code)
 {
-	return -EINVAL;
+	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+
+	trace_rxrpc_rx_eproto(NULL, sp->hdr.serial,
+			      tracepoint_string("chall_none"));
+	return -EPROTO;
 }
 
 static int none_verify_response(struct rxrpc_connection *conn,
-				struct sk_buff *skb)
+				struct sk_buff *skb,
+				u32 *_abort_code)
 {
-	return rxrpc_abort_conn(conn, skb, RX_PROTOCOL_ERROR, -EPROTO,
-				rxrpc_eproto_rxnull_response);
+	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+
+	trace_rxrpc_rx_eproto(NULL, sp->hdr.serial,
+			      tracepoint_string("resp_none"));
+	return -EPROTO;
 }
 
 static void none_clear(struct rxrpc_connection *conn)
@@ -86,11 +92,11 @@ const struct rxrpc_security rxrpc_no_security = {
 	.exit				= none_exit,
 	.init_connection_security	= none_init_connection_security,
 	.free_call_crypto		= none_free_call_crypto,
-	.alloc_txbuf			= none_alloc_txbuf,
+	.how_much_data			= none_how_much_data,
 	.secure_packet			= none_secure_packet,
 	.verify_packet			= none_verify_packet,
-	.validate_challenge		= none_validate_challenge,
-	.sendmsg_respond_to_challenge	= none_sendmsg_respond_to_challenge,
+	.locate_data			= none_locate_data,
+	.respond_to_challenge		= none_respond_to_challenge,
 	.verify_response		= none_verify_response,
 	.clear				= none_clear,
 };

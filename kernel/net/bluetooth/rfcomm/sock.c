@@ -468,8 +468,8 @@ done:
 	return err;
 }
 
-static int rfcomm_sock_accept(struct socket *sock, struct socket *newsock,
-			      struct proto_accept_arg *arg)
+static int rfcomm_sock_accept(struct socket *sock, struct socket *newsock, int flags,
+			      bool kern)
 {
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 	struct sock *sk = sock->sk, *nsk;
@@ -483,7 +483,7 @@ static int rfcomm_sock_accept(struct socket *sock, struct socket *newsock,
 		goto done;
 	}
 
-	timeo = sock_rcvtimeo(sk, arg->flags & O_NONBLOCK);
+	timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
 
 	BT_DBG("sk %p timeo %ld", sk, timeo);
 
@@ -629,9 +629,10 @@ static int rfcomm_sock_setsockopt_old(struct socket *sock, int optname,
 
 	switch (optname) {
 	case RFCOMM_LM:
-		err = copy_safe_from_sockptr(&opt, sizeof(opt), optval, optlen);
-		if (err)
+		if (bt_copy_from_sockptr(&opt, sizeof(opt), optval, optlen)) {
+			err = -EFAULT;
 			break;
+		}
 
 		if (opt & RFCOMM_LM_FIPS) {
 			err = -EINVAL;
@@ -684,7 +685,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname,
 
 		sec.level = BT_SECURITY_LOW;
 
-		err = copy_safe_from_sockptr(&sec, sizeof(sec), optval, optlen);
+		err = bt_copy_from_sockptr(&sec, sizeof(sec), optval, optlen);
 		if (err)
 			break;
 
@@ -702,7 +703,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
-		err = copy_safe_from_sockptr(&opt, sizeof(opt), optval, optlen);
+		err = bt_copy_from_sockptr(&opt, sizeof(opt), optval, optlen);
 		if (err)
 			break;
 

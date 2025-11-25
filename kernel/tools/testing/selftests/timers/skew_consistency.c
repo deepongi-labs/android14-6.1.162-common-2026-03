@@ -36,6 +36,8 @@
 #include <sys/wait.h>
 #include "../kselftest.h"
 
+#define NSEC_PER_SEC 1000000000LL
+
 int main(int argc, char **argv)
 {
 	struct timex tx;
@@ -47,7 +49,7 @@ int main(int argc, char **argv)
 
 	pid = fork();
 	if (!pid)
-		return system("./inconsistency-check -t 60");
+		return system("./inconsistency-check -c 1 -t 600");
 
 	ppm = 500;
 	ret = 0;
@@ -68,8 +70,8 @@ int main(int argc, char **argv)
 
 	if (ret) {
 		printf("[FAILED]\n");
-		ksft_exit_fail();
+		return ksft_exit_fail();
 	}
 	printf("[OK]\n");
-	ksft_exit_pass();
+	return ksft_exit_pass();
 }

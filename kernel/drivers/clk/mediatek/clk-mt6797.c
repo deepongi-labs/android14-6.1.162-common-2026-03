@@ -5,6 +5,8 @@
  */
 
 #include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #include "clk-gate.h"
@@ -674,7 +676,6 @@ static const struct of_device_id of_match_clk_mt6797[] = {
 		/* sentinel */
 	}
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt6797);
 
 static int clk_mt6797_probe(struct platform_device *pdev)
 {
@@ -708,6 +709,4 @@ static int __init clk_mt6797_init(void)
 }
 
 arch_initcall(clk_mt6797_init);
-
-MODULE_DESCRIPTION("MediaTek MT6797 main clocks driver");
 MODULE_LICENSE("GPL");

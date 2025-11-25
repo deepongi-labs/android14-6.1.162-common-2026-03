@@ -190,12 +190,19 @@ static int arizona_spi_acpi_probe(struct arizona *arizona)
 
 static int arizona_spi_probe(struct spi_device *spi)
 {
+	const struct spi_device_id *id = spi_get_device_id(spi);
+	const void *match_data;
 	struct arizona *arizona;
 	const struct regmap_config *regmap_config = NULL;
 	unsigned long type = 0;
 	int ret;
 
-	type = (unsigned long)spi_get_device_match_data(spi);
+	match_data = device_get_match_data(&spi->dev);
+	if (match_data)
+		type = (unsigned long)match_data;
+	else if (id)
+		type = id->driver_data;
+
 	switch (type) {
 	case WM5102:
 		if (IS_ENABLED(CONFIG_MFD_WM5102))
@@ -279,7 +286,7 @@ MODULE_DEVICE_TABLE(of, arizona_spi_of_match);
 static struct spi_driver arizona_spi_driver = {
 	.driver = {
 		.name	= "arizona",
-		.pm	= pm_ptr(&arizona_pm_ops),
+		.pm	= &arizona_pm_ops,
 		.of_match_table	= of_match_ptr(arizona_spi_of_match),
 		.acpi_match_table = ACPI_PTR(arizona_acpi_match),
 	},

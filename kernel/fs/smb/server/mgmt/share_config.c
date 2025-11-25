@@ -19,7 +19,7 @@
 #include "../transport_ipc.h"
 #include "../misc.h"
 
-#define SHARE_HASH_BITS		12
+#define SHARE_HASH_BITS		3
 static DEFINE_HASHTABLE(shares_table, SHARE_HASH_BITS);
 static DECLARE_RWSEM(shares_table_lock);
 
@@ -102,11 +102,11 @@ static int parse_veto_list(struct ksmbd_share_config *share,
 		if (!sz)
 			break;
 
-		p = kzalloc(sizeof(struct ksmbd_veto_pattern), KSMBD_DEFAULT_GFP);
+		p = kzalloc(sizeof(struct ksmbd_veto_pattern), GFP_KERNEL);
 		if (!p)
 			return -ENOMEM;
 
-		p->pattern = kstrdup(veto_list, KSMBD_DEFAULT_GFP);
+		p->pattern = kstrdup(veto_list, GFP_KERNEL);
 		if (!p->pattern) {
 			kfree(p);
 			return -ENOMEM;
@@ -150,14 +150,14 @@ static struct ksmbd_share_config *share_config_request(struct ksmbd_work *work,
 			goto out;
 	}
 
-	share = kzalloc(sizeof(struct ksmbd_share_config), KSMBD_DEFAULT_GFP);
+	share = kzalloc(sizeof(struct ksmbd_share_config), GFP_KERNEL);
 	if (!share)
 		goto out;
 
 	share->flags = resp->flags;
 	atomic_set(&share->refcount, 1);
 	INIT_LIST_HEAD(&share->veto_list);
-	share->name = kstrdup(name, KSMBD_DEFAULT_GFP);
+	share->name = kstrdup(name, GFP_KERNEL);
 
 	if (!test_share_config_flag(share, KSMBD_SHARE_FLAG_PIPE)) {
 		int path_len = PATH_MAX;
@@ -166,7 +166,7 @@ static struct ksmbd_share_config *share_config_request(struct ksmbd_work *work,
 			path_len = resp->payload_sz - resp->veto_list_sz;
 
 		share->path = kstrndup(ksmbd_share_config_path(resp), path_len,
-				      KSMBD_DEFAULT_GFP);
+				      GFP_KERNEL);
 		if (share->path) {
 			share->path_sz = strlen(share->path);
 			while (share->path_sz > 1 &&

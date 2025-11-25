@@ -77,7 +77,7 @@ static void update_shadow_pdps(struct intel_vgpu_workload *workload)
 }
 
 /*
- * When populating shadow ctx from guest, we should not override oa related
+ * when populating shadow ctx from guest, we should not overrride oa related
  * registers, so that they will not be overlapped by guest oa configs. Thus
  * made it possible to capture oa data from host for both host and guests.
  */
@@ -528,10 +528,9 @@ static int prepare_shadow_batch_buffer(struct intel_vgpu_workload *workload)
 	int ret;
 
 	list_for_each_entry(bb, &workload->shadow_bb, list) {
-		/*
-		 * For privilege batch buffer and not wa_ctx, the bb_start_cmd_va
+		/* For privilge batch buffer and not wa_ctx, the bb_start_cmd_va
 		 * is only updated into ring_scan_buffer, not real ring address
-		 * allocated in later copy_workload_to_ring_buffer. Please be noted
+		 * allocated in later copy_workload_to_ring_buffer. pls be noted
 		 * shadow_ring_buffer_va is now pointed to real ring buffer va
 		 * in copy_workload_to_ring_buffer.
 		 */
@@ -547,7 +546,7 @@ static int prepare_shadow_batch_buffer(struct intel_vgpu_workload *workload)
 		 * here, rather than switch to shadow bb's gma
 		 * address, we directly use original batch buffer's
 		 * gma address, and send original bb to hardware
-		 * directly.
+		 * directly
 		 */
 		if (!bb->ppgtt) {
 			i915_gem_ww_ctx_init(&ww, false);
@@ -571,8 +570,9 @@ retry:
 			if (gmadr_bytes == 8)
 				bb->bb_start_cmd_va[2] = 0;
 
-			ret = i915_vma_move_to_active(bb->vma, workload->req,
-						      __EXEC_OBJECT_NO_REQUEST_AWAIT);
+			ret = i915_vma_move_to_active(bb->vma,
+						      workload->req,
+						      0);
 			if (ret)
 				goto err;
 
@@ -867,8 +867,7 @@ pick_next_workload(struct intel_gvt *gvt, struct intel_engine_cs *engine)
 		goto out;
 	}
 
-	if (!test_bit(INTEL_VGPU_STATUS_ACTIVE,
-		      scheduler->current_vgpu->status) ||
+	if (!scheduler->current_vgpu->active ||
 	    list_empty(workload_q_head(scheduler->current_vgpu, engine)))
 		goto out;
 
@@ -975,7 +974,7 @@ static void update_guest_context(struct intel_vgpu_workload *workload)
 	context_page_num = rq->engine->context_size;
 	context_page_num = context_page_num >> PAGE_SHIFT;
 
-	if (IS_BROADWELL(rq->i915) && rq->engine->id == RCS0)
+	if (IS_BROADWELL(rq->engine->i915) && rq->engine->id == RCS0)
 		context_page_num = 19;
 
 	context_base = (void *) ctx->lrc_reg_state -
@@ -1053,7 +1052,7 @@ void intel_vgpu_clean_workloads(struct intel_vgpu *vgpu,
 	struct intel_vgpu_workload *pos, *n;
 	intel_engine_mask_t tmp;
 
-	/* free the unsubmitted workloads in the queues. */
+	/* free the unsubmited workloads in the queues. */
 	for_each_engine_masked(engine, vgpu->gvt->gt, engine_mask, tmp) {
 		list_for_each_entry_safe(pos, n,
 			&s->workload_q_head[engine->id], list) {
@@ -1775,7 +1774,7 @@ intel_vgpu_create_workload(struct intel_vgpu *vgpu,
 }
 
 /**
- * intel_vgpu_queue_workload - Queue a vGPU workload
+ * intel_vgpu_queue_workload - Qeue a vGPU workload
  * @workload: the workload to queue in
  */
 void intel_vgpu_queue_workload(struct intel_vgpu_workload *workload)

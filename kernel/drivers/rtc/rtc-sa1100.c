@@ -292,12 +292,12 @@ static int sa1100_rtc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, info);
-	device_init_wakeup(&pdev->dev, true);
+	device_init_wakeup(&pdev->dev, 1);
 
 	return sa1100_rtc_init(pdev, info);
 }
 
-static void sa1100_rtc_remove(struct platform_device *pdev)
+static int sa1100_rtc_remove(struct platform_device *pdev)
 {
 	struct sa1100_rtc *info = platform_get_drvdata(pdev);
 
@@ -307,6 +307,8 @@ static void sa1100_rtc_remove(struct platform_device *pdev)
 		spin_unlock_irq(&info->lock);
 		clk_disable_unprepare(info->clk);
 	}
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

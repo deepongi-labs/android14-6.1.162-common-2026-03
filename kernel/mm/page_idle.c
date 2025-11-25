@@ -31,22 +31,19 @@
  *
  * This function tries to get a user memory page by pfn as described above.
  */
-static struct folio *page_idle_get_folio(unsigned long pfn)
+static struct page *page_idle_get_page(unsigned long pfn)
 {
 	struct page *page = pfn_to_online_page(pfn);
-	struct folio *folio;
 
-	if (!page || PageTail(page))
+	if (!page || !PageLRU(page) ||
+	    !get_page_unless_zero(page))
 		return NULL;
 
-	folio = page_folio(page);
-	if (!folio_test_lru(folio) || !folio_try_get(folio))
-		return NULL;
-	if (unlikely(page_folio(page) != folio || !folio_test_lru(folio))) {
-		folio_put(folio);
-		folio = NULL;
+	if (unlikely(!PageLRU(page))) {
+		put_page(page);
+		page = NULL;
 	}
-	return folio;
+	return page;
 }
 
 static bool page_idle_clear_pte_refs_one(struct folio *folio,
@@ -62,14 +59,9 @@ static bool page_idle_clear_pte_refs_one(struct folio *folio,
 			/*
 			 * For PTE-mapped THP, one sub page is referenced,
 			 * the whole THP is referenced.
-			 *
-			 * PFN swap PTEs, such as device-exclusive ones, that
-			 * actually map pages are "old" from a CPU perspective.
-			 * The MMU notifier takes care of any device aspects.
 			 */
-			if (likely(pte_present(ptep_get(pvmw.pte))))
-				referenced |= ptep_test_and_clear_young(vma, addr, pvmw.pte);
-			referenced |= mmu_notifier_clear_young(vma->vm_mm, addr, addr + PAGE_SIZE);
+			if (ptep_clear_young_notify(vma, addr, pvmw.pte))
+				referenced = true;
 		} else if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE)) {
 			if (pmdp_clear_young_notify(vma, addr, pvmw.pmd))
 				referenced = true;
@@ -91,8 +83,10 @@ static bool page_idle_clear_pte_refs_one(struct folio *folio,
 	return true;
 }
 
-static void page_idle_clear_pte_refs(struct folio *folio)
+static void page_idle_clear_pte_refs(struct page *page)
 {
+	struct folio *folio = page_folio(page);
+
 	/*
 	 * Since rwc.try_lock is unused, rwc is effectively immutable, so we
 	 * can make it static to save some cycles and stack.
@@ -101,27 +95,23 @@ static void page_idle_clear_pte_refs(struct folio *folio)
 		.rmap_one = page_idle_clear_pte_refs_one,
 		.anon_lock = folio_lock_anon_vma_read,
 	};
-	bool need_lock;
 
 	if (!folio_mapped(folio) || !folio_raw_mapping(folio))
 		return;
 
-	need_lock = !folio_test_anon(folio) || folio_test_ksm(folio);
-	if (need_lock && !folio_trylock(folio))
+	if (!folio_trylock(folio))
 		return;
 
 	rmap_walk(folio, &rwc);
-
-	if (need_lock)
-		folio_unlock(folio);
+	folio_unlock(folio);
 }
 
 static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
-				     const struct bin_attribute *attr, char *buf,
+				     struct bin_attribute *attr, char *buf,
 				     loff_t pos, size_t count)
 {
 	u64 *out = (u64 *)buf;
-	struct folio *folio;
+	struct page *page;
 	unsigned long pfn, end_pfn;
 	int bit;
 
@@ -140,19 +130,19 @@ static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
 		bit = pfn % BITMAP_CHUNK_BITS;
 		if (!bit)
 			*out = 0ULL;
-		folio = page_idle_get_folio(pfn);
-		if (folio) {
-			if (folio_test_idle(folio)) {
+		page = page_idle_get_page(pfn);
+		if (page) {
+			if (page_is_idle(page)) {
 				/*
 				 * The page might have been referenced via a
 				 * pte, in which case it is not idle. Clear
 				 * refs and recheck.
 				 */
-				page_idle_clear_pte_refs(folio);
-				if (folio_test_idle(folio))
+				page_idle_clear_pte_refs(page);
+				if (page_is_idle(page))
 					*out |= 1ULL << bit;
 			}
-			folio_put(folio);
+			put_page(page);
 		}
 		if (bit == BITMAP_CHUNK_BITS - 1)
 			out++;
@@ -162,11 +152,11 @@ static ssize_t page_idle_bitmap_read(struct file *file, struct kobject *kobj,
 }
 
 static ssize_t page_idle_bitmap_write(struct file *file, struct kobject *kobj,
-				      const struct bin_attribute *attr, char *buf,
+				      struct bin_attribute *attr, char *buf,
 				      loff_t pos, size_t count)
 {
 	const u64 *in = (u64 *)buf;
-	struct folio *folio;
+	struct page *page;
 	unsigned long pfn, end_pfn;
 	int bit;
 
@@ -184,11 +174,11 @@ static ssize_t page_idle_bitmap_write(struct file *file, struct kobject *kobj,
 	for (; pfn < end_pfn; pfn++) {
 		bit = pfn % BITMAP_CHUNK_BITS;
 		if ((*in >> bit) & 1) {
-			folio = page_idle_get_folio(pfn);
-			if (folio) {
-				page_idle_clear_pte_refs(folio);
-				folio_set_idle(folio);
-				folio_put(folio);
+			page = page_idle_get_page(pfn);
+			if (page) {
+				page_idle_clear_pte_refs(page);
+				set_page_idle(page);
+				put_page(page);
 			}
 		}
 		if (bit == BITMAP_CHUNK_BITS - 1)
@@ -198,11 +188,11 @@ static ssize_t page_idle_bitmap_write(struct file *file, struct kobject *kobj,
 	return (char *)in - buf;
 }
 
-static const struct bin_attribute page_idle_bitmap_attr =
+static struct bin_attribute page_idle_bitmap_attr =
 		__BIN_ATTR(bitmap, 0600,
 			   page_idle_bitmap_read, page_idle_bitmap_write, 0);
 
-static const struct bin_attribute *const page_idle_bin_attrs[] = {
+static struct bin_attribute *page_idle_bin_attrs[] = {
 	&page_idle_bitmap_attr,
 	NULL,
 };

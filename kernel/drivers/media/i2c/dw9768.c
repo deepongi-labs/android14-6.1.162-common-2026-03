@@ -115,6 +115,11 @@ static inline struct dw9768 *sd_to_dw9768(struct v4l2_subdev *subdev)
 	return container_of(subdev, struct dw9768, sd);
 }
 
+struct regval_list {
+	u8 reg_num;
+	u8 value;
+};
+
 struct dw9768_aac_mode_ot_multi {
 	u32 aac_mode_enum;
 	u32 ot_multi_base100;
@@ -374,7 +379,7 @@ static int dw9768_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 
 static int dw9768_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
-	pm_runtime_put_autosuspend(sd->dev);
+	pm_runtime_put(sd->dev);
 
 	return 0;
 }
@@ -490,8 +495,6 @@ static int dw9768_probe(struct i2c_client *client)
 		goto err_power_off;
 	}
 
-	pm_runtime_set_autosuspend_delay(dev, 1000);
-	pm_runtime_use_autosuspend(dev);
 	pm_runtime_idle(dev);
 
 	return 0;
@@ -546,7 +549,7 @@ static struct i2c_driver dw9768_i2c_driver = {
 		.pm = &dw9768_pm_ops,
 		.of_match_table = dw9768_of_table,
 	},
-	.probe = dw9768_probe,
+	.probe_new  = dw9768_probe,
 	.remove = dw9768_remove,
 };
 module_i2c_driver(dw9768_i2c_driver);

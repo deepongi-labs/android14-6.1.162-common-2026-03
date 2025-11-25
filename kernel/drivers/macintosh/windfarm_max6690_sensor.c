@@ -60,7 +60,8 @@ static const struct wf_sensor_ops wf_max6690_ops = {
 	.owner		= THIS_MODULE,
 };
 
-static int wf_max6690_probe(struct i2c_client *client)
+static int wf_max6690_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
 	const char *name, *loc;
 	struct wf_6690_sensor *max;
@@ -112,7 +113,7 @@ static void wf_max6690_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id wf_max6690_id[] = {
-	{ "MAC,max6690" },
+	{ "MAC,max6690", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wf_max6690_id);

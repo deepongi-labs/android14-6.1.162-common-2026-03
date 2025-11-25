@@ -10,7 +10,6 @@
 
 #include <asm/ptrace.h>
 #include <linux/adb.h>
-#include <linux/backlight.h>
 #include <linux/pmu.h>
 #include <asm/backlight.h>
 
@@ -72,7 +71,12 @@ static int pmu_backlight_get_level_brightness(int level)
 static int __pmu_backlight_update_status(struct backlight_device *bd)
 {
 	struct adb_request req;
-	int level = backlight_get_brightness(bd);
+	int level = bd->props.brightness;
+
+
+	if (bd->props.power != FB_BLANK_UNBLANK ||
+	    bd->props.fb_blank != FB_BLANK_UNBLANK)
+		level = 0;
 
 	if (level > 0) {
 		int pmulevel = pmu_backlight_get_level_brightness(level);
@@ -178,7 +182,7 @@ void __init pmu_backlight_init(void)
 	}
 
 	bd->props.brightness = level;
-	bd->props.power = BACKLIGHT_POWER_ON;
+	bd->props.power = FB_BLANK_UNBLANK;
 	backlight_update_status(bd);
 
 	printk(KERN_INFO "PMU Backlight initialized (%s)\n", name);

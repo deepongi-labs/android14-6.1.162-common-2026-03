@@ -25,7 +25,6 @@
 #include <linux/interrupt.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/debug.h>
-#include <linux/torture.h>
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/percpu.h>
@@ -330,12 +329,11 @@ void rcu_test_sync_prims(void)
 {
 	if (!IS_ENABLED(CONFIG_PROVE_RCU))
 		return;
-	pr_info("Running RCU synchronous self tests\n");
 	synchronize_rcu();
 	synchronize_rcu_expedited();
 }
 
-#if !defined(CONFIG_TINY_RCU)
+#if !defined(CONFIG_TINY_RCU) || defined(CONFIG_SRCU)
 
 /*
  * Switch to run-time mode once RCU has fully initialized.
@@ -350,7 +348,7 @@ static int __init rcu_set_runtime_mode(void)
 }
 core_initcall(rcu_set_runtime_mode);
 
-#endif /* #if !defined(CONFIG_TINY_RCU) */
+#endif /* #if !defined(CONFIG_TINY_RCU) || defined(CONFIG_SRCU) */
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 static struct lock_class_key rcu_lock_key;
@@ -479,7 +477,7 @@ void wakeme_after_rcu(struct rcu_head *head)
 }
 EXPORT_SYMBOL_GPL(wakeme_after_rcu);
 
-void __wait_rcu_gp(bool checktiny, unsigned int state, int n, call_rcu_func_t *crcu_array,
+void __wait_rcu_gp(bool checktiny, int n, call_rcu_func_t *crcu_array,
 		   struct rcu_synchronize *rs_array)
 {
 	int i;
@@ -511,7 +509,7 @@ void __wait_rcu_gp(bool checktiny, unsigned int state, int n, call_rcu_func_t *c
 			if (crcu_array[j] == crcu_array[i])
 				break;
 		if (j == i) {
-			wait_for_completion_state(&rs_array[i].completion, state);
+			wait_for_completion(&rs_array[i].completion);
 			destroy_rcu_head_on_stack(&rs_array[i].head);
 		}
 	}
@@ -596,28 +594,22 @@ EXPORT_SYMBOL_GPL(do_trace_rcu_torture_read);
 	do { } while (0)
 #endif
 
-#if IS_ENABLED(CONFIG_RCU_TORTURE_TEST) || IS_MODULE(CONFIG_RCU_TORTURE_TEST) || IS_ENABLED(CONFIG_LOCK_TORTURE_TEST) || IS_MODULE(CONFIG_LOCK_TORTURE_TEST)
+#if IS_ENABLED(CONFIG_RCU_TORTURE_TEST) || IS_MODULE(CONFIG_RCU_TORTURE_TEST)
 /* Get rcutorture access to sched_setaffinity(). */
-long torture_sched_setaffinity(pid_t pid, const struct cpumask *in_mask, bool dowarn)
+long rcutorture_sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 {
 	int ret;
 
 	ret = sched_setaffinity(pid, in_mask);
-	WARN_ONCE(dowarn && ret, "%s: sched_setaffinity(%d) returned %d\n", __func__, pid, ret);
+	WARN_ONCE(ret, "%s: sched_setaffinity() returned %d\n", __func__, ret);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(torture_sched_setaffinity);
+EXPORT_SYMBOL_GPL(rcutorture_sched_setaffinity);
 #endif
-
-int rcu_cpu_stall_notifiers __read_mostly; // !0 = provide stall notifiers (rarely useful)
-EXPORT_SYMBOL_GPL(rcu_cpu_stall_notifiers);
 
 #ifdef CONFIG_RCU_STALL_COMMON
 int rcu_cpu_stall_ftrace_dump __read_mostly;
 module_param(rcu_cpu_stall_ftrace_dump, int, 0644);
-#ifdef CONFIG_RCU_CPU_STALL_NOTIFIER
-module_param(rcu_cpu_stall_notifiers, int, 0444);
-#endif // #ifdef CONFIG_RCU_CPU_STALL_NOTIFIER
 int rcu_cpu_stall_suppress __read_mostly; // !0 = suppress stall warnings.
 EXPORT_SYMBOL_GPL(rcu_cpu_stall_suppress);
 module_param(rcu_cpu_stall_suppress, int, 0644);
@@ -625,10 +617,6 @@ int rcu_cpu_stall_timeout __read_mostly = CONFIG_RCU_CPU_STALL_TIMEOUT;
 module_param(rcu_cpu_stall_timeout, int, 0644);
 int rcu_exp_cpu_stall_timeout __read_mostly = CONFIG_RCU_EXP_CPU_STALL_TIMEOUT;
 module_param(rcu_exp_cpu_stall_timeout, int, 0644);
-int rcu_cpu_stall_cputime __read_mostly = IS_ENABLED(CONFIG_RCU_CPU_STALL_CPUTIME);
-module_param(rcu_cpu_stall_cputime, int, 0644);
-bool rcu_exp_stall_task_details __read_mostly;
-module_param(rcu_exp_stall_task_details, bool, 0644);
 #endif /* #ifdef CONFIG_RCU_STALL_COMMON */
 
 // Suppress boot-time RCU CPU stall warnings and rcutorture writer stall
@@ -676,15 +664,14 @@ struct early_boot_kfree_rcu {
 static void early_boot_test_call_rcu(void)
 {
 	static struct rcu_head head;
-	int idx;
 	static struct rcu_head shead;
 	struct early_boot_kfree_rcu *rhp;
 
-	idx = srcu_down_read(&early_srcu);
-	srcu_up_read(&early_srcu, idx);
 	call_rcu(&head, test_callback);
-	early_srcu_cookie = start_poll_synchronize_srcu(&early_srcu);
-	call_srcu(&early_srcu, &shead, test_callback);
+	if (IS_ENABLED(CONFIG_SRCU)) {
+		early_srcu_cookie = start_poll_synchronize_srcu(&early_srcu);
+		call_srcu(&early_srcu, &shead, test_callback);
+	}
 	rhp = kmalloc(sizeof(*rhp), GFP_KERNEL);
 	if (!WARN_ON_ONCE(!rhp))
 		kfree_rcu(rhp, rh);
@@ -707,10 +694,11 @@ static int rcu_verify_early_boot_tests(void)
 	if (rcu_self_test) {
 		early_boot_test_counter++;
 		rcu_barrier();
-		early_boot_test_counter++;
-		srcu_barrier(&early_srcu);
-		WARN_ON_ONCE(!poll_state_synchronize_srcu(&early_srcu, early_srcu_cookie));
-		cleanup_srcu_struct(&early_srcu);
+		if (IS_ENABLED(CONFIG_SRCU)) {
+			early_boot_test_counter++;
+			srcu_barrier(&early_srcu);
+			WARN_ON_ONCE(!poll_state_synchronize_srcu(&early_srcu, early_srcu_cookie));
+		}
 	}
 	if (rcu_self_test_counter != early_boot_test_counter) {
 		WARN_ON(1);

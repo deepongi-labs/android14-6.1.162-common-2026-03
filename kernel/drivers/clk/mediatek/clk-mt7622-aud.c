@@ -8,7 +8,7 @@
 #include <linux/clk-provider.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #include "clk-mtk.h"
@@ -75,7 +75,6 @@ static const struct mtk_gate audio_clks[] = {
 	GATE_AUDIO1(CLK_AUDIO_A1SYS, "audio_a1sys", "a1sys_hp_sel", 21),
 	GATE_AUDIO1(CLK_AUDIO_A2SYS, "audio_a2sys", "a2sys_hp_sel", 22),
 	GATE_AUDIO1(CLK_AUDIO_AFE_CONN, "audio_afe_conn", "a1sys_hp_sel", 23),
-	GATE_AUDIO1(CLK_AUDIO_AFE_MRGIF, "audio_afe_mrgif", "aud_mux1_sel", 25),
 	/* AUDIO2 */
 	GATE_AUDIO2(CLK_AUDIO_UL1, "audio_ul1", "a1sys_hp_sel", 0),
 	GATE_AUDIO2(CLK_AUDIO_UL2, "audio_ul2", "a1sys_hp_sel", 1),
@@ -107,22 +106,24 @@ static const struct mtk_gate audio_clks[] = {
 	GATE_AUDIO3(CLK_AUDIO_MEM_ASRC5, "audio_mem_asrc5", "asm_h_sel", 14),
 };
 
-static const struct mtk_clk_desc audio_desc = {
-	.clks = audio_clks,
-	.num_clks = ARRAY_SIZE(audio_clks),
-};
-
-static int clk_mt7622_aud_probe(struct platform_device *pdev)
+static int clk_mt7622_audiosys_init(struct platform_device *pdev)
 {
+	struct clk_hw_onecell_data *clk_data;
+	struct device_node *node = pdev->dev.of_node;
 	int r;
 
-	r = mtk_clk_simple_probe(pdev);
+	clk_data = mtk_alloc_clk_data(CLK_AUDIO_NR_CLK);
+
+	mtk_clk_register_gates(&pdev->dev, node, audio_clks,
+			       ARRAY_SIZE(audio_clks), clk_data);
+
+	r = of_clk_add_hw_provider(node, of_clk_hw_onecell_get, clk_data);
 	if (r) {
 		dev_err(&pdev->dev,
 			"could not register clock provider: %s: %d\n",
 			pdev->name, r);
 
-		return r;
+		goto err_clk_provider;
 	}
 
 	r = devm_of_platform_populate(&pdev->dev);
@@ -132,31 +133,44 @@ static int clk_mt7622_aud_probe(struct platform_device *pdev)
 	return 0;
 
 err_plat_populate:
-	mtk_clk_simple_remove(pdev);
+	of_clk_del_provider(node);
+err_clk_provider:
 	return r;
 }
 
-static void clk_mt7622_aud_remove(struct platform_device *pdev)
-{
-	of_platform_depopulate(&pdev->dev);
-	mtk_clk_simple_remove(pdev);
-}
-
 static const struct of_device_id of_match_clk_mt7622_aud[] = {
-	{ .compatible = "mediatek,mt7622-audsys", .data = &audio_desc },
-	{ /* sentinel */ }
+	{
+		.compatible = "mediatek,mt7622-audsys",
+		.data = clk_mt7622_audiosys_init,
+	}, {
+		/* sentinel */
+	}
 };
-MODULE_DEVICE_TABLE(of, of_match_clk_mt7622_aud);
+
+static int clk_mt7622_aud_probe(struct platform_device *pdev)
+{
+	int (*clk_init)(struct platform_device *);
+	int r;
+
+	clk_init = of_device_get_match_data(&pdev->dev);
+	if (!clk_init)
+		return -EINVAL;
+
+	r = clk_init(pdev);
+	if (r)
+		dev_err(&pdev->dev,
+			"could not register clock provider: %s: %d\n",
+			pdev->name, r);
+
+	return r;
+}
 
 static struct platform_driver clk_mt7622_aud_drv = {
 	.probe = clk_mt7622_aud_probe,
-	.remove = clk_mt7622_aud_remove,
 	.driver = {
 		.name = "clk-mt7622-aud",
 		.of_match_table = of_match_clk_mt7622_aud,
 	},
 };
 module_platform_driver(clk_mt7622_aud_drv);
-
-MODULE_DESCRIPTION("MediaTek MT7622 audio clocks driver");
 MODULE_LICENSE("GPL");

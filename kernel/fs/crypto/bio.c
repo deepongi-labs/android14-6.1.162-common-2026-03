@@ -7,12 +7,10 @@
  * Copyright (C) 2015, Motorola Mobility
  */
 
-#include <linux/bio.h>
-#include <linux/export.h>
-#include <linux/module.h>
-#include <linux/namei.h>
 #include <linux/pagemap.h>
-
+#include <linux/module.h>
+#include <linux/bio.h>
+#include <linux/namei.h>
 #include "fscrypt_private.h"
 
 /**
@@ -113,7 +111,7 @@ out:
 int fscrypt_zeroout_range(const struct inode *inode, pgoff_t lblk,
 			  sector_t pblk, unsigned int len)
 {
-	const struct fscrypt_inode_info *ci = fscrypt_get_inode_info_raw(inode);
+	const struct fscrypt_info *ci = inode->i_crypt_info;
 	const unsigned int du_bits = ci->ci_data_unit_bits;
 	const unsigned int du_size = 1U << du_bits;
 	const unsigned int du_per_page_bits = PAGE_SHIFT - du_bits;
@@ -148,7 +146,7 @@ int fscrypt_zeroout_range(const struct inode *inode, pgoff_t lblk,
 	 */
 	for (i = 0; i < nr_pages; i++) {
 		pages[i] = fscrypt_alloc_bounce_page(i == 0 ? GFP_NOFS :
-						     GFP_NOWAIT);
+						     GFP_NOWAIT | __GFP_NOWARN);
 		if (!pages[i])
 			break;
 	}
@@ -167,7 +165,8 @@ int fscrypt_zeroout_range(const struct inode *inode, pgoff_t lblk,
 		do {
 			err = fscrypt_crypt_data_unit(ci, FS_ENCRYPT, du_index,
 						      ZERO_PAGE(0), pages[i],
-						      du_size, offset);
+						      du_size, offset,
+						      GFP_NOFS);
 			if (err)
 				goto out;
 			du_index++;

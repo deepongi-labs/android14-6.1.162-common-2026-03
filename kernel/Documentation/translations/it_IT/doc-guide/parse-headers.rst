@@ -1,6 +1,7 @@
 .. include:: ../disclaimer-ita.rst
 
-:Original: Documentation/doc-guide/index.rst
+.. note:: Per leggere la documentazione originale in inglese:
+	  :ref:`Documentation/doc-guide/index.rst <doc_guide>`
 
 =========================================
 Includere gli i file di intestazione uAPI
@@ -63,7 +64,7 @@ DESCRIZIONE
 ***********
 
 Converte un file d'intestazione o un file sorgente C (C_FILE) in un testo
-reStructuredText incluso mediante il blocco ..parsed-literal
+ReStructuredText incluso mediante il blocco ..parsed-literal
 con riferimenti alla documentazione che descrive l'API. Opzionalmente,
 il programma accetta anche un altro file (EXCEPTIONS_FILE) che
 descrive quali elementi debbano essere ignorati o il cui riferimento
@@ -189,7 +190,7 @@ COPYRIGHT
 
 Copyright (c) 2016 by Mauro Carvalho Chehab <mchehab@s-opensource.com>.
 
-Licenza GPLv2: GNU GPL version 2 <https://gnu.org/licenses/gpl.html>.
+Licenza GPLv2: GNU GPL version 2 <http://gnu.org/licenses/gpl.html>.
 
 Questo è software libero: siete liberi di cambiarlo e ridistribuirlo.
 Non c'è alcuna garanzia, nei limiti permessi dalla legge.

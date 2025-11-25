@@ -13,7 +13,6 @@
 #include <linux/delay.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
-#include <linux/string_choices.h>
 #include <linux/errno.h>
 #include <linux/list.h>
 #include <linux/dma-mapping.h>
@@ -799,9 +798,10 @@ static void musb_ep_program(struct musb *musb, u8 epnum,
 		}
 
 		if (can_bulk_split(musb, qh->type))
-			load_count = min_t(u32, hw_ep->max_packet_sz_tx, len);
+			load_count = min((u32) hw_ep->max_packet_sz_tx,
+						len);
 		else
-			load_count = min_t(u32, packet_sz, len);
+			load_count = min((u32) packet_sz, len);
 
 		if (dma_channel && musb_tx_dma_program(dma_controller,
 					hw_ep, qh, urb, offset, len))
@@ -1029,7 +1029,7 @@ static bool musb_h_ep0_continue(struct musb *musb, u16 len, struct urb *urb)
 					+ urb->actual_length);
 			musb_dbg(musb, "Sending %d byte%s to ep0 fifo %p",
 					fifo_count,
-					str_plural(fifo_count),
+					(fifo_count == 1) ? "" : "s",
 					fifo_dest);
 			musb_write_fifo(hw_ep, fifo_count, fifo_dest);
 
@@ -2508,7 +2508,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 	if (!is_host_active(musb))
 		return 0;
 
-	switch (musb_get_state(musb)) {
+	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_A_SUSPEND:
 		return 0;
 	case OTG_STATE_A_WAIT_VRISE:
@@ -2518,7 +2518,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 		 */
 		devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 		if ((devctl & MUSB_DEVCTL_VBUS) == MUSB_DEVCTL_VBUS)
-			musb_set_state(musb, OTG_STATE_A_WAIT_BCON);
+			musb->xceiv->otg->state = OTG_STATE_A_WAIT_BCON;
 		break;
 	default:
 		break;
@@ -2526,7 +2526,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 
 	if (musb->is_active) {
 		WARNING("trying to suspend as %s while active\n",
-			musb_otg_state_string(musb));
+				usb_otg_state_string(musb->xceiv->otg->state));
 		return -EBUSY;
 	} else
 		return 0;
@@ -2727,18 +2727,12 @@ int musb_host_setup(struct musb *musb, int power_budget)
 
 	if (musb->port_mode == MUSB_HOST) {
 		MUSB_HST_MODE(musb);
-		musb_set_state(musb, OTG_STATE_A_IDLE);
+		musb->xceiv->otg->state = OTG_STATE_A_IDLE;
 	}
-
-	if (musb->xceiv) {
-		otg_set_host(musb->xceiv->otg, &hcd->self);
-		musb->xceiv->otg->host = &hcd->self;
-	} else {
-		phy_set_mode(musb->phy, PHY_MODE_USB_HOST);
-	}
-
+	otg_set_host(musb->xceiv->otg, &hcd->self);
 	/* don't support otg protocols */
 	hcd->self.otg_port = 0;
+	musb->xceiv->otg->host = &hcd->self;
 	hcd->power_budget = 2 * (power_budget ? : 250);
 	hcd->skip_phy_initialization = 1;
 

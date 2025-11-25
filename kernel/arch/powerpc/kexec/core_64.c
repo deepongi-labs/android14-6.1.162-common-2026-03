@@ -286,7 +286,8 @@ static void kexec_prepare_cpus(void)
  * We could use a smaller stack if we don't care about anything using
  * current, but that audit has not been performed.
  */
-static union thread_union kexec_stack = { };
+static union thread_union kexec_stack __init_task_data =
+	{ };
 
 /*
  * For similar reasons to the stack above, the kexecing CPU needs to be on a
@@ -391,8 +392,8 @@ void default_machine_kexec(struct kimage *image)
 
 #ifdef CONFIG_PPC_64S_HASH_MMU
 /* Values we need to export to the second kernel via the device tree. */
-static __be64 htab_base;
-static __be64 htab_size;
+static unsigned long htab_base;
+static unsigned long htab_size;
 
 static struct property htab_base_prop = {
 	.name = "linux,htab-base",

@@ -1,26 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //
-// Copyright(c) 2022 Intel Corporation
+// Copyright(c) 2022 Intel Corporation. All rights reserved.
 
 #include "sof-priv.h"
 
 int sof_fw_trace_init(struct snd_sof_dev *sdev)
 {
-	const struct sof_ipc_fw_tracing_ops *fw_tracing = sof_ipc_get_ops(sdev, fw_tracing);
-
-	if (!fw_tracing) {
+	if (!sdev->ipc->ops->fw_tracing) {
 		dev_info(sdev->dev, "Firmware tracing is not available\n");
 		sdev->fw_trace_is_supported = false;
 
 		return 0;
 	}
 
-	return fw_tracing->init(sdev);
+	return sdev->ipc->ops->fw_tracing->init(sdev);
 }
 
 void sof_fw_trace_free(struct snd_sof_dev *sdev)
 {
-	if (!sdev->fw_trace_is_supported)
+	if (!sdev->fw_trace_is_supported || !sdev->ipc->ops->fw_tracing)
 		return;
 
 	if (sdev->ipc->ops->fw_tracing->free)

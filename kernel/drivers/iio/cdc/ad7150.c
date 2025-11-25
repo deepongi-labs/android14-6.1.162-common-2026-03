@@ -232,7 +232,7 @@ static int ad7150_write_event_params(struct iio_dev *indio_dev,
 static int ad7150_write_event_config(struct iio_dev *indio_dev,
 				     const struct iio_chan_spec *chan,
 				     enum iio_event_type type,
-				     enum iio_event_direction dir, bool state)
+				     enum iio_event_direction dir, int state)
 {
 	struct ad7150_chip_info *chip = iio_priv(indio_dev);
 	int ret = 0;
@@ -536,12 +536,19 @@ static const struct iio_info ad7150_info_no_irq = {
 	.read_raw = &ad7150_read_raw,
 };
 
-static int ad7150_probe(struct i2c_client *client)
+static void ad7150_reg_disable(void *data)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
+	struct regulator *reg = data;
+
+	regulator_disable(reg);
+}
+
+static int ad7150_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
+{
 	struct ad7150_chip_info *chip;
 	struct iio_dev *indio_dev;
-	bool use_irq = true;
+	struct regulator *reg;
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*chip));
@@ -556,19 +563,28 @@ static int ad7150_probe(struct i2c_client *client)
 
 	indio_dev->modes = INDIO_DIRECT_MODE;
 
-	ret = devm_regulator_get_enable(&client->dev, "vdd");
+	reg = devm_regulator_get(&client->dev, "vdd");
+	if (IS_ERR(reg))
+		return PTR_ERR(reg);
+
+	ret = regulator_enable(reg);
+	if (ret)
+		return ret;
+
+	ret = devm_add_action_or_reset(&client->dev, ad7150_reg_disable, reg);
 	if (ret)
 		return ret;
 
 	chip->interrupts[0] = fwnode_irq_get(dev_fwnode(&client->dev), 0);
 	if (chip->interrupts[0] < 0)
-		use_irq = false;
-	else if (id->driver_data == AD7150) {
+		return chip->interrupts[0];
+	if (id->driver_data == AD7150) {
 		chip->interrupts[1] = fwnode_irq_get(dev_fwnode(&client->dev), 1);
 		if (chip->interrupts[1] < 0)
-			use_irq = false;
+			return chip->interrupts[1];
 	}
-	if (use_irq) {
+	if (chip->interrupts[0] &&
+	    (id->driver_data == AD7151 || chip->interrupts[1])) {
 		irq_set_status_flags(chip->interrupts[0], IRQ_NOAUTOEN);
 		ret = devm_request_threaded_irq(&client->dev,
 						chip->interrupts[0],
@@ -631,7 +647,7 @@ static const struct i2c_device_id ad7150_id[] = {
 	{ "ad7150", AD7150 },
 	{ "ad7151", AD7151 },
 	{ "ad7156", AD7150 },
-	{ }
+	{}
 };
 
 MODULE_DEVICE_TABLE(i2c, ad7150_id);
@@ -640,7 +656,7 @@ static const struct of_device_id ad7150_of_match[] = {
 	{ "adi,ad7150" },
 	{ "adi,ad7151" },
 	{ "adi,ad7156" },
-	{ }
+	{}
 };
 static struct i2c_driver ad7150_driver = {
 	.driver = {

@@ -735,8 +735,7 @@ static int scsifront_dev_reset_handler(struct scsi_cmnd *sc)
 	return scsifront_action_handler(sc, VSCSIIF_ACT_SCSI_RESET);
 }
 
-static int scsifront_sdev_configure(struct scsi_device *sdev,
-				    struct queue_limits *lim)
+static int scsifront_sdev_configure(struct scsi_device *sdev)
 {
 	struct vscsifrnt_info *info = shost_priv(sdev->host);
 	int err;
@@ -744,7 +743,7 @@ static int scsifront_sdev_configure(struct scsi_device *sdev,
 	if (info->host_active == STATE_ERROR)
 		return -EIO;
 
-	if (current == info->curr) {
+	if (info && current == info->curr) {
 		err = xenbus_printf(XBT_NIL, info->dev->nodename,
 			      info->dev_state_path, "%d", XenbusStateConnected);
 		if (err) {
@@ -762,7 +761,7 @@ static void scsifront_sdev_destroy(struct scsi_device *sdev)
 	struct vscsifrnt_info *info = shost_priv(sdev->host);
 	int err;
 
-	if (current == info->curr) {
+	if (info && current == info->curr) {
 		err = xenbus_printf(XBT_NIL, info->dev->nodename,
 			      info->dev_state_path, "%d", XenbusStateClosed);
 		if (err)
@@ -771,14 +770,14 @@ static void scsifront_sdev_destroy(struct scsi_device *sdev)
 	}
 }
 
-static const struct scsi_host_template scsifront_sht = {
+static struct scsi_host_template scsifront_sht = {
 	.module			= THIS_MODULE,
 	.name			= "Xen SCSI frontend driver",
 	.queuecommand		= scsifront_queuecommand,
 	.eh_abort_handler	= scsifront_eh_abort_handler,
 	.eh_device_reset_handler = scsifront_dev_reset_handler,
-	.sdev_configure		= scsifront_sdev_configure,
-	.sdev_destroy		= scsifront_sdev_destroy,
+	.slave_configure	= scsifront_sdev_configure,
+	.slave_destroy		= scsifront_sdev_destroy,
 	.cmd_per_lun		= VSCSIIF_DEFAULT_CMD_PER_LUN,
 	.can_queue		= VSCSIIF_MAX_REQS,
 	.this_id		= -1,
@@ -904,7 +903,7 @@ static int scsifront_probe(struct xenbus_device *dev,
 		xenbus_dev_fatal(dev, err, "fail to allocate scsi host");
 		return err;
 	}
-	info = shost_priv(host);
+	info = (struct vscsifrnt_info *)host->hostdata;
 
 	dev_set_drvdata(&dev->dev, info);
 	info->dev = dev;
@@ -996,7 +995,7 @@ static int scsifront_suspend(struct xenbus_device *dev)
 	return err;
 }
 
-static void scsifront_remove(struct xenbus_device *dev)
+static int scsifront_remove(struct xenbus_device *dev)
 {
 	struct vscsifrnt_info *info = dev_get_drvdata(&dev->dev);
 
@@ -1012,6 +1011,8 @@ static void scsifront_remove(struct xenbus_device *dev)
 
 	scsifront_free_ring(info);
 	scsi_host_put(info->host);
+
+	return 0;
 }
 
 static void scsifront_disconnect(struct vscsifrnt_info *info)
@@ -1075,8 +1076,8 @@ static void scsifront_do_lun_hotplug(struct vscsifrnt_info *info, int op)
 			continue;
 
 		/*
-		 * Front device state path, used in sdev_configure called
-		 * on successfull scsi_add_device, and in sdev_destroy called
+		 * Front device state path, used in slave_configure called
+		 * on successfull scsi_add_device, and in slave_destroy called
 		 * on remove of a device.
 		 */
 		snprintf(info->dev_state_path, sizeof(info->dev_state_path),

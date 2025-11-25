@@ -4,19 +4,20 @@
  * library
  */
 
-#include <asm/vdso/vsyscall.h>
 #include <asm/page.h>
 #include <asm/vdso.h>
-#include <vdso/datapage.h>
 
 OUTPUT_FORMAT("elf64-s390", "elf64-s390", "elf64-s390")
 OUTPUT_ARCH(s390:64-bit)
+ENTRY(_start)
 
 SECTIONS
 {
-	VDSO_VVAR_SYMS
-
-	. = SIZEOF_HEADERS;
+	PROVIDE(_vdso_data = . - __VVAR_PAGES * PAGE_SIZE);
+#ifdef CONFIG_TIME_NS
+	PROVIDE(_timens_data = _vdso_data + PAGE_SIZE);
+#endif
+	. = VDSO_LBASE + SIZEOF_HEADERS;
 
 	.hash		: { *(.hash) }			:text
 	.gnu.hash	: { *(.gnu.hash) }
@@ -41,10 +42,6 @@ SECTIONS
 	 */
 	.rodata		: { *(.rodata .rodata.* .gnu.linkonce.r.*) }
 	.rodata1	: { *(.rodata1) }
-
-	. = ALIGN(8);
-	.altinstructions	: { *(.altinstructions) }
-	.altinstr_replacement	: { *(.altinstr_replacement) }
 
 	.dynamic	: { *(.dynamic) }		:text	:dynamic
 
@@ -144,7 +141,6 @@ VERSION
 		__kernel_restart_syscall;
 		__kernel_rt_sigreturn;
 		__kernel_sigreturn;
-		__kernel_getrandom;
 	local: *;
 	};
 }

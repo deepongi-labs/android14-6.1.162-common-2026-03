@@ -18,13 +18,11 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 
-#include <asm/cpuid/api.h>
 #include <asm/perf_event.h>
 #include <asm/insn.h>
 #include <asm/io.h>
 #include <asm/intel_pt.h>
-#include <asm/cpu_device_id.h>
-#include <asm/msr.h>
+#include <asm/intel-family.h>
 
 #include "../perf_event.h"
 #include "pt.h"
@@ -195,7 +193,7 @@ static int __init pt_pmu_hw_init(void)
 	int ret;
 	long i;
 
-	rdmsrq(MSR_PLATFORM_INFO, reg);
+	rdmsrl(MSR_PLATFORM_INFO, reg);
 	pt_pmu.max_nonturbo_ratio = (reg & 0xff00) >> 8;
 
 	/*
@@ -203,21 +201,21 @@ static int __init pt_pmu_hw_init(void)
 	 * otherwise, zero for numerator stands for "not enumerated"
 	 * as per SDM
 	 */
-	if (boot_cpu_data.cpuid_level >= CPUID_LEAF_TSC) {
+	if (boot_cpu_data.cpuid_level >= CPUID_TSC_LEAF) {
 		u32 eax, ebx, ecx, edx;
 
-		cpuid(CPUID_LEAF_TSC, &eax, &ebx, &ecx, &edx);
+		cpuid(CPUID_TSC_LEAF, &eax, &ebx, &ecx, &edx);
 
 		pt_pmu.tsc_art_num = ebx;
 		pt_pmu.tsc_art_den = eax;
 	}
 
 	/* model-specific quirks */
-	switch (boot_cpu_data.x86_vfm) {
-	case INTEL_BROADWELL:
-	case INTEL_BROADWELL_D:
-	case INTEL_BROADWELL_G:
-	case INTEL_BROADWELL_X:
+	switch (boot_cpu_data.x86_model) {
+	case INTEL_FAM6_BROADWELL:
+	case INTEL_FAM6_BROADWELL_D:
+	case INTEL_FAM6_BROADWELL_G:
+	case INTEL_FAM6_BROADWELL_X:
 		/* not setting BRANCH_EN will #GP, erratum BDM106 */
 		pt_pmu.branch_en_always_on = true;
 		break;
@@ -231,7 +229,7 @@ static int __init pt_pmu_hw_init(void)
 		 * "IA32_VMX_MISC[bit 14]" being 1 means PT can trace
 		 * post-VMXON.
 		 */
-		rdmsrq(MSR_IA32_VMX_MISC, reg);
+		rdmsrl(MSR_IA32_VMX_MISC, reg);
 		if (reg & BIT(14))
 			pt_pmu.vmx = true;
 	}
@@ -418,18 +416,15 @@ static bool pt_event_valid(struct perf_event *event)
 static void pt_config_start(struct perf_event *event)
 {
 	struct pt *pt = this_cpu_ptr(&pt_ctx);
-	u64 ctl = event->hw.aux_config;
-
-	if (READ_ONCE(event->hw.aux_paused))
-		return;
+	u64 ctl = event->hw.config;
 
 	ctl |= RTIT_CTL_TRACEEN;
 	if (READ_ONCE(pt->vmx_on))
 		perf_aux_output_flag(&pt->handle, PERF_AUX_FLAG_PARTIAL);
 	else
-		wrmsrq(MSR_IA32_RTIT_CTL, ctl);
+		wrmsrl(MSR_IA32_RTIT_CTL, ctl);
 
-	WRITE_ONCE(event->hw.aux_config, ctl);
+	WRITE_ONCE(event->hw.config, ctl);
 }
 
 /* Address ranges and their corresponding msr configuration registers */
@@ -486,12 +481,12 @@ static u64 pt_config_filters(struct perf_event *event)
 
 		/* avoid redundant msr writes */
 		if (pt->filters.filter[range].msr_a != filter->msr_a) {
-			wrmsrq(pt_address_ranges[range].msr_a, filter->msr_a);
+			wrmsrl(pt_address_ranges[range].msr_a, filter->msr_a);
 			pt->filters.filter[range].msr_a = filter->msr_a;
 		}
 
 		if (pt->filters.filter[range].msr_b != filter->msr_b) {
-			wrmsrq(pt_address_ranges[range].msr_b, filter->msr_b);
+			wrmsrl(pt_address_ranges[range].msr_b, filter->msr_b);
 			pt->filters.filter[range].msr_b = filter->msr_b;
 		}
 
@@ -508,9 +503,9 @@ static void pt_config(struct perf_event *event)
 	u64 reg;
 
 	/* First round: clear STATUS, in particular the PSB byte counter. */
-	if (!event->hw.aux_config) {
+	if (!event->hw.config) {
 		perf_event_itrace_started(event);
-		wrmsrq(MSR_IA32_RTIT_STATUS, 0);
+		wrmsrl(MSR_IA32_RTIT_STATUS, 0);
 	}
 
 	reg = pt_config_filters(event);
@@ -538,31 +533,14 @@ static void pt_config(struct perf_event *event)
 
 	reg |= (event->attr.config & PT_CONFIG_MASK);
 
-	event->hw.aux_config = reg;
-
-	/*
-	 * Allow resume before starting so as not to overwrite a value set by a
-	 * PMI.
-	 */
-	barrier();
-	WRITE_ONCE(pt->resume_allowed, 1);
-	/* Configuration is complete, it is now OK to handle an NMI */
-	barrier();
-	WRITE_ONCE(pt->handle_nmi, 1);
-	barrier();
+	event->hw.config = reg;
 	pt_config_start(event);
-	barrier();
-	/*
-	 * Allow pause after starting so its pt_config_stop() doesn't race with
-	 * pt_config_start().
-	 */
-	WRITE_ONCE(pt->pause_allowed, 1);
 }
 
 static void pt_config_stop(struct perf_event *event)
 {
 	struct pt *pt = this_cpu_ptr(&pt_ctx);
-	u64 ctl = READ_ONCE(event->hw.aux_config);
+	u64 ctl = READ_ONCE(event->hw.config);
 
 	/* may be already stopped by a PMI */
 	if (!(ctl & RTIT_CTL_TRACEEN))
@@ -570,9 +548,9 @@ static void pt_config_stop(struct perf_event *event)
 
 	ctl &= ~RTIT_CTL_TRACEEN;
 	if (!READ_ONCE(pt->vmx_on))
-		wrmsrq(MSR_IA32_RTIT_CTL, ctl);
+		wrmsrl(MSR_IA32_RTIT_CTL, ctl);
 
-	WRITE_ONCE(event->hw.aux_config, ctl);
+	WRITE_ONCE(event->hw.config, ctl);
 
 	/*
 	 * A wrmsr that disables trace generation serializes other PT
@@ -659,13 +637,13 @@ static void pt_config_buffer(struct pt_buffer *buf)
 	reg = virt_to_phys(base);
 	if (pt->output_base != reg) {
 		pt->output_base = reg;
-		wrmsrq(MSR_IA32_RTIT_OUTPUT_BASE, reg);
+		wrmsrl(MSR_IA32_RTIT_OUTPUT_BASE, reg);
 	}
 
 	reg = 0x7f | (mask << 7) | ((u64)buf->output_off << 32);
 	if (pt->output_mask != reg) {
 		pt->output_mask = reg;
-		wrmsrq(MSR_IA32_RTIT_OUTPUT_MASK, reg);
+		wrmsrl(MSR_IA32_RTIT_OUTPUT_MASK, reg);
 	}
 }
 
@@ -758,7 +736,6 @@ static bool topa_table_full(struct topa *topa)
 /**
  * topa_insert_pages() - create a list of ToPA tables
  * @buf:	PT buffer being initialized.
- * @cpu:	CPU on which to allocate.
  * @gfp:	Allocation flags.
  *
  * This initializes a list of ToPA tables with entries from
@@ -927,7 +904,7 @@ static void pt_handle_status(struct pt *pt)
 	int advance = 0;
 	u64 status;
 
-	rdmsrq(MSR_IA32_RTIT_STATUS, status);
+	rdmsrl(MSR_IA32_RTIT_STATUS, status);
 
 	if (status & RTIT_STATUS_ERROR) {
 		pr_err_ratelimited("ToPA ERROR encountered, trying to recover\n");
@@ -971,7 +948,7 @@ static void pt_handle_status(struct pt *pt)
 	if (advance)
 		pt_buffer_advance(buf);
 
-	wrmsrq(MSR_IA32_RTIT_STATUS, status);
+	wrmsrl(MSR_IA32_RTIT_STATUS, status);
 }
 
 /**
@@ -986,12 +963,12 @@ static void pt_read_offset(struct pt_buffer *buf)
 	struct topa_page *tp;
 
 	if (!buf->single) {
-		rdmsrq(MSR_IA32_RTIT_OUTPUT_BASE, pt->output_base);
+		rdmsrl(MSR_IA32_RTIT_OUTPUT_BASE, pt->output_base);
 		tp = phys_to_virt(pt->output_base);
 		buf->cur = &tp->topa;
 	}
 
-	rdmsrq(MSR_IA32_RTIT_OUTPUT_MASK, pt->output_mask);
+	rdmsrl(MSR_IA32_RTIT_OUTPUT_MASK, pt->output_mask);
 	/* offset within current output region */
 	buf->output_off = pt->output_mask >> 32;
 	/* index of current output region within this table */
@@ -1235,11 +1212,8 @@ static void pt_buffer_fini_topa(struct pt_buffer *buf)
 /**
  * pt_buffer_init_topa() - initialize ToPA table for pt buffer
  * @buf:	PT buffer.
- * @cpu:	CPU on which to allocate.
- * @nr_pages:	No. of pages to allocate.
+ * @size:	Total size of all regions within this ToPA.
  * @gfp:	Allocation flags.
- *
- * Return:	0 on success or error code.
  */
 static int pt_buffer_init_topa(struct pt_buffer *buf, int cpu,
 			       unsigned long nr_pages, gfp_t gfp)
@@ -1312,7 +1286,7 @@ out:
 
 /**
  * pt_buffer_setup_aux() - set up topa tables for a PT buffer
- * @event:	Performance event
+ * @cpu:	Cpu on which to allocate, -1 means current.
  * @pages:	Array of pointers to buffer pages passed from perf core.
  * @nr_pages:	Number of pages in the buffer.
  * @snapshot:	If this is a snapshot/overwrite counter.
@@ -1538,7 +1512,6 @@ void intel_pt_interrupt(void)
 		buf = perf_aux_output_begin(&pt->handle, event);
 		if (!buf) {
 			event->hw.state = PERF_HES_STOPPED;
-			WRITE_ONCE(pt->resume_allowed, 0);
 			return;
 		}
 
@@ -1547,7 +1520,6 @@ void intel_pt_interrupt(void)
 		ret = pt_buffer_reset_markers(buf, &pt->handle);
 		if (ret) {
 			perf_aux_output_end(&pt->handle, 0);
-			WRITE_ONCE(pt->resume_allowed, 0);
 			return;
 		}
 
@@ -1586,7 +1558,7 @@ void intel_pt_handle_vmx(int on)
 
 	/* Turn PTs back on */
 	if (!on && event)
-		wrmsrq(MSR_IA32_RTIT_CTL, event->hw.aux_config);
+		wrmsrl(MSR_IA32_RTIT_CTL, event->hw.config);
 
 	local_irq_restore(flags);
 }
@@ -1602,26 +1574,6 @@ static void pt_event_start(struct perf_event *event, int mode)
 	struct pt *pt = this_cpu_ptr(&pt_ctx);
 	struct pt_buffer *buf;
 
-	if (mode & PERF_EF_RESUME) {
-		if (READ_ONCE(pt->resume_allowed)) {
-			u64 status;
-
-			/*
-			 * Only if the trace is not active and the error and
-			 * stopped bits are clear, is it safe to start, but a
-			 * PMI might have just cleared these, so resume_allowed
-			 * must be checked again also.
-			 */
-			rdmsrq(MSR_IA32_RTIT_STATUS, status);
-			if (!(status & (RTIT_STATUS_TRIGGEREN |
-					RTIT_STATUS_ERROR |
-					RTIT_STATUS_STOPPED)) &&
-			   READ_ONCE(pt->resume_allowed))
-				pt_config_start(event);
-		}
-		return;
-	}
-
 	buf = perf_aux_output_begin(&pt->handle, event);
 	if (!buf)
 		goto fail_stop;
@@ -1632,6 +1584,7 @@ static void pt_event_start(struct perf_event *event, int mode)
 			goto fail_end_stop;
 	}
 
+	WRITE_ONCE(pt->handle_nmi, 1);
 	hwc->state = 0;
 
 	pt_config_buffer(buf);
@@ -1649,26 +1602,11 @@ static void pt_event_stop(struct perf_event *event, int mode)
 {
 	struct pt *pt = this_cpu_ptr(&pt_ctx);
 
-	if (mode & PERF_EF_PAUSE) {
-		if (READ_ONCE(pt->pause_allowed))
-			pt_config_stop(event);
-		return;
-	}
-
 	/*
 	 * Protect against the PMI racing with disabling wrmsr,
 	 * see comment in intel_pt_interrupt().
 	 */
 	WRITE_ONCE(pt->handle_nmi, 0);
-	barrier();
-
-	/*
-	 * Prevent a resume from attempting to restart tracing, or a pause
-	 * during a subsequent start. Do this after clearing handle_nmi so that
-	 * pt_event_snapshot_aux() will not re-allow them.
-	 */
-	WRITE_ONCE(pt->pause_allowed, 0);
-	WRITE_ONCE(pt->resume_allowed, 0);
 	barrier();
 
 	pt_config_stop(event);
@@ -1720,10 +1658,6 @@ static long pt_event_snapshot_aux(struct perf_event *event,
 	if (WARN_ON_ONCE(!buf->snapshot))
 		return 0;
 
-	/* Prevent pause/resume from attempting to start/stop tracing */
-	WRITE_ONCE(pt->pause_allowed, 0);
-	WRITE_ONCE(pt->resume_allowed, 0);
-	barrier();
 	/*
 	 * There is no PT interrupt in this mode, so stop the trace and it will
 	 * remain stopped while the buffer is copied.
@@ -1743,13 +1677,8 @@ static long pt_event_snapshot_aux(struct perf_event *event,
 	 * Here, handle_nmi tells us if the tracing was on.
 	 * If the tracing was on, restart it.
 	 */
-	if (READ_ONCE(pt->handle_nmi)) {
-		WRITE_ONCE(pt->resume_allowed, 1);
-		barrier();
+	if (READ_ONCE(pt->handle_nmi))
 		pt_config_start(event);
-		barrier();
-		WRITE_ONCE(pt->pause_allowed, 1);
-	}
 
 	return ret;
 }
@@ -1840,7 +1769,7 @@ static __init int pt_init(void)
 	for_each_online_cpu(cpu) {
 		u64 ctl;
 
-		ret = rdmsrq_safe_on_cpu(cpu, MSR_IA32_RTIT_CTL, &ctl);
+		ret = rdmsrl_safe_on_cpu(cpu, MSR_IA32_RTIT_CTL, &ctl);
 		if (!ret && (ctl & RTIT_CTL_TRACEEN))
 			prior_warn++;
 	}
@@ -1867,9 +1796,7 @@ static __init int pt_init(void)
 	else
 		pt_pmu.pmu.capabilities = PERF_PMU_CAP_AUX_PREFER_LARGE;
 
-	pt_pmu.pmu.capabilities		|= PERF_PMU_CAP_EXCLUSIVE |
-					   PERF_PMU_CAP_ITRACE |
-					   PERF_PMU_CAP_AUX_PAUSE;
+	pt_pmu.pmu.capabilities	|= PERF_PMU_CAP_EXCLUSIVE | PERF_PMU_CAP_ITRACE;
 	pt_pmu.pmu.attr_groups		 = pt_attr_groups;
 	pt_pmu.pmu.task_ctx_nr		 = perf_sw_context;
 	pt_pmu.pmu.event_init		 = pt_event_init;

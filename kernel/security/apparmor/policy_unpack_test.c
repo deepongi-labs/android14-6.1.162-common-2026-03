@@ -9,8 +9,6 @@
 #include "include/policy.h"
 #include "include/policy_unpack.h"
 
-#include <linux/unaligned.h>
-
 #define TEST_STRING_NAME "TEST_STRING"
 #define TEST_STRING_DATA "testing"
 #define TEST_STRING_BUF_OFFSET \
@@ -46,7 +44,7 @@
 #define TEST_ARRAY_BUF_OFFSET \
 	(TEST_NAMED_ARRAY_BUF_OFFSET + 3 + strlen(TEST_ARRAY_NAME) + 1)
 
-MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
+MODULE_IMPORT_NS(EXPORTED_FOR_KUNIT_TESTING);
 
 struct policy_unpack_fixture {
 	struct aa_ext *e;
@@ -71,30 +69,31 @@ static struct aa_ext *build_aa_ext_struct(struct policy_unpack_fixture *puf,
 
 	*buf = AA_NAME;
 	*(buf + 1) = strlen(TEST_STRING_NAME) + 1;
-	strscpy(buf + 3, TEST_STRING_NAME, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_STRING_NAME);
 
 	buf = e->start + TEST_STRING_BUF_OFFSET;
 	*buf = AA_STRING;
 	*(buf + 1) = strlen(TEST_STRING_DATA) + 1;
-	strscpy(buf + 3, TEST_STRING_DATA, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_STRING_DATA);
+
 	buf = e->start + TEST_NAMED_U32_BUF_OFFSET;
 	*buf = AA_NAME;
 	*(buf + 1) = strlen(TEST_U32_NAME) + 1;
-	strscpy(buf + 3, TEST_U32_NAME, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_U32_NAME);
 	*(buf + 3 + strlen(TEST_U32_NAME) + 1) = AA_U32;
-	put_unaligned_le32(TEST_U32_DATA, buf + 3 + strlen(TEST_U32_NAME) + 2);
+	*((__le32 *)(buf + 3 + strlen(TEST_U32_NAME) + 2)) = cpu_to_le32(TEST_U32_DATA);
 
 	buf = e->start + TEST_NAMED_U64_BUF_OFFSET;
 	*buf = AA_NAME;
 	*(buf + 1) = strlen(TEST_U64_NAME) + 1;
-	strscpy(buf + 3, TEST_U64_NAME, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_U64_NAME);
 	*(buf + 3 + strlen(TEST_U64_NAME) + 1) = AA_U64;
 	*((__le64 *)(buf + 3 + strlen(TEST_U64_NAME) + 2)) = cpu_to_le64(TEST_U64_DATA);
 
 	buf = e->start + TEST_NAMED_BLOB_BUF_OFFSET;
 	*buf = AA_NAME;
 	*(buf + 1) = strlen(TEST_BLOB_NAME) + 1;
-	strscpy(buf + 3, TEST_BLOB_NAME, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_BLOB_NAME);
 	*(buf + 3 + strlen(TEST_BLOB_NAME) + 1) = AA_BLOB;
 	*(buf + 3 + strlen(TEST_BLOB_NAME) + 2) = TEST_BLOB_DATA_SIZE;
 	memcpy(buf + 3 + strlen(TEST_BLOB_NAME) + 6,
@@ -103,9 +102,9 @@ static struct aa_ext *build_aa_ext_struct(struct policy_unpack_fixture *puf,
 	buf = e->start + TEST_NAMED_ARRAY_BUF_OFFSET;
 	*buf = AA_NAME;
 	*(buf + 1) = strlen(TEST_ARRAY_NAME) + 1;
-	strscpy(buf + 3, TEST_ARRAY_NAME, e->end - (void *)(buf + 3));
+	strcpy(buf + 3, TEST_ARRAY_NAME);
 	*(buf + 3 + strlen(TEST_ARRAY_NAME) + 1) = AA_ARRAY;
-	put_unaligned_le16(TEST_ARRAY_SIZE, buf + 3 + strlen(TEST_ARRAY_NAME) + 2);
+	*((__le16 *)(buf + 3 + strlen(TEST_ARRAY_NAME) + 2)) = cpu_to_le16(TEST_ARRAY_SIZE);
 
 	return e;
 }
@@ -144,11 +143,12 @@ static void policy_unpack_test_inbounds_when_out_of_bounds(struct kunit *test)
 static void policy_unpack_test_unpack_array_with_null_name(struct kunit *test)
 {
 	struct policy_unpack_fixture *puf = test->priv;
-	u16 array_size = 0;
+	u16 array_size;
 
 	puf->e->pos += TEST_ARRAY_BUF_OFFSET;
 
-	KUNIT_EXPECT_TRUE(test, aa_unpack_array(puf->e, NULL, &array_size));
+	array_size = aa_unpack_array(puf->e, NULL);
+
 	KUNIT_EXPECT_EQ(test, array_size, (u16)TEST_ARRAY_SIZE);
 	KUNIT_EXPECT_PTR_EQ(test, puf->e->pos,
 		puf->e->start + TEST_ARRAY_BUF_OFFSET + sizeof(u16) + 1);
@@ -158,11 +158,12 @@ static void policy_unpack_test_unpack_array_with_name(struct kunit *test)
 {
 	struct policy_unpack_fixture *puf = test->priv;
 	const char name[] = TEST_ARRAY_NAME;
-	u16 array_size = 0;
+	u16 array_size;
 
 	puf->e->pos += TEST_NAMED_ARRAY_BUF_OFFSET;
 
-	KUNIT_EXPECT_TRUE(test, aa_unpack_array(puf->e, name, &array_size));
+	array_size = aa_unpack_array(puf->e, name);
+
 	KUNIT_EXPECT_EQ(test, array_size, (u16)TEST_ARRAY_SIZE);
 	KUNIT_EXPECT_PTR_EQ(test, puf->e->pos,
 		puf->e->start + TEST_ARRAY_BUF_OFFSET + sizeof(u16) + 1);
@@ -177,7 +178,9 @@ static void policy_unpack_test_unpack_array_out_of_bounds(struct kunit *test)
 	puf->e->pos += TEST_NAMED_ARRAY_BUF_OFFSET;
 	puf->e->end = puf->e->start + TEST_ARRAY_BUF_OFFSET + sizeof(u16);
 
-	KUNIT_EXPECT_FALSE(test, aa_unpack_array(puf->e, name, &array_size));
+	array_size = aa_unpack_array(puf->e, name);
+
+	KUNIT_EXPECT_EQ(test, array_size, 0);
 	KUNIT_EXPECT_PTR_EQ(test, puf->e->pos,
 		puf->e->start + TEST_NAMED_ARRAY_BUF_OFFSET);
 }
@@ -612,5 +615,4 @@ static struct kunit_suite apparmor_policy_unpack_test_module = {
 
 kunit_test_suite(apparmor_policy_unpack_test_module);
 
-MODULE_DESCRIPTION("KUnit tests for AppArmor's policy unpack");
 MODULE_LICENSE("GPL");

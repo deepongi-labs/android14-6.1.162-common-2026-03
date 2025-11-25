@@ -32,7 +32,6 @@
 
 #include "coresight-etm.h"
 #include "coresight-etm-perf.h"
-#include "coresight-trace-id.h"
 
 /*
  * Not really modular but using module_param is the easiest way to
@@ -86,9 +85,9 @@ static void etm_set_pwrup(struct etm_drvdata *drvdata)
 {
 	u32 etmpdcr;
 
-	etmpdcr = readl_relaxed(drvdata->csa.base + ETMPDCR);
+	etmpdcr = readl_relaxed(drvdata->base + ETMPDCR);
 	etmpdcr |= ETMPDCR_PWD_UP;
-	writel_relaxed(etmpdcr, drvdata->csa.base + ETMPDCR);
+	writel_relaxed(etmpdcr, drvdata->base + ETMPDCR);
 	/* Ensure pwrup completes before subsequent cp14 accesses */
 	mb();
 	isb();
@@ -101,9 +100,9 @@ static void etm_clr_pwrup(struct etm_drvdata *drvdata)
 	/* Ensure pending cp14 accesses complete before clearing pwrup */
 	mb();
 	isb();
-	etmpdcr = readl_relaxed(drvdata->csa.base + ETMPDCR);
+	etmpdcr = readl_relaxed(drvdata->base + ETMPDCR);
 	etmpdcr &= ~ETMPDCR_PWD_UP;
-	writel_relaxed(etmpdcr, drvdata->csa.base + ETMPDCR);
+	writel_relaxed(etmpdcr, drvdata->base + ETMPDCR);
 }
 
 /**
@@ -115,7 +114,7 @@ static void etm_clr_pwrup(struct etm_drvdata *drvdata)
  *
  * Basically the same as @coresight_timeout except for the register access
  * method where we have to account for CP14 configurations.
- *
+
  * Return: 0 as soon as the bit has taken the desired state or -EAGAIN if
  * TIMEOUT_US has elapsed, which ever happens first.
  */
@@ -365,7 +364,7 @@ static int etm_enable_hw(struct etm_drvdata *drvdata)
 	struct etm_config *config = &drvdata->config;
 	struct coresight_device *csdev = drvdata->csdev;
 
-	CS_UNLOCK(drvdata->csa.base);
+	CS_UNLOCK(drvdata->base);
 
 	rc = coresight_claim_device_unlocked(csdev);
 	if (rc)
@@ -427,7 +426,7 @@ static int etm_enable_hw(struct etm_drvdata *drvdata)
 	etm_clr_prog(drvdata);
 
 done:
-	CS_LOCK(drvdata->csa.base);
+	CS_LOCK(drvdata->base);
 
 	dev_dbg(&drvdata->csdev->dev, "cpu: %d enable smp call done: %d\n",
 		drvdata->cpu, rc);
@@ -455,14 +454,44 @@ static int etm_cpu_id(struct coresight_device *csdev)
 	return drvdata->cpu;
 }
 
-void etm_release_trace_id(struct etm_drvdata *drvdata)
+int etm_get_trace_id(struct etm_drvdata *drvdata)
 {
-	coresight_trace_id_put_cpu_id(drvdata->cpu);
+	unsigned long flags;
+	int trace_id = -1;
+	struct device *etm_dev;
+
+	if (!drvdata)
+		goto out;
+
+	etm_dev = drvdata->csdev->dev.parent;
+	if (!local_read(&drvdata->mode))
+		return drvdata->traceid;
+
+	pm_runtime_get_sync(etm_dev);
+
+	spin_lock_irqsave(&drvdata->spinlock, flags);
+
+	CS_UNLOCK(drvdata->base);
+	trace_id = (etm_readl(drvdata, ETMTRACEIDR) & ETM_TRACEID_MASK);
+	CS_LOCK(drvdata->base);
+
+	spin_unlock_irqrestore(&drvdata->spinlock, flags);
+	pm_runtime_put(etm_dev);
+
+out:
+	return trace_id;
+
+}
+
+static int etm_trace_id(struct coresight_device *csdev)
+{
+	struct etm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+
+	return etm_get_trace_id(drvdata);
 }
 
 static int etm_enable_perf(struct coresight_device *csdev,
-			   struct perf_event *event,
-			   struct coresight_path *path)
+			   struct perf_event *event)
 {
 	struct etm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 
@@ -471,21 +500,17 @@ static int etm_enable_perf(struct coresight_device *csdev,
 
 	/* Configure the tracer based on the session's specifics */
 	etm_parse_event_config(drvdata, event);
-	drvdata->traceid = path->trace_id;
-
 	/* And enable it */
 	return etm_enable_hw(drvdata);
 }
 
-static int etm_enable_sysfs(struct coresight_device *csdev, struct coresight_path *path)
+static int etm_enable_sysfs(struct coresight_device *csdev)
 {
 	struct etm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct etm_enable_arg arg = { };
 	int ret;
 
 	spin_lock(&drvdata->spinlock);
-
-	drvdata->traceid = path->trace_id;
 
 	/*
 	 * Configure the ETM only if the CPU is online.  If it isn't online
@@ -503,9 +528,6 @@ static int etm_enable_sysfs(struct coresight_device *csdev, struct coresight_pat
 		ret = -ENODEV;
 	}
 
-	if (ret)
-		etm_release_trace_id(drvdata);
-
 	spin_unlock(&drvdata->spinlock);
 
 	if (!ret)
@@ -513,23 +535,25 @@ static int etm_enable_sysfs(struct coresight_device *csdev, struct coresight_pat
 	return ret;
 }
 
-static int etm_enable(struct coresight_device *csdev, struct perf_event *event,
-		      enum cs_mode mode, struct coresight_path *path)
+static int etm_enable(struct coresight_device *csdev,
+		      struct perf_event *event, u32 mode)
 {
 	int ret;
+	u32 val;
 	struct etm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 
-	if (!coresight_take_mode(csdev, mode)) {
-		/* Someone is already using the tracer */
+	val = local_cmpxchg(&drvdata->mode, CS_MODE_DISABLED, mode);
+
+	/* Someone is already using the tracer */
+	if (val)
 		return -EBUSY;
-	}
 
 	switch (mode) {
 	case CS_MODE_SYSFS:
-		ret = etm_enable_sysfs(csdev, path);
+		ret = etm_enable_sysfs(csdev);
 		break;
 	case CS_MODE_PERF:
-		ret = etm_enable_perf(csdev, event, path);
+		ret = etm_enable_perf(csdev, event);
 		break;
 	default:
 		ret = -EINVAL;
@@ -537,7 +561,7 @@ static int etm_enable(struct coresight_device *csdev, struct perf_event *event,
 
 	/* The tracer didn't start */
 	if (ret)
-		coresight_set_mode(drvdata->csdev, CS_MODE_DISABLED);
+		local_set(&drvdata->mode, CS_MODE_DISABLED);
 
 	return ret;
 }
@@ -549,7 +573,7 @@ static void etm_disable_hw(void *info)
 	struct etm_config *config = &drvdata->config;
 	struct coresight_device *csdev = drvdata->csdev;
 
-	CS_UNLOCK(drvdata->csa.base);
+	CS_UNLOCK(drvdata->base);
 	etm_set_prog(drvdata);
 
 	/* Read back sequencer and counters for post trace analysis */
@@ -561,7 +585,7 @@ static void etm_disable_hw(void *info)
 	etm_set_pwrdwn(drvdata);
 	coresight_disclaim_device_unlocked(csdev);
 
-	CS_LOCK(drvdata->csa.base);
+	CS_LOCK(drvdata->base);
 
 	dev_dbg(&drvdata->csdev->dev,
 		"cpu: %d disable smp call done\n", drvdata->cpu);
@@ -574,7 +598,7 @@ static void etm_disable_perf(struct coresight_device *csdev)
 	if (WARN_ON_ONCE(drvdata->cpu != smp_processor_id()))
 		return;
 
-	CS_UNLOCK(drvdata->csa.base);
+	CS_UNLOCK(drvdata->base);
 
 	/* Setting the prog bit disables tracing immediately */
 	etm_set_prog(drvdata);
@@ -586,13 +610,7 @@ static void etm_disable_perf(struct coresight_device *csdev)
 	etm_set_pwrdwn(drvdata);
 	coresight_disclaim_device_unlocked(csdev);
 
-	CS_LOCK(drvdata->csa.base);
-
-	/*
-	 * perf will release trace ids when _free_aux()
-	 * is called at the end of the session
-	 */
-
+	CS_LOCK(drvdata->base);
 }
 
 static void etm_disable_sysfs(struct coresight_device *csdev)
@@ -617,27 +635,21 @@ static void etm_disable_sysfs(struct coresight_device *csdev)
 	spin_unlock(&drvdata->spinlock);
 	cpus_read_unlock();
 
-	/*
-	 * we only release trace IDs when resetting sysfs.
-	 * This permits sysfs users to read the trace ID after the trace
-	 * session has completed. This maintains operational behaviour with
-	 * prior trace id allocation method
-	 */
-
 	dev_dbg(&csdev->dev, "ETM tracing disabled\n");
 }
 
 static void etm_disable(struct coresight_device *csdev,
 			struct perf_event *event)
 {
-	enum cs_mode mode;
+	u32 mode;
+	struct etm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 
 	/*
 	 * For as long as the tracer isn't disabled another entity can't
 	 * change its status.  As such we can read the status here without
 	 * fearing it will change under us.
 	 */
-	mode = coresight_get_mode(csdev);
+	mode = local_read(&drvdata->mode);
 
 	switch (mode) {
 	case CS_MODE_DISABLED:
@@ -654,17 +666,17 @@ static void etm_disable(struct coresight_device *csdev,
 	}
 
 	if (mode)
-		coresight_set_mode(csdev, CS_MODE_DISABLED);
+		local_set(&drvdata->mode, CS_MODE_DISABLED);
 }
 
 static const struct coresight_ops_source etm_source_ops = {
 	.cpu_id		= etm_cpu_id,
+	.trace_id	= etm_trace_id,
 	.enable		= etm_enable,
 	.disable	= etm_disable,
 };
 
 static const struct coresight_ops etm_cs_ops = {
-	.trace_id	= coresight_etm_get_trace_id,
 	.source_ops	= &etm_source_ops,
 };
 
@@ -674,7 +686,7 @@ static int etm_online_cpu(unsigned int cpu)
 		return 0;
 
 	if (etmdrvdata[cpu]->boot_enable && !etmdrvdata[cpu]->sticky_enable)
-		coresight_enable_sysfs(etmdrvdata[cpu]->csdev);
+		coresight_enable(etmdrvdata[cpu]->csdev);
 	return 0;
 }
 
@@ -689,7 +701,7 @@ static int etm_starting_cpu(unsigned int cpu)
 		etmdrvdata[cpu]->os_unlock = true;
 	}
 
-	if (coresight_get_mode(etmdrvdata[cpu]->csdev))
+	if (local_read(&etmdrvdata[cpu]->mode))
 		etm_enable_hw(etmdrvdata[cpu]);
 	spin_unlock(&etmdrvdata[cpu]->spinlock);
 	return 0;
@@ -701,7 +713,7 @@ static int etm_dying_cpu(unsigned int cpu)
 		return 0;
 
 	spin_lock(&etmdrvdata[cpu]->spinlock);
-	if (coresight_get_mode(etmdrvdata[cpu]->csdev))
+	if (local_read(&etmdrvdata[cpu]->mode))
 		etm_disable_hw(etmdrvdata[cpu]);
 	spin_unlock(&etmdrvdata[cpu]->spinlock);
 	return 0;
@@ -733,7 +745,7 @@ static void etm_init_arch_data(void *info)
 	/* Make sure all registers are accessible */
 	etm_os_unlock(drvdata);
 
-	CS_UNLOCK(drvdata->csa.base);
+	CS_UNLOCK(drvdata->base);
 
 	/* First dummy read */
 	(void)etm_readl(drvdata, ETMPDSR);
@@ -764,10 +776,14 @@ static void etm_init_arch_data(void *info)
 	drvdata->nr_ext_out = BMVAL(etmccr, 20, 22);
 	drvdata->nr_ctxid_cmp = BMVAL(etmccr, 24, 25);
 
-	coresight_clear_self_claim_tag_unlocked(&drvdata->csa);
 	etm_set_pwrdwn(drvdata);
 	etm_clr_pwrup(drvdata);
-	CS_LOCK(drvdata->csa.base);
+	CS_LOCK(drvdata->base);
+}
+
+static void etm_init_trace_id(struct etm_drvdata *drvdata)
+{
+	drvdata->traceid = coresight_get_trace_id(drvdata->cpu);
 }
 
 static int __init etm_hp_setup(void)
@@ -828,13 +844,17 @@ static int etm_probe(struct amba_device *adev, const struct amba_id *id)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	desc.access = drvdata->csa = CSDEV_ACCESS_IOMEM(base);
+	drvdata->base = base;
+	desc.access = CSDEV_ACCESS_IOMEM(base);
 
 	spin_lock_init(&drvdata->spinlock);
 
-	drvdata->atclk = devm_clk_get_optional_enabled(dev, "atclk");
-	if (IS_ERR(drvdata->atclk))
-		return PTR_ERR(drvdata->atclk);
+	drvdata->atclk = devm_clk_get(&adev->dev, "atclk"); /* optional */
+	if (!IS_ERR(drvdata->atclk)) {
+		ret = clk_prepare_enable(drvdata->atclk);
+		if (ret)
+			return ret;
+	}
 
 	drvdata->cpu = coresight_get_cpu(dev);
 	if (drvdata->cpu < 0)
@@ -851,6 +871,7 @@ static int etm_probe(struct amba_device *adev, const struct amba_id *id)
 	if (etm_arch_supported(drvdata->arch) == false)
 		return -EINVAL;
 
+	etm_init_trace_id(drvdata);
 	etm_set_default(&drvdata->config);
 
 	pdata = coresight_get_platform_data(dev);
@@ -881,7 +902,7 @@ static int etm_probe(struct amba_device *adev, const struct amba_id *id)
 	dev_info(&drvdata->csdev->dev,
 		 "%s initialized\n", (char *)coresight_get_uci_data(id));
 	if (boot_enable) {
-		coresight_enable_sysfs(drvdata->csdev);
+		coresight_enable(drvdata->csdev);
 		drvdata->boot_enable = true;
 	}
 
@@ -925,7 +946,8 @@ static int etm_runtime_suspend(struct device *dev)
 {
 	struct etm_drvdata *drvdata = dev_get_drvdata(dev);
 
-	clk_disable_unprepare(drvdata->atclk);
+	if (drvdata && !IS_ERR(drvdata->atclk))
+		clk_disable_unprepare(drvdata->atclk);
 
 	return 0;
 }
@@ -934,7 +956,10 @@ static int etm_runtime_resume(struct device *dev)
 {
 	struct etm_drvdata *drvdata = dev_get_drvdata(dev);
 
-	return clk_prepare_enable(drvdata->atclk);
+	if (drvdata && !IS_ERR(drvdata->atclk))
+		clk_prepare_enable(drvdata->atclk);
+
+	return 0;
 }
 #endif
 
@@ -955,7 +980,7 @@ static const struct amba_id etm_ids[] = {
 	CS_AMBA_ID_DATA(0x000bb95f, "PTM 1.1"),
 	/* PTM 1.1 Qualcomm */
 	CS_AMBA_ID_DATA(0x000b006f, "PTM 1.1"),
-	{ 0, 0, NULL},
+	{ 0, 0},
 };
 
 MODULE_DEVICE_TABLE(amba, etm_ids);
@@ -963,6 +988,7 @@ MODULE_DEVICE_TABLE(amba, etm_ids);
 static struct amba_driver etm_driver = {
 	.drv = {
 		.name	= "coresight-etm3x",
+		.owner	= THIS_MODULE,
 		.pm	= &etm_dev_pm_ops,
 		.suppress_bind_attrs = true,
 	},

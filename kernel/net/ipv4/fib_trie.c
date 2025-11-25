@@ -52,7 +52,6 @@
 #include <linux/if_arp.h>
 #include <linux/proc_fs.h>
 #include <linux/rcupdate.h>
-#include <linux/rcupdate_wait.h>
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/init.h>
@@ -292,9 +291,15 @@ static const int inflate_threshold = 50;
 static const int halve_threshold_root = 15;
 static const int inflate_threshold_root = 30;
 
+static void __alias_free_mem(struct rcu_head *head)
+{
+	struct fib_alias *fa = container_of(head, struct fib_alias, rcu);
+	kmem_cache_free(fn_alias_kmem, fa);
+}
+
 static inline void alias_free_mem_rcu(struct fib_alias *fa)
 {
-	kfree_rcu(fa, rcu);
+	call_rcu(&fa->rcu, __alias_free_mem);
 }
 
 #define TNODE_VMALLOC_MAX \
@@ -495,7 +500,7 @@ static void tnode_free(struct key_vector *tn)
 
 	if (tnode_free_size >= READ_ONCE(sysctl_fib_sync_mem)) {
 		tnode_free_size = 0;
-		synchronize_net();
+		synchronize_rcu();
 	}
 }
 
@@ -1555,7 +1560,8 @@ found:
 			if (index >= (1ul << fa->fa_slen))
 				continue;
 		}
-		if (fa->fa_dscp && !fib_dscp_masked_match(fa->fa_dscp, flp))
+		if (fa->fa_dscp &&
+		    inet_dscp_to_dsfield(fa->fa_dscp) != flp->flowi4_tos)
 			continue;
 		/* Paired with WRITE_ONCE() in fib_release_info() */
 		if (READ_ONCE(fi->fib_dead))
@@ -2000,7 +2006,6 @@ void fib_table_flush_external(struct fib_table *tb)
 int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 {
 	struct trie *t = (struct trie *)tb->tb_data;
-	struct nl_info info = { .nl_net = net };
 	struct key_vector *pn = t->kv;
 	unsigned long cindex = 1;
 	struct hlist_node *tmp;
@@ -2063,9 +2068,6 @@ int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 
 			fib_notify_alias_delete(net, n->key, &n->leaf, fa,
 						NULL);
-			if (fi->pfsrc_removed)
-				rtmsg_fib(RTM_DELROUTE, htonl(n->key), fa,
-					  KEYLENGTH - fa->fa_slen, tb->tb_id, &info, 0);
 			hlist_del_rcu(&fa->fa_list);
 			fib_release_info(fa->fa_info);
 			alias_free_mem_rcu(fa);
@@ -2340,7 +2342,7 @@ int fib_table_dump(struct fib_table *tb, struct sk_buff *skb,
 	 * and key == 0 means the dump has wrapped around and we are done.
 	 */
 	if (count && !key)
-		return 0;
+		return skb->len;
 
 	while ((l = leaf_walk_rcu(&tp, key)) != NULL) {
 		int err;
@@ -2366,7 +2368,7 @@ int fib_table_dump(struct fib_table *tb, struct sk_buff *skb,
 	cb->args[3] = key;
 	cb->args[2] = count;
 
-	return 0;
+	return skb->len;
 }
 
 void __init fib_trie_init(void)
@@ -2977,7 +2979,7 @@ static int fib_route_seq_show(struct seq_file *seq, void *v)
 
 			seq_printf(seq,
 				   "%s\t%08X\t%08X\t%04X\t%d\t%u\t"
-				   "%u\t%08X\t%d\t%u\t%u",
+				   "%d\t%08X\t%d\t%u\t%u",
 				   nhc->nhc_dev ? nhc->nhc_dev->name : "*",
 				   prefix, gw, flags, 0, 0,
 				   fi->fib_priority,
@@ -2989,7 +2991,7 @@ static int fib_route_seq_show(struct seq_file *seq, void *v)
 		} else {
 			seq_printf(seq,
 				   "*\t%08X\t%08X\t%04X\t%d\t%u\t"
-				   "%u\t%08X\t%d\t%u\t%u",
+				   "%d\t%08X\t%d\t%u\t%u",
 				   prefix, 0, flags, 0, 0, 0,
 				   mask, 0, 0, 0);
 		}

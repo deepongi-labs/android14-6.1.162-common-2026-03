@@ -7,8 +7,7 @@
 #include <linux/device.h>
 #include <linux/interconnect-provider.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 #include <dt-bindings/interconnect/qcom,sc8180x.h>
 
@@ -468,6 +467,15 @@ static struct qcom_icc_node mas_qxm_ecc = {
 	.buswidth = 32,
 	.num_links = 1,
 	.links = { SC8180X_SLAVE_LLCC }
+};
+
+static struct qcom_icc_node mas_ipa_core_master = {
+	.name = "mas_ipa_core_master",
+	.id = SC8180X_MASTER_IPA_CORE,
+	.channels = 1,
+	.buswidth = 8,
+	.num_links = 1,
+	.links = { SC8180X_SLAVE_IPA_CORE }
 };
 
 static struct qcom_icc_node mas_llcc_mc = {
@@ -1193,6 +1201,13 @@ static struct qcom_icc_node slv_srvc_gemnoc1 = {
 	.buswidth = 4
 };
 
+static struct qcom_icc_node slv_ipa_core_slave = {
+	.name = "slv_ipa_core_slave",
+	.id = SC8180X_SLAVE_IPA_CORE,
+	.channels = 1,
+	.buswidth = 8
+};
+
 static struct qcom_icc_node slv_ebi = {
 	.name = "slv_ebi",
 	.id = SC8180X_SLAVE_EBI_CH0,
@@ -1492,40 +1507,39 @@ static struct qcom_icc_bcm bcm_sh3 = {
 
 static struct qcom_icc_bcm bcm_sn0 = {
 	.name = "SN0",
-	.num_nodes = 1,
 	.nodes = { &slv_qns_gemnoc_sf }
 };
 
 static struct qcom_icc_bcm bcm_sn1 = {
 	.name = "SN1",
-	.num_nodes = 1,
 	.nodes = { &slv_qxs_imem }
 };
 
 static struct qcom_icc_bcm bcm_sn2 = {
 	.name = "SN2",
 	.keepalive = true,
-	.num_nodes = 1,
 	.nodes = { &slv_qns_gemnoc_gc }
 };
 
 static struct qcom_icc_bcm bcm_co2 = {
 	.name = "CO2",
-	.num_nodes = 1,
 	.nodes = { &mas_qnm_npu }
+};
+
+static struct qcom_icc_bcm bcm_ip0 = {
+	.name = "IP0",
+	.nodes = { &slv_ipa_core_slave }
 };
 
 static struct qcom_icc_bcm bcm_sn3 = {
 	.name = "SN3",
 	.keepalive = true,
-	.num_nodes = 2,
 	.nodes = { &slv_srvc_aggre1_noc,
 		  &slv_qns_cnoc }
 };
 
 static struct qcom_icc_bcm bcm_sn4 = {
 	.name = "SN4",
-	.num_nodes = 1,
 	.nodes = { &slv_qxs_pimem }
 };
 
@@ -1590,6 +1604,10 @@ static struct qcom_icc_bcm * const gem_noc_bcms[] = {
 	&bcm_sh0,
 	&bcm_sh2,
 	&bcm_sh3,
+};
+
+static struct qcom_icc_bcm * const ipa_virt_bcms[] = {
+	&bcm_ip0,
 };
 
 static struct qcom_icc_bcm * const mc_virt_bcms[] = {
@@ -1750,6 +1768,11 @@ static struct qcom_icc_node * const gem_noc_nodes[] = {
 	[SLAVE_SERVICE_GEM_NOC_1] = &slv_srvc_gemnoc1,
 };
 
+static struct qcom_icc_node * const ipa_virt_nodes[] = {
+	[MASTER_IPA_CORE] = &mas_ipa_core_master,
+	[SLAVE_IPA_CORE] = &slv_ipa_core_slave,
+};
+
 static struct qcom_icc_node * const mc_virt_nodes[] = {
 	[MASTER_LLCC] = &mas_llcc_mc,
 	[SLAVE_EBI_CH0] = &slv_ebi,
@@ -1836,6 +1859,13 @@ static const struct qcom_icc_desc sc8180x_gem_noc  = {
 	.num_bcms = ARRAY_SIZE(gem_noc_bcms),
 };
 
+static const struct qcom_icc_desc sc8180x_ipa_virt  = {
+	.nodes = ipa_virt_nodes,
+	.num_nodes = ARRAY_SIZE(ipa_virt_nodes),
+	.bcms = ipa_virt_bcms,
+	.num_bcms = ARRAY_SIZE(ipa_virt_bcms),
+};
+
 static const struct qcom_icc_desc sc8180x_mc_virt  = {
 	.nodes = mc_virt_nodes,
 	.num_nodes = ARRAY_SIZE(mc_virt_nodes),
@@ -1861,7 +1891,7 @@ static struct qcom_icc_bcm * const qup_virt_bcms[] = {
 	&bcm_qup0,
 };
 
-static struct qcom_icc_node * const qup_virt_nodes[] = {
+static struct qcom_icc_node *qup_virt_nodes[] = {
 	[MASTER_QUP_CORE_0] = &mas_qup_core_0,
 	[MASTER_QUP_CORE_1] = &mas_qup_core_1,
 	[MASTER_QUP_CORE_2] = &mas_qup_core_2,
@@ -1885,6 +1915,7 @@ static const struct of_device_id qnoc_of_match[] = {
 	{ .compatible = "qcom,sc8180x-config-noc", .data = &sc8180x_config_noc },
 	{ .compatible = "qcom,sc8180x-dc-noc", .data = &sc8180x_dc_noc },
 	{ .compatible = "qcom,sc8180x-gem-noc", .data = &sc8180x_gem_noc },
+	{ .compatible = "qcom,sc8180x-ipa-virt", .data = &sc8180x_ipa_virt },
 	{ .compatible = "qcom,sc8180x-mc-virt", .data = &sc8180x_mc_virt },
 	{ .compatible = "qcom,sc8180x-mmss-noc", .data = &sc8180x_mmss_noc },
 	{ .compatible = "qcom,sc8180x-qup-virt", .data = &sc8180x_qup_virt },

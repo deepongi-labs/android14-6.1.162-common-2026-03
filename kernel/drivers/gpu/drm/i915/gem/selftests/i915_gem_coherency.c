@@ -24,6 +24,7 @@ static int cpu_set(struct context *ctx, unsigned long offset, u32 v)
 {
 	unsigned int needs_clflush;
 	struct page *page;
+	void *map;
 	u32 *cpu;
 	int err;
 
@@ -33,7 +34,8 @@ static int cpu_set(struct context *ctx, unsigned long offset, u32 v)
 		goto out;
 
 	page = i915_gem_object_get_page(ctx->obj, offset >> PAGE_SHIFT);
-	cpu = kmap_local_page(page) + offset_in_page(offset);
+	map = kmap_atomic(page);
+	cpu = map + offset_in_page(offset);
 
 	if (needs_clflush & CLFLUSH_BEFORE)
 		drm_clflush_virt_range(cpu, sizeof(*cpu));
@@ -43,7 +45,7 @@ static int cpu_set(struct context *ctx, unsigned long offset, u32 v)
 	if (needs_clflush & CLFLUSH_AFTER)
 		drm_clflush_virt_range(cpu, sizeof(*cpu));
 
-	kunmap_local(cpu);
+	kunmap_atomic(map);
 	i915_gem_object_finish_access(ctx->obj);
 
 out:
@@ -55,6 +57,7 @@ static int cpu_get(struct context *ctx, unsigned long offset, u32 *v)
 {
 	unsigned int needs_clflush;
 	struct page *page;
+	void *map;
 	u32 *cpu;
 	int err;
 
@@ -64,14 +67,15 @@ static int cpu_get(struct context *ctx, unsigned long offset, u32 *v)
 		goto out;
 
 	page = i915_gem_object_get_page(ctx->obj, offset >> PAGE_SHIFT);
-	cpu = kmap_local_page(page) + offset_in_page(offset);
+	map = kmap_atomic(page);
+	cpu = map + offset_in_page(offset);
 
 	if (needs_clflush & CLFLUSH_BEFORE)
 		drm_clflush_virt_range(cpu, sizeof(*cpu));
 
 	*v = *cpu;
 
-	kunmap_local(cpu);
+	kunmap_atomic(map);
 	i915_gem_object_finish_access(ctx->obj);
 
 out:
@@ -81,7 +85,6 @@ out:
 
 static int gtt_set(struct context *ctx, unsigned long offset, u32 v)
 {
-	intel_wakeref_t wakeref;
 	struct i915_vma *vma;
 	u32 __iomem *map;
 	int err = 0;
@@ -96,7 +99,7 @@ static int gtt_set(struct context *ctx, unsigned long offset, u32 v)
 	if (IS_ERR(vma))
 		return PTR_ERR(vma);
 
-	wakeref = intel_gt_pm_get(vma->vm->gt);
+	intel_gt_pm_get(vma->vm->gt);
 
 	map = i915_vma_pin_iomap(vma);
 	i915_vma_unpin(vma);
@@ -109,13 +112,12 @@ static int gtt_set(struct context *ctx, unsigned long offset, u32 v)
 	i915_vma_unpin_iomap(vma);
 
 out_rpm:
-	intel_gt_pm_put(vma->vm->gt, wakeref);
+	intel_gt_pm_put(vma->vm->gt);
 	return err;
 }
 
 static int gtt_get(struct context *ctx, unsigned long offset, u32 *v)
 {
-	intel_wakeref_t wakeref;
 	struct i915_vma *vma;
 	u32 __iomem *map;
 	int err = 0;
@@ -130,7 +132,7 @@ static int gtt_get(struct context *ctx, unsigned long offset, u32 *v)
 	if (IS_ERR(vma))
 		return PTR_ERR(vma);
 
-	wakeref = intel_gt_pm_get(vma->vm->gt);
+	intel_gt_pm_get(vma->vm->gt);
 
 	map = i915_vma_pin_iomap(vma);
 	i915_vma_unpin(vma);
@@ -143,7 +145,7 @@ static int gtt_get(struct context *ctx, unsigned long offset, u32 *v)
 	i915_vma_unpin_iomap(vma);
 
 out_rpm:
-	intel_gt_pm_put(vma->vm->gt, wakeref);
+	intel_gt_pm_put(vma->vm->gt);
 	return err;
 }
 
@@ -220,7 +222,7 @@ static int gpu_set(struct context *ctx, unsigned long offset, u32 v)
 	}
 
 	if (GRAPHICS_VER(ctx->engine->i915) >= 8) {
-		*cs++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+		*cs++ = MI_STORE_DWORD_IMM_GEN4 | 1 << 22;
 		*cs++ = lower_32_bits(i915_ggtt_offset(vma) + offset);
 		*cs++ = upper_32_bits(i915_ggtt_offset(vma) + offset);
 		*cs++ = v;
@@ -237,7 +239,9 @@ static int gpu_set(struct context *ctx, unsigned long offset, u32 v)
 	}
 	intel_ring_advance(rq, cs);
 
-	err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
+	err = i915_request_await_object(rq, vma->obj, true);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, EXEC_OBJECT_WRITE);
 
 out_rq:
 	i915_request_add(rq);

@@ -4,7 +4,7 @@
  * policy preference bias on recent X86 processors.
  */
 /*
- * Copyright (c) 2010 - 2025 Intel Corporation.
+ * Copyright (c) 2010 - 2017 Intel Corporation.
  * Len Brown <len.brown@intel.com>
  */
 
@@ -62,7 +62,6 @@ unsigned char turbo_update_value;
 unsigned char update_hwp_epp;
 unsigned char update_hwp_min;
 unsigned char update_hwp_max;
-unsigned char hwp_limits_done_via_sysfs;
 unsigned char update_hwp_desired;
 unsigned char update_hwp_window;
 unsigned char update_hwp_use_pkg;
@@ -518,7 +517,7 @@ void for_packages(unsigned long long pkg_set, int (func)(int))
 
 void print_version(void)
 {
-	printf("x86_energy_perf_policy 2025.9.19 Len Brown <lenb@kernel.org>\n");
+	printf("x86_energy_perf_policy 17.05.11 (C) Len Brown <len.brown@intel.com>\n");
 }
 
 void cmdline(int argc, char **argv)
@@ -631,7 +630,7 @@ void cmdline(int argc, char **argv)
  */
 FILE *fopen_or_die(const char *path, const char *mode)
 {
-	FILE *filep = fopen(path, mode);
+	FILE *filep = fopen(path, "r");
 
 	if (!filep)
 		err(1, "%s: open failed", path);
@@ -645,7 +644,7 @@ void err_on_hypervisor(void)
 	char *buffer;
 
 	/* On VMs /proc/cpuinfo contains a "flags" entry for hypervisor */
-	cpuinfo = fopen_or_die("/proc/cpuinfo", "r");
+	cpuinfo = fopen_or_die("/proc/cpuinfo", "ro");
 
 	buffer = malloc(4096);
 	if (!buffer) {
@@ -810,7 +809,7 @@ void print_hwp_request_pkg(int pkg, struct msr_hwp_request *h, char *str)
 		h->hwp_min, h->hwp_max, h->hwp_desired, h->hwp_epp,
 		h->hwp_window, h->hwp_window & 0x7F, (h->hwp_window >> 7) & 0x7);
 }
-void read_hwp_request_msr(int cpu, struct msr_hwp_request *hwp_req, unsigned int msr_offset)
+void read_hwp_request(int cpu, struct msr_hwp_request *hwp_req, unsigned int msr_offset)
 {
 	unsigned long long msr;
 
@@ -824,7 +823,7 @@ void read_hwp_request_msr(int cpu, struct msr_hwp_request *hwp_req, unsigned int
 	hwp_req->hwp_use_pkg = (((msr) >> 42) & 0x1);
 }
 
-void write_hwp_request_msr(int cpu, struct msr_hwp_request *hwp_req, unsigned int msr_offset)
+void write_hwp_request(int cpu, struct msr_hwp_request *hwp_req, unsigned int msr_offset)
 {
 	unsigned long long msr = 0;
 
@@ -844,7 +843,7 @@ void write_hwp_request_msr(int cpu, struct msr_hwp_request *hwp_req, unsigned in
 	put_msr(cpu, msr_offset, msr);
 }
 
-static int get_epb_sysfs(int cpu)
+static int get_epb(int cpu)
 {
 	char path[SYSFS_PATH_MAX];
 	char linebuf[3];
@@ -866,7 +865,7 @@ static int get_epb_sysfs(int cpu)
 	return (int)val;
 }
 
-static int set_epb_sysfs(int cpu, int val)
+static int set_epb(int cpu, int val)
 {
 	char path[SYSFS_PATH_MAX];
 	char linebuf[3];
@@ -896,14 +895,14 @@ int print_cpu_msrs(int cpu)
 	struct msr_hwp_cap cap;
 	int epb;
 
-	epb = get_epb_sysfs(cpu);
+	epb = get_epb(cpu);
 	if (epb >= 0)
 		printf("cpu%d: EPB %u\n", cpu, (unsigned int) epb);
 
 	if (!has_hwp)
 		return 0;
 
-	read_hwp_request_msr(cpu, &req, MSR_HWP_REQUEST);
+	read_hwp_request(cpu, &req, MSR_HWP_REQUEST);
 	print_hwp_request(cpu, &req, "");
 
 	read_hwp_cap(cpu, &cap, MSR_HWP_CAPABILITIES);
@@ -920,7 +919,7 @@ int print_pkg_msrs(int pkg)
 	if (!has_hwp)
 		return 0;
 
-	read_hwp_request_msr(first_cpu_in_pkg[pkg], &req, MSR_HWP_REQUEST_PKG);
+	read_hwp_request(first_cpu_in_pkg[pkg], &req, MSR_HWP_REQUEST_PKG);
 	print_hwp_request_pkg(pkg, &req, "");
 
 	if (has_hwp_notify) {
@@ -952,10 +951,8 @@ int ratio_2_sysfs_khz(int ratio)
 }
 /*
  * If HWP is enabled and cpufreq sysfs attribtes are present,
- * then update via sysfs. The intel_pstate driver may modify (clip)
- * this request, say, when HWP_CAP is outside of PLATFORM_INFO limits,
- * and the driver-chosen value takes precidence.
- *
+ * then update sysfs, so that it will not become
+ * stale when we write to MSRs.
  * (intel_pstate's max_perf_pct and min_perf_pct will follow cpufreq,
  *  so we don't have to touch that.)
  */
@@ -1009,8 +1006,6 @@ int update_sysfs(int cpu)
 
 	if (update_hwp_max)
 		update_cpufreq_scaling_freq(1, cpu, req_update.hwp_max);
-
-	hwp_limits_done_via_sysfs = 1;
 
 	return 0;
 }
@@ -1079,21 +1074,21 @@ int check_hwp_request_v_hwp_capabilities(int cpu, struct msr_hwp_request *req, s
 	return 0;
 }
 
-int update_hwp_request_msr(int cpu)
+int update_hwp_request(int cpu)
 {
 	struct msr_hwp_request req;
 	struct msr_hwp_cap cap;
 
 	int msr_offset = MSR_HWP_REQUEST;
 
-	read_hwp_request_msr(cpu, &req, msr_offset);
+	read_hwp_request(cpu, &req, msr_offset);
 	if (debug)
 		print_hwp_request(cpu, &req, "old: ");
 
-	if (update_hwp_min && !hwp_limits_done_via_sysfs)
+	if (update_hwp_min)
 		req.hwp_min = req_update.hwp_min;
 
-	if (update_hwp_max && !hwp_limits_done_via_sysfs)
+	if (update_hwp_max)
 		req.hwp_max = req_update.hwp_max;
 
 	if (update_hwp_desired)
@@ -1116,15 +1111,15 @@ int update_hwp_request_msr(int cpu)
 
 	verify_hwp_req_self_consistency(cpu, &req);
 
-	write_hwp_request_msr(cpu, &req, msr_offset);
+	write_hwp_request(cpu, &req, msr_offset);
 
 	if (debug) {
-		read_hwp_request_msr(cpu, &req, msr_offset);
+		read_hwp_request(cpu, &req, msr_offset);
 		print_hwp_request(cpu, &req, "new: ");
 	}
 	return 0;
 }
-int update_hwp_request_pkg_msr(int pkg)
+int update_hwp_request_pkg(int pkg)
 {
 	struct msr_hwp_request req;
 	struct msr_hwp_cap cap;
@@ -1132,7 +1127,7 @@ int update_hwp_request_pkg_msr(int pkg)
 
 	int msr_offset = MSR_HWP_REQUEST_PKG;
 
-	read_hwp_request_msr(cpu, &req, msr_offset);
+	read_hwp_request(cpu, &req, msr_offset);
 	if (debug)
 		print_hwp_request_pkg(pkg, &req, "old: ");
 
@@ -1160,10 +1155,10 @@ int update_hwp_request_pkg_msr(int pkg)
 
 	verify_hwp_req_self_consistency(cpu, &req);
 
-	write_hwp_request_msr(cpu, &req, msr_offset);
+	write_hwp_request(cpu, &req, msr_offset);
 
 	if (debug) {
-		read_hwp_request_msr(cpu, &req, msr_offset);
+		read_hwp_request(cpu, &req, msr_offset);
 		print_hwp_request_pkg(pkg, &req, "new: ");
 	}
 	return 0;
@@ -1171,32 +1166,13 @@ int update_hwp_request_pkg_msr(int pkg)
 
 int enable_hwp_on_cpu(int cpu)
 {
-	unsigned long long old_msr, new_msr;
+	unsigned long long msr;
 
-	get_msr(cpu, MSR_PM_ENABLE, &old_msr);
-
-	if (old_msr & 1)
-		return 0;	/* already enabled */
-
-	new_msr = old_msr | 1;
-	put_msr(cpu, MSR_PM_ENABLE, new_msr);
+	get_msr(cpu, MSR_PM_ENABLE, &msr);
+	put_msr(cpu, MSR_PM_ENABLE, 1);
 
 	if (verbose)
-		printf("cpu%d: MSR_PM_ENABLE old: %llX new: %llX\n", cpu, old_msr, new_msr);
-
-	return 0;
-}
-
-int update_cpu_epb_sysfs(int cpu)
-{
-	int epb;
-
-	epb = get_epb_sysfs(cpu);
-	set_epb_sysfs(cpu, new_epb);
-
-	if (verbose)
-		printf("cpu%d: ENERGY_PERF_BIAS old: %d new: %d\n",
-			cpu, epb, (unsigned int) new_epb);
+		printf("cpu%d: MSR_PM_ENABLE old: %d new: %d\n", cpu, (unsigned int) msr, 1);
 
 	return 0;
 }
@@ -1204,6 +1180,16 @@ int update_cpu_epb_sysfs(int cpu)
 int update_cpu_msrs(int cpu)
 {
 	unsigned long long msr;
+	int epb;
+
+	if (update_epb) {
+		epb = get_epb(cpu);
+		set_epb(cpu, new_epb);
+
+		if (verbose)
+			printf("cpu%d: ENERGY_PERF_BIAS old: %d new: %d\n",
+				cpu, epb, (unsigned int) new_epb);
+	}
 
 	if (update_turbo) {
 		int turbo_is_present_and_disabled;
@@ -1238,7 +1224,7 @@ int update_cpu_msrs(int cpu)
 	if (!hwp_update_enabled())
 		return 0;
 
-	update_hwp_request_msr(cpu);
+	update_hwp_request(cpu);
 	return 0;
 }
 
@@ -1326,17 +1312,6 @@ void for_all_cpus_in_set(size_t set_size, cpu_set_t *cpu_set, int (func)(int))
 		if (CPU_ISSET_S(cpu_num, set_size, cpu_set))
 			func(cpu_num);
 }
-int for_all_cpus_in_set_and(size_t set_size, cpu_set_t *cpu_set, int (func)(int))
-{
-	int cpu_num;
-	int retval = 1;
-
-	for (cpu_num = 0; cpu_num <= max_cpu_num; ++cpu_num)
-		if (CPU_ISSET_S(cpu_num, set_size, cpu_set))
-			retval &= func(cpu_num);
-
-	return retval;
-}
 
 void init_data_structures(void)
 {
@@ -1351,38 +1326,21 @@ void init_data_structures(void)
 	for_all_proc_cpus(mark_cpu_present);
 }
 
-int is_hwp_enabled_on_cpu(int cpu_num)
-{
-	unsigned long long msr;
-	int retval;
+/* clear has_hwp if it is not enable (or being enabled) */
 
-	/* MSR_PM_ENABLE[1] == 1 if HWP is enabled and MSRs visible */
-	get_msr(cpu_num, MSR_PM_ENABLE, &msr);
-	retval = (msr & 1);
-
-	if (verbose)
-		fprintf(stderr, "cpu%d: %sHWP\n", cpu_num, retval ? "" : "No-");
-
-	return retval;
-}
-
-/*
- * verify_hwp_is_enabled()
- *
- * Set (has_hwp=0) if no HWP feature or any of selected CPU set does not have HWP enabled
- */
 void verify_hwp_is_enabled(void)
 {
-	int retval;
+	unsigned long long msr;
 
 	if (!has_hwp)	/* set in early_cpuid() */
 		return;
 
-	retval = for_all_cpus_in_set_and(cpu_setsize, cpu_selected_set, is_hwp_enabled_on_cpu);
-
-	if (retval == 0) {
+	/* MSR_PM_ENABLE[1] == 1 if HWP is enabled and MSRs visible */
+	get_msr(base_cpu, MSR_PM_ENABLE, &msr);
+	if ((msr & 1) == 0) {
 		fprintf(stderr, "HWP can be enabled using '--hwp-enable'\n");
 		has_hwp = 0;
+		return;
 	}
 }
 
@@ -1593,13 +1551,10 @@ int main(int argc, char **argv)
 
 	/* update CPU set */
 	if (cpu_selected_set) {
-		if (update_epb)
-			for_all_cpus_in_set(cpu_setsize, cpu_selected_set, update_cpu_epb_sysfs);
 		for_all_cpus_in_set(cpu_setsize, cpu_selected_set, update_sysfs);
 		for_all_cpus_in_set(cpu_setsize, cpu_selected_set, update_cpu_msrs);
-
 	} else if (pkg_selected_set)
-		for_packages(pkg_selected_set, update_hwp_request_pkg_msr);
+		for_packages(pkg_selected_set, update_hwp_request_pkg);
 
 	return 0;
 }

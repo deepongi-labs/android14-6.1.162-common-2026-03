@@ -748,22 +748,6 @@ static int stv090x_write_reg(struct stv090x_state *state, unsigned int reg, u8 d
 	return stv090x_write_regs(state, reg, &tmp, 1);
 }
 
-static inline void stv090x_tuner_i2c_lock(struct stv090x_state *state)
-{
-	if (state->config->tuner_i2c_lock)
-		state->config->tuner_i2c_lock(&state->frontend, 1);
-	else
-		mutex_lock(&state->internal->tuner_lock);
-}
-
-static inline void stv090x_tuner_i2c_unlock(struct stv090x_state *state)
-{
-	if (state->config->tuner_i2c_lock)
-		state->config->tuner_i2c_lock(&state->frontend, 0);
-	else
-		mutex_unlock(&state->internal->tuner_lock);
-}
-
 static int stv090x_i2c_gate_ctrl(struct stv090x_state *state, int enable)
 {
 	u32 reg;
@@ -777,8 +761,12 @@ static int stv090x_i2c_gate_ctrl(struct stv090x_state *state, int enable)
 	 * In case of any error, the lock is unlocked and exit within the
 	 * relevant operations themselves.
 	 */
-	if (enable)
-		stv090x_tuner_i2c_lock(state);
+	if (enable) {
+		if (state->config->tuner_i2c_lock)
+			state->config->tuner_i2c_lock(&state->frontend, 1);
+		else
+			mutex_lock(&state->internal->tuner_lock);
+	}
 
 	reg = STV090x_READ_DEMOD(state, I2CRPT);
 	if (enable) {
@@ -794,13 +782,20 @@ static int stv090x_i2c_gate_ctrl(struct stv090x_state *state, int enable)
 			goto err;
 	}
 
-	if (!enable)
-		stv090x_tuner_i2c_unlock(state);
+	if (!enable) {
+		if (state->config->tuner_i2c_lock)
+			state->config->tuner_i2c_lock(&state->frontend, 0);
+		else
+			mutex_unlock(&state->internal->tuner_lock);
+	}
 
 	return 0;
 err:
 	dprintk(FE_ERROR, 1, "I/O error");
-	stv090x_tuner_i2c_unlock(state);
+	if (state->config->tuner_i2c_lock)
+		state->config->tuner_i2c_lock(&state->frontend, 0);
+	else
+		mutex_unlock(&state->internal->tuner_lock);
 	return -1;
 }
 
@@ -4995,7 +4990,8 @@ static struct dvb_frontend *stv090x_get_dvb_frontend(struct i2c_client *client)
 	return &state->frontend;
 }
 
-static int stv090x_probe(struct i2c_client *client)
+static int stv090x_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	int ret = 0;
 	struct stv090x_config *config = client->dev.platform_data;
@@ -5079,7 +5075,7 @@ error:
 EXPORT_SYMBOL_GPL(stv090x_attach);
 
 static const struct i2c_device_id stv090x_id_table[] = {
-	{ "stv090x" },
+	{"stv090x", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, stv090x_id_table);

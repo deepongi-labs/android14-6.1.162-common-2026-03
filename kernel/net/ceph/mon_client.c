@@ -222,7 +222,7 @@ static void pick_new_mon(struct ceph_mon_client *monc)
 				max--;
 		}
 
-		n = get_random_u32_below(max);
+		n = prandom_u32_max(max);
 		if (o >= 0 && n >= o)
 			n++;
 
@@ -314,7 +314,7 @@ static void __schedule_delayed(struct ceph_mon_client *monc)
 		delay = CEPH_MONC_PING_INTERVAL;
 
 	dout("__schedule_delayed after %lu\n", delay);
-	mod_delayed_work(system_percpu_wq, &monc->delayed_work,
+	mod_delayed_work(system_wq, &monc->delayed_work,
 			 round_jiffies_relative(delay));
 }
 
@@ -1144,7 +1144,6 @@ static int build_initial_monmap(struct ceph_mon_client *monc)
 			       GFP_KERNEL);
 	if (!monc->monmap)
 		return -ENOMEM;
-	monc->monmap->num_mon = num_mon;
 
 	for (i = 0; i < num_mon; i++) {
 		struct ceph_entity_inst *inst = &monc->monmap->mon_inst[i];
@@ -1156,6 +1155,7 @@ static int build_initial_monmap(struct ceph_mon_client *monc)
 		inst->name.type = CEPH_ENTITY_TYPE_MON;
 		inst->name.num = cpu_to_le64(i);
 	}
+	monc->monmap->num_mon = num_mon;
 	return 0;
 }
 

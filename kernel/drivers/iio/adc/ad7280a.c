@@ -7,7 +7,6 @@
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
-#include <linux/cleanup.h>
 #include <linux/crc8.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -572,7 +571,7 @@ static const struct iio_chan_spec_ext_info ad7280_cell_ext_info[] = {
 		.write = ad7280_store_balance_timer,
 		.shared = IIO_SEPARATE,
 	},
-	{ }
+	{}
 };
 
 static const struct iio_event_spec ad7280_events[] = {
@@ -804,16 +803,16 @@ static irqreturn_t ad7280_event_handler(int irq, void *private)
 {
 	struct iio_dev *indio_dev = private;
 	struct ad7280_state *st = iio_priv(indio_dev);
+	unsigned int *channels;
 	int i, ret;
 
-	unsigned int *channels __free(kfree) = kcalloc(st->scan_cnt, sizeof(*channels),
-						       GFP_KERNEL);
+	channels = kcalloc(st->scan_cnt, sizeof(*channels), GFP_KERNEL);
 	if (!channels)
 		return IRQ_HANDLED;
 
 	ret = ad7280_read_all_channels(st, st->scan_cnt, channels);
 	if (ret < 0)
-		return IRQ_HANDLED;
+		goto out;
 
 	for (i = 0; i < st->scan_cnt; i++) {
 		unsigned int val;
@@ -822,15 +821,17 @@ static irqreturn_t ad7280_event_handler(int irq, void *private)
 		if (FIELD_GET(AD7280A_TRANS_READ_CONV_CHANADDR_MSK, channels[i]) <=
 		    AD7280A_CELL_VOLTAGE_6_REG) {
 			if (val >= st->cell_threshhigh) {
-				u64 tmp = IIO_DIFF_EVENT_CODE(IIO_VOLTAGE, 0, 0,
-							IIO_EV_TYPE_THRESH,
-							IIO_EV_DIR_RISING);
+				u64 tmp = IIO_EVENT_CODE(IIO_VOLTAGE, 1, 0,
+							 IIO_EV_DIR_RISING,
+							 IIO_EV_TYPE_THRESH,
+							 0, 0, 0);
 				iio_push_event(indio_dev, tmp,
 					       iio_get_time_ns(indio_dev));
 			} else if (val <= st->cell_threshlow) {
-				u64 tmp = IIO_DIFF_EVENT_CODE(IIO_VOLTAGE, 0, 0,
-							IIO_EV_TYPE_THRESH,
-							IIO_EV_DIR_FALLING);
+				u64 tmp = IIO_EVENT_CODE(IIO_VOLTAGE, 1, 0,
+							 IIO_EV_DIR_FALLING,
+							 IIO_EV_TYPE_THRESH,
+							 0, 0, 0);
 				iio_push_event(indio_dev, tmp,
 					       iio_get_time_ns(indio_dev));
 			}
@@ -850,6 +851,9 @@ static irqreturn_t ad7280_event_handler(int irq, void *private)
 			}
 		}
 	}
+
+out:
+	kfree(channels);
 
 	return IRQ_HANDLED;
 }
@@ -1088,8 +1092,8 @@ static int ad7280_probe(struct spi_device *spi)
 }
 
 static const struct spi_device_id ad7280_id[] = {
-	{ "ad7280a", 0 },
-	{ }
+	{"ad7280a", 0},
+	{}
 };
 MODULE_DEVICE_TABLE(spi, ad7280_id);
 

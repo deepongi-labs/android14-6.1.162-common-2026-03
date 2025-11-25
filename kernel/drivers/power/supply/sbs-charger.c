@@ -154,36 +154,27 @@ static const struct regmap_config sbs_regmap = {
 	.val_format_endian = REGMAP_ENDIAN_LITTLE, /* since based on SMBus */
 };
 
-static const struct power_supply_desc sbs_default_desc = {
+static const struct power_supply_desc sbs_desc = {
+	.name = "sbs-charger",
 	.type = POWER_SUPPLY_TYPE_MAINS,
 	.properties = sbs_properties,
 	.num_properties = ARRAY_SIZE(sbs_properties),
 	.get_property = sbs_get_property,
 };
 
-static int sbs_probe(struct i2c_client *client)
+static int sbs_probe(struct i2c_client *client,
+		     const struct i2c_device_id *id)
 {
 	struct power_supply_config psy_cfg = {};
-	struct power_supply_desc *sbs_desc;
 	struct sbs_info *chip;
 	int ret, val;
-
-	sbs_desc = devm_kmemdup(&client->dev, &sbs_default_desc,
-				sizeof(*sbs_desc), GFP_KERNEL);
-	if (!sbs_desc)
-		return -ENOMEM;
-
-	sbs_desc->name = devm_kasprintf(&client->dev, GFP_KERNEL, "sbs-%s",
-					dev_name(&client->dev));
-	if (!sbs_desc->name)
-		return -ENOMEM;
 
 	chip = devm_kzalloc(&client->dev, sizeof(struct sbs_info), GFP_KERNEL);
 	if (!chip)
 		return -ENOMEM;
 
 	chip->client = client;
-	psy_cfg.fwnode = dev_fwnode(&client->dev);
+	psy_cfg.of_node = client->dev.of_node;
 	psy_cfg.drv_data = chip;
 
 	i2c_set_clientdata(client, chip);
@@ -201,7 +192,7 @@ static int sbs_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev, ret, "Failed to get device status\n");
 	chip->last_state = val;
 
-	chip->power_supply = devm_power_supply_register(&client->dev, sbs_desc, &psy_cfg);
+	chip->power_supply = devm_power_supply_register(&client->dev, &sbs_desc, &psy_cfg);
 	if (IS_ERR(chip->power_supply))
 		return dev_err_probe(&client->dev, PTR_ERR(chip->power_supply),
 				     "Failed to register power supply\n");
@@ -244,7 +235,7 @@ MODULE_DEVICE_TABLE(of, sbs_dt_ids);
 #endif
 
 static const struct i2c_device_id sbs_id[] = {
-	{ "sbs-charger" },
+	{ "sbs-charger", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, sbs_id);

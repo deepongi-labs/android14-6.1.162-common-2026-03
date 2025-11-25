@@ -1,14 +1,15 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-.. _rcu_handbook:
+.. _rcu_concepts:
 
 ============
-RCU Handbook
+RCU concepts
 ============
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 3
 
+   arrayRCU
    checklist
    lockdep
    lockdep-splat

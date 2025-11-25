@@ -19,33 +19,10 @@
  * Input device
  */
 #ifdef CONFIG_USB_VIDEO_CLASS_INPUT_EVDEV
-
-static bool uvc_input_has_button(struct uvc_device *dev)
-{
-	struct uvc_streaming *stream;
-
-	/*
-	 * The device has button events if both bTriggerSupport and
-	 * bTriggerUsage are one. Otherwise the camera button does not
-	 * exist or is handled automatically by the camera without host
-	 * driver or client application intervention.
-	 */
-	list_for_each_entry(stream, &dev->streams, list) {
-		if (stream->header.bTriggerSupport == 1 &&
-		    stream->header.bTriggerUsage == 1)
-			return true;
-	}
-
-	return false;
-}
-
 static int uvc_input_init(struct uvc_device *dev)
 {
 	struct input_dev *input;
 	int ret;
-
-	if (!uvc_input_has_button(dev))
-		return 0;
 
 	input = input_allocate_device();
 	if (input == NULL)
@@ -62,8 +39,7 @@ static int uvc_input_init(struct uvc_device *dev)
 	__set_bit(EV_KEY, input->evbit);
 	__set_bit(KEY_CAMERA, input->keybit);
 
-	ret = input_register_device(input);
-	if (ret < 0)
+	if ((ret = input_register_device(input)) < 0)
 		goto error;
 
 	dev->input = input;
@@ -98,23 +74,38 @@ static void uvc_input_report_key(struct uvc_device *dev, unsigned int code,
 /* --------------------------------------------------------------------------
  * Status interrupt endpoint
  */
+struct uvc_streaming_status {
+	u8	bStatusType;
+	u8	bOriginator;
+	u8	bEvent;
+	u8	bValue[];
+} __packed;
+
+struct uvc_control_status {
+	u8	bStatusType;
+	u8	bOriginator;
+	u8	bEvent;
+	u8	bSelector;
+	u8	bAttribute;
+	u8	bValue[];
+} __packed;
+
 static void uvc_event_streaming(struct uvc_device *dev,
-				struct uvc_status *status, int len)
+				struct uvc_streaming_status *status, int len)
 {
-	if (len <= offsetof(struct uvc_status, bEvent)) {
+	if (len < 3) {
 		uvc_dbg(dev, STATUS,
 			"Invalid streaming status event received\n");
 		return;
 	}
 
 	if (status->bEvent == 0) {
-		if (len <= offsetof(struct uvc_status, streaming))
+		if (len < 4)
 			return;
-
 		uvc_dbg(dev, STATUS, "Button (intf %u) %s len %d\n",
 			status->bOriginator,
-			status->streaming.button ? "pressed" : "released", len);
-		uvc_input_report_key(dev, KEY_CAMERA, status->streaming.button);
+			status->bValue[0] ? "pressed" : "released", len);
+		uvc_input_report_key(dev, KEY_CAMERA, status->bValue[0]);
 	} else {
 		uvc_dbg(dev, STATUS, "Stream %u error event %02x len %d\n",
 			status->bOriginator, status->bEvent, len);
@@ -141,7 +132,7 @@ static struct uvc_control *uvc_event_entity_find_ctrl(struct uvc_entity *entity,
 }
 
 static struct uvc_control *uvc_event_find_ctrl(struct uvc_device *dev,
-					const struct uvc_status *status,
+					const struct uvc_control_status *status,
 					struct uvc_video_chain **chain)
 {
 	list_for_each_entry((*chain), &dev->chains, list) {
@@ -153,7 +144,7 @@ static struct uvc_control *uvc_event_find_ctrl(struct uvc_device *dev,
 				continue;
 
 			ctrl = uvc_event_entity_find_ctrl(entity,
-						     status->control.bSelector);
+							  status->bSelector);
 			if (ctrl)
 				return ctrl;
 		}
@@ -163,7 +154,7 @@ static struct uvc_control *uvc_event_find_ctrl(struct uvc_device *dev,
 }
 
 static bool uvc_event_control(struct urb *urb,
-			      const struct uvc_status *status, int len)
+			      const struct uvc_control_status *status, int len)
 {
 	static const char *attrs[] = { "value", "info", "failure", "min", "max" };
 	struct uvc_device *dev = urb->context;
@@ -171,24 +162,24 @@ static bool uvc_event_control(struct urb *urb,
 	struct uvc_control *ctrl;
 
 	if (len < 6 || status->bEvent != 0 ||
-	    status->control.bAttribute >= ARRAY_SIZE(attrs)) {
+	    status->bAttribute >= ARRAY_SIZE(attrs)) {
 		uvc_dbg(dev, STATUS, "Invalid control status event received\n");
 		return false;
 	}
 
 	uvc_dbg(dev, STATUS, "Control %u/%u %s change len %d\n",
-		status->bOriginator, status->control.bSelector,
-		attrs[status->control.bAttribute], len);
+		status->bOriginator, status->bSelector,
+		attrs[status->bAttribute], len);
 
 	/* Find the control. */
 	ctrl = uvc_event_find_ctrl(dev, status, &chain);
 	if (!ctrl)
 		return false;
 
-	switch (status->control.bAttribute) {
+	switch (status->bAttribute) {
 	case UVC_CTRL_VALUE_CHANGE:
 		return uvc_ctrl_status_event_async(urb, chain, ctrl,
-						   status->control.bValue);
+						   status->bValue);
 
 	case UVC_CTRL_INFO_CHANGE:
 	case UVC_CTRL_FAILURE_CHANGE:
@@ -216,7 +207,7 @@ static void uvc_status_complete(struct urb *urb)
 		return;
 
 	default:
-		dev_warn(&dev->intf->dev,
+		dev_warn(&dev->udev->dev,
 			 "Non-zero status (%d) in status completion handler.\n",
 			 urb->status);
 		return;
@@ -224,22 +215,28 @@ static void uvc_status_complete(struct urb *urb)
 
 	len = urb->actual_length;
 	if (len > 0) {
-		switch (dev->status->bStatusType & 0x0f) {
+		switch (dev->status[0] & 0x0f) {
 		case UVC_STATUS_TYPE_CONTROL: {
-			if (uvc_event_control(urb, dev->status, len))
+			struct uvc_control_status *status =
+				(struct uvc_control_status *)dev->status;
+
+			if (uvc_event_control(urb, status, len))
 				/* The URB will be resubmitted in work context. */
 				return;
 			break;
 		}
 
 		case UVC_STATUS_TYPE_STREAMING: {
-			uvc_event_streaming(dev, dev->status, len);
+			struct uvc_streaming_status *status =
+				(struct uvc_streaming_status *)dev->status;
+
+			uvc_event_streaming(dev, status, len);
 			break;
 		}
 
 		default:
 			uvc_dbg(dev, STATUS, "Unknown status event type %u\n",
-				dev->status->bStatusType);
+				dev->status[0]);
 			break;
 		}
 	}
@@ -248,7 +245,7 @@ static void uvc_status_complete(struct urb *urb)
 	urb->interval = dev->int_ep->desc.bInterval;
 	ret = usb_submit_urb(urb, GFP_ATOMIC);
 	if (ret < 0)
-		dev_err(&dev->intf->dev,
+		dev_err(&dev->udev->dev,
 			"Failed to resubmit status URB (%d).\n", ret);
 }
 
@@ -258,17 +255,17 @@ int uvc_status_init(struct uvc_device *dev)
 	unsigned int pipe;
 	int interval;
 
-	mutex_init(&dev->status_lock);
-
 	if (ep == NULL)
 		return 0;
 
-	dev->status = kzalloc(sizeof(*dev->status), GFP_KERNEL);
-	if (!dev->status)
+	uvc_input_init(dev);
+
+	dev->status = kzalloc(UVC_MAX_STATUS_SIZE, GFP_KERNEL);
+	if (dev->status == NULL)
 		return -ENOMEM;
 
 	dev->int_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->int_urb) {
+	if (dev->int_urb == NULL) {
 		kfree(dev->status);
 		dev->status = NULL;
 		return -ENOMEM;
@@ -286,20 +283,15 @@ int uvc_status_init(struct uvc_device *dev)
 		interval = fls(interval) - 1;
 
 	usb_fill_int_urb(dev->int_urb, dev->udev, pipe,
-		dev->status, sizeof(*dev->status), uvc_status_complete,
+		dev->status, UVC_MAX_STATUS_SIZE, uvc_status_complete,
 		dev, interval);
-
-	uvc_input_init(dev);
 
 	return 0;
 }
 
 void uvc_status_unregister(struct uvc_device *dev)
 {
-	if (!dev->status)
-		return;
-
-	uvc_status_suspend(dev);
+	usb_kill_urb(dev->int_urb);
 	uvc_input_unregister(dev);
 }
 
@@ -309,24 +301,17 @@ void uvc_status_cleanup(struct uvc_device *dev)
 	kfree(dev->status);
 }
 
-static int uvc_status_start(struct uvc_device *dev, gfp_t flags)
+int uvc_status_start(struct uvc_device *dev, gfp_t flags)
 {
-	lockdep_assert_held(&dev->status_lock);
-
-	if (!dev->int_urb)
+	if (dev->int_urb == NULL)
 		return 0;
 
 	return usb_submit_urb(dev->int_urb, flags);
 }
 
-static void uvc_status_stop(struct uvc_device *dev)
+void uvc_status_stop(struct uvc_device *dev)
 {
 	struct uvc_ctrl_work *w = &dev->async_ctrl;
-
-	lockdep_assert_held(&dev->status_lock);
-
-	if (!dev->int_urb)
-		return;
 
 	/*
 	 * Prevent the asynchronous control handler from requeing the URB. The
@@ -363,50 +348,4 @@ static void uvc_status_stop(struct uvc_device *dev)
 	 * again.
 	 */
 	smp_store_release(&dev->flush_status, false);
-}
-
-int uvc_status_resume(struct uvc_device *dev)
-{
-	guard(mutex)(&dev->status_lock);
-
-	if (dev->status_users)
-		return uvc_status_start(dev, GFP_NOIO);
-
-	return 0;
-}
-
-void uvc_status_suspend(struct uvc_device *dev)
-{
-	guard(mutex)(&dev->status_lock);
-
-	if (dev->status_users)
-		uvc_status_stop(dev);
-}
-
-int uvc_status_get(struct uvc_device *dev)
-{
-	int ret;
-
-	guard(mutex)(&dev->status_lock);
-
-	if (!dev->status_users) {
-		ret = uvc_status_start(dev, GFP_KERNEL);
-		if (ret)
-			return ret;
-	}
-
-	dev->status_users++;
-
-	return 0;
-}
-
-void uvc_status_put(struct uvc_device *dev)
-{
-	guard(mutex)(&dev->status_lock);
-
-	if (dev->status_users == 1)
-		uvc_status_stop(dev);
-	WARN_ON(!dev->status_users);
-	if (dev->status_users)
-		dev->status_users--;
 }

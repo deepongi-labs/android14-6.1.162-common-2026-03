@@ -702,7 +702,7 @@ static int dmz_get_zoned_device(struct dm_target *ti, char *path,
 	}
 
 	bdev = ddev->bdev;
-	if (!bdev_is_zoned(bdev)) {
+	if (bdev_zoned_model(bdev) == BLK_ZONED_NONE) {
 		if (nr_devs == 1) {
 			ti->error = "Invalid regular device";
 			goto err;
@@ -996,11 +996,12 @@ static void dmz_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	limits->logical_block_size = DMZ_BLOCK_SIZE;
 	limits->physical_block_size = DMZ_BLOCK_SIZE;
 
-	limits->io_min = DMZ_BLOCK_SIZE;
-	limits->io_opt = DMZ_BLOCK_SIZE;
+	blk_limits_io_min(limits, DMZ_BLOCK_SIZE);
+	blk_limits_io_opt(limits, DMZ_BLOCK_SIZE);
 
 	limits->discard_alignment = 0;
 	limits->discard_granularity = DMZ_BLOCK_SIZE;
+	limits->max_discard_sectors = chunk_sectors;
 	limits->max_hw_discard_sectors = chunk_sectors;
 	limits->max_write_zeroes_sectors = chunk_sectors;
 
@@ -1009,14 +1010,13 @@ static void dmz_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	limits->max_sectors = chunk_sectors;
 
 	/* We are exposing a drive-managed zoned block device */
-	limits->features &= ~BLK_FEAT_ZONED;
+	limits->zoned = BLK_ZONED_NONE;
 }
 
 /*
  * Pass on ioctl to the backend device.
  */
-static int dmz_prepare_ioctl(struct dm_target *ti, struct block_device **bdev,
-			     unsigned int cmd, unsigned long arg, bool *forward)
+static int dmz_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
 	struct dmz_target *dmz = ti->private;
 	struct dmz_dev *dev = &dmz->dev[0];
@@ -1062,7 +1062,7 @@ static int dmz_iterate_devices(struct dm_target *ti,
 	struct dmz_target *dmz = ti->private;
 	unsigned int zone_nr_sectors = dmz_zone_nr_sectors(dmz->metadata);
 	sector_t capacity;
-	int i, r = 0;
+	int i, r;
 
 	for (i = 0; i < dmz->nr_ddevs; i++) {
 		capacity = dmz->dev[i].capacity & ~(zone_nr_sectors - 1);
@@ -1118,6 +1118,7 @@ static void dmz_status(struct dm_target *ti, status_type_t type,
 		*result = '\0';
 		break;
 	}
+	return;
 }
 
 static int dmz_message(struct dm_target *ti, unsigned int argc, char **argv,
@@ -1137,7 +1138,7 @@ static int dmz_message(struct dm_target *ti, unsigned int argc, char **argv,
 	return r;
 }
 
-static struct target_type zoned_target = {
+static struct target_type dmz_type = {
 	.name		 = "zoned",
 	.version	 = {2, 0, 0},
 	.features	 = DM_TARGET_SINGLETON | DM_TARGET_MIXED_ZONED_MODEL,
@@ -1153,7 +1154,19 @@ static struct target_type zoned_target = {
 	.status		 = dmz_status,
 	.message	 = dmz_message,
 };
-module_dm(zoned);
+
+static int __init dmz_init(void)
+{
+	return dm_register_target(&dmz_type);
+}
+
+static void __exit dmz_exit(void)
+{
+	dm_unregister_target(&dmz_type);
+}
+
+module_init(dmz_init);
+module_exit(dmz_exit);
 
 MODULE_DESCRIPTION(DM_NAME " target for zoned block devices");
 MODULE_AUTHOR("Damien Le Moal <damien.lemoal@wdc.com>");

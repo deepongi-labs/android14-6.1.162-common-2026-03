@@ -23,13 +23,9 @@
 
 /**
  * sk_stream_write_space - stream socket write_space callback.
- * @sk: pointer to the socket structure
+ * @sk: socket
  *
- * This function is invoked when there's space available in the socket's
- * send buffer for writing. It first checks if the socket is writable,
- * clears the SOCK_NOSPACE flag indicating that memory for writing
- * is now available, wakes up any processes waiting for write operations
- * and sends asynchronous notifications if needed.
+ * FIXME: write proper description
  */
 void sk_stream_write_space(struct sock *sk)
 {
@@ -121,13 +117,13 @@ EXPORT_SYMBOL(sk_stream_wait_close);
  */
 int sk_stream_wait_memory(struct sock *sk, long *timeo_p)
 {
-	int ret, err = 0;
+	int err = 0;
 	long vm_wait = 0;
 	long current_timeo = *timeo_p;
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 
 	if (sk_stream_memory_free(sk))
-		current_timeo = vm_wait = get_random_u32_below(HZ / 5) + 2;
+		current_timeo = vm_wait = prandom_u32_max(HZ / 5) + 2;
 
 	add_wait_queue(sk_sleep(sk), &wait);
 
@@ -146,13 +142,11 @@ int sk_stream_wait_memory(struct sock *sk, long *timeo_p)
 
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		sk->sk_write_pending++;
-		ret = sk_wait_event(sk, &current_timeo, READ_ONCE(sk->sk_err) ||
-				    (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN) ||
-				    (sk_stream_memory_free(sk) && !vm_wait),
-				    &wait);
+		sk_wait_event(sk, &current_timeo, READ_ONCE(sk->sk_err) ||
+						  (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN) ||
+						  (sk_stream_memory_free(sk) &&
+						  !vm_wait), &wait);
 		sk->sk_write_pending--;
-		if (ret < 0)
-			goto do_error;
 
 		if (vm_wait) {
 			vm_wait -= current_timeo;

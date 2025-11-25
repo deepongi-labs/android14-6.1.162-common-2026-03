@@ -11,11 +11,13 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
+#include <linux/pm_runtime.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/acpi.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
 #include <linux/mutex.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -42,8 +44,6 @@ static const struct rt5682s_platform_data i2s_default_platform_data = {
 static const char *rt5682s_supply_names[RT5682S_NUM_SUPPLIES] = {
 	[RT5682S_SUPPLY_AVDD] = "AVDD",
 	[RT5682S_SUPPLY_MICVDD] = "MICVDD",
-	[RT5682S_SUPPLY_DBVDD] = "DBVDD",
-	[RT5682S_SUPPLY_LDO1_IN] = "LDO1-IN",
 };
 
 static const struct reg_sequence patch_list[] = {
@@ -653,15 +653,14 @@ static void rt5682s_sar_power_mode(struct snd_soc_component *component, int mode
 	switch (mode) {
 	case SAR_PWR_SAVING:
 		snd_soc_component_update_bits(component, RT5682S_CBJ_CTRL_3,
-			RT5682S_CBJ_IN_BUF_MASK, RT5682S_CBJ_IN_BUF_EN);
+			RT5682S_CBJ_IN_BUF_MASK, RT5682S_CBJ_IN_BUF_DIS);
 		snd_soc_component_update_bits(component, RT5682S_CBJ_CTRL_1,
-			RT5682S_MB1_PATH_MASK | RT5682S_MB2_PATH_MASK |
-			RT5682S_VREF_POW_MASK, RT5682S_CTRL_MB1_FSM |
-			RT5682S_CTRL_MB2_FSM | RT5682S_VREF_POW_FSM);
+			RT5682S_MB1_PATH_MASK | RT5682S_MB2_PATH_MASK,
+			RT5682S_CTRL_MB1_REG | RT5682S_CTRL_MB2_REG);
 		snd_soc_component_update_bits(component, RT5682S_SAR_IL_CMD_1,
 			RT5682S_SAR_BUTDET_MASK | RT5682S_SAR_BUTDET_POW_MASK |
 			RT5682S_SAR_SEL_MB1_2_CTL_MASK, RT5682S_SAR_BUTDET_DIS |
-			RT5682S_SAR_BUTDET_POW_NORM | RT5682S_SAR_SEL_MB1_2_MANU);
+			RT5682S_SAR_BUTDET_POW_SAV | RT5682S_SAR_SEL_MB1_2_MANU);
 		usleep_range(5000, 5500);
 		snd_soc_component_update_bits(component, RT5682S_SAR_IL_CMD_1,
 			RT5682S_SAR_BUTDET_MASK, RT5682S_SAR_BUTDET_EN);
@@ -689,7 +688,7 @@ static void rt5682s_sar_power_mode(struct snd_soc_component *component, int mode
 		snd_soc_component_update_bits(component, RT5682S_SAR_IL_CMD_1,
 			RT5682S_SAR_BUTDET_MASK | RT5682S_SAR_BUTDET_POW_MASK |
 			RT5682S_SAR_SEL_MB1_2_CTL_MASK, RT5682S_SAR_BUTDET_DIS |
-			RT5682S_SAR_BUTDET_POW_NORM | RT5682S_SAR_SEL_MB1_2_MANU);
+			RT5682S_SAR_BUTDET_POW_SAV | RT5682S_SAR_SEL_MB1_2_MANU);
 		break;
 	default:
 		dev_err(component->dev, "Invalid SAR Power mode: %d\n", mode);
@@ -726,7 +725,7 @@ static void rt5682s_disable_push_button_irq(struct snd_soc_component *component)
 	snd_soc_component_update_bits(component, RT5682S_SAR_IL_CMD_1,
 		RT5682S_SAR_BUTDET_MASK | RT5682S_SAR_BUTDET_POW_MASK |
 		RT5682S_SAR_SEL_MB1_2_CTL_MASK, RT5682S_SAR_BUTDET_DIS |
-		RT5682S_SAR_BUTDET_POW_NORM | RT5682S_SAR_SEL_MB1_2_MANU);
+		RT5682S_SAR_BUTDET_POW_SAV | RT5682S_SAR_SEL_MB1_2_MANU);
 }
 
 /**
@@ -787,7 +786,7 @@ static int rt5682s_headset_detect(struct snd_soc_component *component, int jack_
 			jack_type = SND_JACK_HEADSET;
 			snd_soc_component_write(component, RT5682S_SAR_IL_CMD_3, 0x024c);
 			snd_soc_component_update_bits(component, RT5682S_CBJ_CTRL_1,
-				RT5682S_FAST_OFF_MASK, RT5682S_FAST_OFF_DIS);
+				RT5682S_FAST_OFF_MASK, RT5682S_FAST_OFF_EN);
 			snd_soc_component_update_bits(component, RT5682S_SAR_IL_CMD_1,
 				RT5682S_SAR_SEL_MB1_2_MASK, val << RT5682S_SAR_SEL_MB1_2_SFT);
 			rt5682s_enable_push_button_irq(component);
@@ -833,8 +832,8 @@ static void rt5682s_jack_detect_handler(struct work_struct *work)
 	struct snd_soc_dapm_context *dapm;
 	int val, btn_type;
 
-	if (!rt5682s->component ||
-	    !snd_soc_card_is_instantiated(rt5682s->component->card)) {
+	if (!rt5682s->component || !rt5682s->component->card ||
+	    !rt5682s->component->card->instantiated) {
 		/* card not yet ready, try later */
 		mod_delayed_work(system_power_efficient_wq,
 				 &rt5682s->jack_detect_work, msecs_to_jiffies(15));
@@ -967,7 +966,7 @@ static int rt5682s_set_jack_detect(struct snd_soc_component *component,
 			RT5682S_EMB_JD_MASK | RT5682S_DET_TYPE |
 			RT5682S_POL_FAST_OFF_MASK | RT5682S_MIC_CAP_MASK,
 			RT5682S_EMB_JD_EN | RT5682S_DET_TYPE |
-			RT5682S_POL_FAST_OFF_LOW | RT5682S_MIC_CAP_HS);
+			RT5682S_POL_FAST_OFF_HIGH | RT5682S_MIC_CAP_HS);
 		regmap_update_bits(rt5682s->regmap, RT5682S_SAR_IL_CMD_1,
 			RT5682S_SAR_POW_MASK, RT5682S_SAR_POW_EN);
 		regmap_update_bits(rt5682s->regmap, RT5682S_GPIO_CTRL_1,
@@ -1324,9 +1323,9 @@ static int set_i2s_event(struct snd_soc_dapm_widget *w,
 	if (SND_SOC_DAPM_EVENT_ON(event))
 		on = 1;
 
-	if (!snd_soc_dapm_widget_name_cmp(w, "I2S1") && !rt5682s->wclk_enabled)
+	if (!strcmp(w->name, "I2S1") && !rt5682s->wclk_enabled)
 		rt5682s_set_i2s(rt5682s, RT5682S_AIF1, on);
-	else if (!snd_soc_dapm_widget_name_cmp(w, "I2S2"))
+	else if (!strcmp(w->name, "I2S2"))
 		rt5682s_set_i2s(rt5682s, RT5682S_AIF2, on);
 
 	return 0;
@@ -2133,10 +2132,10 @@ static int rt5682s_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	unsigned int reg_val = 0, tdm_ctrl = 0;
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	case SND_SOC_DAIFMT_CBM_CFM:
 		rt5682s->master[dai->id] = 1;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		rt5682s->master[dai->id] = 0;
 		break;
 	default:
@@ -2611,8 +2610,8 @@ static unsigned long rt5682s_wclk_recalc_rate(struct clk_hw *hw,
 	return rt5682s->lrck[RT5682S_AIF1];
 }
 
-static int rt5682s_wclk_determine_rate(struct clk_hw *hw,
-				       struct clk_rate_request *req)
+static long rt5682s_wclk_round_rate(struct clk_hw *hw, unsigned long rate,
+				   unsigned long *parent_rate)
 {
 	struct rt5682s_priv *rt5682s =
 		container_of(hw, struct rt5682s_priv, dai_clks_hw[RT5682S_DAI_WCLK_IDX]);
@@ -2625,13 +2624,13 @@ static int rt5682s_wclk_determine_rate(struct clk_hw *hw,
 	 * Only accept to set wclk rate to 44.1k or 48kHz.
 	 * It will force to 48kHz if not both.
 	 */
-	if (req->rate != CLK_48 && req->rate != CLK_44) {
+	if (rate != CLK_48 && rate != CLK_44) {
 		dev_warn(component->dev, "%s: clk %s only support %d or %d Hz output\n",
 			__func__, clk_name, CLK_44, CLK_48);
-		req->rate = CLK_48;
+		rate = CLK_48;
 	}
 
-	return 0;
+	return rate;
 }
 
 static int rt5682s_wclk_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -2720,14 +2719,14 @@ static unsigned long rt5682s_bclk_get_factor(unsigned long rate,
 		return 256;
 }
 
-static int rt5682s_bclk_determine_rate(struct clk_hw *hw,
-				       struct clk_rate_request *req)
+static long rt5682s_bclk_round_rate(struct clk_hw *hw, unsigned long rate,
+				   unsigned long *parent_rate)
 {
 	struct rt5682s_priv *rt5682s =
 		container_of(hw, struct rt5682s_priv, dai_clks_hw[RT5682S_DAI_BCLK_IDX]);
 	unsigned long factor;
 
-	if (!req->best_parent_rate || !rt5682s_clk_check(rt5682s))
+	if (!*parent_rate || !rt5682s_clk_check(rt5682s))
 		return -EINVAL;
 
 	/*
@@ -2737,11 +2736,9 @@ static int rt5682s_bclk_determine_rate(struct clk_hw *hw,
 	 * and find the appropriate multiplier of BCLK to
 	 * get the rounded down BCLK value.
 	 */
-	factor = rt5682s_bclk_get_factor(req->rate, req->best_parent_rate);
+	factor = rt5682s_bclk_get_factor(rate, *parent_rate);
 
-	req->rate = req->best_parent_rate * factor;
-
-	return 0;
+	return *parent_rate * factor;
 }
 
 static int rt5682s_bclk_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -2772,12 +2769,12 @@ static const struct clk_ops rt5682s_dai_clk_ops[RT5682S_DAI_NUM_CLKS] = {
 		.prepare = rt5682s_wclk_prepare,
 		.unprepare = rt5682s_wclk_unprepare,
 		.recalc_rate = rt5682s_wclk_recalc_rate,
-		.determine_rate = rt5682s_wclk_determine_rate,
+		.round_rate = rt5682s_wclk_round_rate,
 		.set_rate = rt5682s_wclk_set_rate,
 	},
 	[RT5682S_DAI_BCLK_IDX] = {
 		.recalc_rate = rt5682s_bclk_recalc_rate,
-		.determine_rate = rt5682s_bclk_determine_rate,
+		.round_rate = rt5682s_bclk_round_rate,
 		.set_rate = rt5682s_bclk_set_rate,
 	},
 };
@@ -2851,9 +2848,14 @@ static int rt5682s_dai_probe_clks(struct snd_soc_component *component)
 	int ret;
 
 	/* Check if MCLK provided */
-	rt5682s->mclk = devm_clk_get_optional(component->dev, "mclk");
-	if (IS_ERR(rt5682s->mclk))
-		return PTR_ERR(rt5682s->mclk);
+	rt5682s->mclk = devm_clk_get(component->dev, "mclk");
+	if (IS_ERR(rt5682s->mclk)) {
+		if (PTR_ERR(rt5682s->mclk) != -ENOENT) {
+			ret = PTR_ERR(rt5682s->mclk);
+			return ret;
+		}
+		rt5682s->mclk = NULL;
+	}
 
 	/* Register CCF DAI clock control */
 	ret = rt5682s_register_dai_clks(component);
@@ -2893,9 +2895,6 @@ static int rt5682s_suspend(struct snd_soc_component *component)
 {
 	struct rt5682s_priv *rt5682s = snd_soc_component_get_drvdata(component);
 
-	if (rt5682s->irq)
-		disable_irq(rt5682s->irq);
-
 	cancel_delayed_work_sync(&rt5682s->jack_detect_work);
 	cancel_delayed_work_sync(&rt5682s->jd_check_work);
 
@@ -2919,9 +2918,6 @@ static int rt5682s_resume(struct snd_soc_component *component)
 		mod_delayed_work(system_power_efficient_wq,
 			&rt5682s->jack_detect_work, msecs_to_jiffies(0));
 	}
-
-	if (rt5682s->irq)
-		enable_irq(rt5682s->irq);
 
 	return 0;
 }
@@ -2976,8 +2972,9 @@ static int rt5682s_parse_dt(struct rt5682s_priv *rt5682s, struct device *dev)
 		&rt5682s->pdata.dmic_delay);
 	device_property_read_u32(dev, "realtek,amic-delay-ms",
 		&rt5682s->pdata.amic_delay);
-	device_property_read_u32(dev, "realtek,ldo-sel",
-		&rt5682s->pdata.ldo_dacref);
+
+	rt5682s->pdata.ldo1_en = of_get_named_gpio(dev->of_node,
+		"realtek,ldo1-en-gpios", 0);
 
 	if (device_property_read_string_array(dev, "clock-output-names",
 					      rt5682s->pdata.dai_clk_names,
@@ -3043,7 +3040,7 @@ static const struct regmap_config rt5682s_regmap = {
 	.max_register = RT5682S_MAX_REG,
 	.volatile_reg = rt5682s_volatile_register,
 	.readable_reg = rt5682s_readable_register,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.reg_defaults = rt5682s_reg,
 	.num_reg_defaults = ARRAY_SIZE(rt5682s_reg),
 	.use_single_read = true,
@@ -3093,14 +3090,6 @@ static void rt5682s_i2c_disable_regulators(void *data)
 	ret = regulator_disable(rt5682s->supplies[RT5682S_SUPPLY_AVDD].consumer);
 	if (ret)
 		dev_err(dev, "Failed to disable supply AVDD: %d\n", ret);
-
-	ret = regulator_disable(rt5682s->supplies[RT5682S_SUPPLY_DBVDD].consumer);
-	if (ret)
-		dev_err(dev, "Failed to disable supply DBVDD: %d\n", ret);
-
-	ret = regulator_disable(rt5682s->supplies[RT5682S_SUPPLY_LDO1_IN].consumer);
-	if (ret)
-		dev_err(dev, "Failed to disable supply LDO1-IN: %d\n", ret);
 
 	usleep_range(1000, 1500);
 
@@ -3163,24 +3152,10 @@ static int rt5682s_i2c_probe(struct i2c_client *i2c)
 		return ret;
 	}
 
-	ret = regulator_enable(rt5682s->supplies[RT5682S_SUPPLY_DBVDD].consumer);
-	if (ret) {
-		dev_err(&i2c->dev, "Failed to enable supply DBVDD: %d\n", ret);
-		return ret;
-	}
-
-	ret = regulator_enable(rt5682s->supplies[RT5682S_SUPPLY_LDO1_IN].consumer);
-	if (ret) {
-		dev_err(&i2c->dev, "Failed to enable supply LDO1-IN: %d\n", ret);
-		return ret;
-	}
-
-	rt5682s->ldo1_en = devm_gpiod_get_optional(&i2c->dev,
-						   "realtek,ldo1-en",
-						   GPIOD_OUT_HIGH);
-	if (IS_ERR(rt5682s->ldo1_en)) {
-		dev_err(&i2c->dev, "Fail gpio request ldo1_en\n");
-		return PTR_ERR(rt5682s->ldo1_en);
+	if (gpio_is_valid(rt5682s->pdata.ldo1_en)) {
+		if (devm_gpio_request_one(&i2c->dev, rt5682s->pdata.ldo1_en,
+					  GPIOF_OUT_INIT_HIGH, "rt5682s"))
+			dev_err(&i2c->dev, "Fail gpio_request gpio_ldo\n");
 	}
 
 	/* Sleep for 50 ms minimum */
@@ -3257,27 +3232,6 @@ static int rt5682s_i2c_probe(struct i2c_client *i2c)
 		break;
 	}
 
-	/* LDO output voltage control */
-	switch (rt5682s->pdata.ldo_dacref) {
-	case RT5682S_LDO_1_607V:
-		break;
-	case RT5682S_LDO_1_5V:
-		regmap_update_bits(rt5682s->regmap, RT5682S_BIAS_CUR_CTRL_7,
-			RT5682S_LDO_DACREF_MASK, RT5682S_LDO_DACREF_1_5V);
-		break;
-	case RT5682S_LDO_1_406V:
-		regmap_update_bits(rt5682s->regmap, RT5682S_BIAS_CUR_CTRL_7,
-			RT5682S_LDO_DACREF_MASK, RT5682S_LDO_DACREF_1_406V);
-		break;
-	case RT5682S_LDO_1_731V:
-		regmap_update_bits(rt5682s->regmap, RT5682S_BIAS_CUR_CTRL_7,
-			RT5682S_LDO_DACREF_MASK, RT5682S_LDO_DACREF_1_731V);
-		break;
-	default:
-		dev_warn(&i2c->dev, "invalid LDO output setting.\n");
-		break;
-	}
-
 	INIT_DELAYED_WORK(&rt5682s->jack_detect_work, rt5682s_jack_detect_handler);
 	INIT_DELAYED_WORK(&rt5682s->jd_check_work, rt5682s_jd_check_handler);
 
@@ -3285,10 +3239,8 @@ static int rt5682s_i2c_probe(struct i2c_client *i2c)
 		ret = devm_request_threaded_irq(&i2c->dev, i2c->irq, NULL, rt5682s_irq,
 			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			"rt5682s", rt5682s);
-		if (!ret)
-			rt5682s->irq = i2c->irq;
-		else
-			dev_err(&i2c->dev, "Failed to request IRQ: %d\n", ret);
+		if (ret)
+			dev_err(&i2c->dev, "Failed to reguest IRQ: %d\n", ret);
 	}
 
 	return devm_snd_soc_register_component(&i2c->dev, &rt5682s_soc_component_dev,
@@ -3324,7 +3276,7 @@ static const struct acpi_device_id rt5682s_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, rt5682s_acpi_match);
 
 static const struct i2c_device_id rt5682s_i2c_id[] = {
-	{"rt5682s"},
+	{"rt5682s", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, rt5682s_i2c_id);
@@ -3336,7 +3288,7 @@ static struct i2c_driver rt5682s_i2c_driver = {
 		.acpi_match_table = rt5682s_acpi_match,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
-	.probe = rt5682s_i2c_probe,
+	.probe_new = rt5682s_i2c_probe,
 	.remove = rt5682s_i2c_remove,
 	.shutdown = rt5682s_i2c_shutdown,
 	.id_table = rt5682s_i2c_id,

@@ -15,6 +15,32 @@
 #include <asm/sysreg.h>
 
 /*
+ * Called on entry to KVM_RUN unless this vcpu previously ran at least
+ * once and the most recent prior KVM_RUN for this vcpu was called from
+ * the same task as current (highly likely).
+ *
+ * This is guaranteed to execute before kvm_arch_vcpu_load_fp(vcpu),
+ * such that on entering hyp the relevant parts of current are already
+ * mapped.
+ */
+int kvm_arch_vcpu_run_map_fp(struct kvm_vcpu *vcpu)
+{
+	struct user_fpsimd_state *fpsimd = &current->thread.uw.fpsimd_state;
+	int ret;
+
+	/* pKVM has its own tracking of the host fpsimd state. */
+	if (is_protected_kvm_enabled())
+		return 0;
+
+	/* Make sure the host task fpsimd state is visible to hyp: */
+	ret = kvm_share_hyp(fpsimd, fpsimd + 1);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+/*
  * Prepare vcpu for saving the host's FPSIMD state and loading the guest's.
  * The actual loading is done by the FPSIMD access trap taken to hyp.
  *
@@ -37,13 +63,11 @@ void kvm_arch_vcpu_load_fp(struct kvm_vcpu *vcpu)
 	 * that PSTATE.{SM,ZA} == {0,0}.
 	 */
 	fpsimd_save_and_flush_cpu_state();
-	*host_data_ptr(fp_owner) = FP_STATE_FREE;
-
-	WARN_ON_ONCE(system_supports_sme() && read_sysreg_s(SYS_SVCR));
+	vcpu->arch.fp_state = FP_STATE_FREE;
 }
 
 /*
- * Called just before entering the guest once we are no longer preemptible
+ * Called just before entering the guest once we are no longer preemptable
  * and interrupts are disabled. If we have managed to run anything using
  * FP while we were preemptible (such as off the back of an interrupt),
  * then neither the host nor the guest own the FP hardware (and it was the
@@ -52,7 +76,7 @@ void kvm_arch_vcpu_load_fp(struct kvm_vcpu *vcpu)
 void kvm_arch_vcpu_ctxflush_fp(struct kvm_vcpu *vcpu)
 {
 	if (test_thread_flag(TIF_FOREIGN_FPSTATE))
-		*host_data_ptr(fp_owner) = FP_STATE_FREE;
+		vcpu->arch.fp_state = FP_STATE_FREE;
 }
 
 /*
@@ -64,31 +88,20 @@ void kvm_arch_vcpu_ctxflush_fp(struct kvm_vcpu *vcpu)
  */
 void kvm_arch_vcpu_ctxsync_fp(struct kvm_vcpu *vcpu)
 {
-	struct cpu_fp_state fp_state;
-
 	WARN_ON_ONCE(!irqs_disabled());
 
-	if (guest_owns_fp_regs()) {
+	if (vcpu->arch.fp_state == FP_STATE_GUEST_OWNED) {
 		/*
 		 * Currently we do not support SME guests so SVCR is
 		 * always 0 and we just need a variable to point to.
 		 */
-		fp_state.st = &vcpu->arch.ctxt.fp_regs;
-		fp_state.sve_state = vcpu->arch.sve_state;
-		fp_state.sve_vl = vcpu->arch.sve_max_vl;
-		fp_state.sme_state = NULL;
-		fp_state.svcr = __ctxt_sys_reg(&vcpu->arch.ctxt, SVCR);
-		fp_state.fpmr = __ctxt_sys_reg(&vcpu->arch.ctxt, FPMR);
-		fp_state.fp_type = &vcpu->arch.fp_type;
-
-		if (vcpu_has_sve(vcpu))
-			fp_state.to_save = FP_STATE_SVE;
-		else
-			fp_state.to_save = FP_STATE_FPSIMD;
-
-		fpsimd_bind_state_to_cpu(&fp_state);
+		fpsimd_bind_state_to_cpu(&vcpu->arch.ctxt.fp_regs,
+					 vcpu->arch.sve_state,
+					 vcpu->arch.sve_max_vl,
+					 NULL, 0, &vcpu->arch.svcr);
 
 		clear_thread_flag(TIF_FOREIGN_FPSTATE);
+		update_thread_flag(TIF_SVE, vcpu_has_sve(vcpu));
 	}
 }
 
@@ -104,7 +117,7 @@ void kvm_arch_vcpu_put_fp(struct kvm_vcpu *vcpu)
 
 	local_irq_save(flags);
 
-	if (guest_owns_fp_regs()) {
+	if (vcpu->arch.fp_state == FP_STATE_GUEST_OWNED) {
 		/*
 		 * Flush (save and invalidate) the fpsimd/sve state so that if
 		 * the host tries to use fpsimd/sve, it's not using stale data
@@ -117,6 +130,8 @@ void kvm_arch_vcpu_put_fp(struct kvm_vcpu *vcpu)
 		 */
 		fpsimd_save_and_flush_cpu_state();
 	}
+
+	update_thread_flag(TIF_SVE, 0);
 
 	local_irq_restore(flags);
 }

@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -481,7 +482,7 @@ static void fimd_commit(struct exynos_drm_crtc *crtc)
 	struct fimd_context *ctx = crtc->ctx;
 	struct drm_display_mode *mode = &crtc->base.state->adjusted_mode;
 	const struct fimd_driver_data *driver_data = ctx->driver_data;
-	void __iomem *timing_base = ctx->regs + driver_data->timing_base;
+	void *timing_base = ctx->regs + driver_data->timing_base;
 	u32 val;
 
 	if (ctx->suspended)
@@ -732,7 +733,7 @@ static void fimd_win_set_pixfmt(struct fimd_context *ctx, unsigned int win,
 	/*
 	 * Setting dma-burst to 16Word causes permanent tearing for very small
 	 * buffers, e.g. cursor buffer. Burst Mode switching which based on
-	 * plane size is not recommended as plane size varies a lot towards the
+	 * plane size is not recommended as plane size varies alot towards the
 	 * end of the screen and rapid movement causes unstable DMA, but it is
 	 * still better to change dma-burst than displaying garbage.
 	 */
@@ -1289,13 +1290,16 @@ err_disable_pm_runtime:
 	return ret;
 }
 
-static void fimd_remove(struct platform_device *pdev)
+static int fimd_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 
 	component_del(&pdev->dev, &fimd_component_ops);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM
 static int exynos_fimd_suspend(struct device *dev)
 {
 	struct fimd_context *ctx = dev_get_drvdata(dev);
@@ -1329,16 +1333,21 @@ static int exynos_fimd_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_RUNTIME_DEV_PM_OPS(exynos_fimd_pm_ops, exynos_fimd_suspend,
-				 exynos_fimd_resume, NULL);
+static const struct dev_pm_ops exynos_fimd_pm_ops = {
+	SET_RUNTIME_PM_OPS(exynos_fimd_suspend, exynos_fimd_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+};
 
 struct platform_driver fimd_driver = {
 	.probe		= fimd_probe,
 	.remove		= fimd_remove,
 	.driver		= {
 		.name	= "exynos4-fb",
-		.pm	= pm_ptr(&exynos_fimd_pm_ops),
+		.owner	= THIS_MODULE,
+		.pm	= &exynos_fimd_pm_ops,
 		.of_match_table = fimd_driver_dt_match,
 	},
 };

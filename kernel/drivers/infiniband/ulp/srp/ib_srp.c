@@ -62,6 +62,11 @@ MODULE_AUTHOR("Roland Dreier");
 MODULE_DESCRIPTION("InfiniBand SCSI RDMA Protocol initiator");
 MODULE_LICENSE("Dual BSD/GPL");
 
+#if !defined(CONFIG_DYNAMIC_DEBUG)
+#define DEFINE_DYNAMIC_DEBUG_METADATA(name, fmt)
+#define DYNAMIC_DEBUG_BRANCH(descriptor) false
+#endif
+
 static unsigned int srp_sg_tablesize;
 static unsigned int cmd_sg_entries;
 static unsigned int indirect_sg_entries;
@@ -694,7 +699,7 @@ static void srp_free_ch_ib(struct srp_target_port *target,
 
 static void srp_path_rec_completion(int status,
 				    struct sa_path_rec *pathrec,
-				    unsigned int num_paths, void *ch_ptr)
+				    int num_paths, void *ch_ptr)
 {
 	struct srp_rdma_ch *ch = ch_ptr;
 	struct srp_target_port *target = ch->target;
@@ -2844,8 +2849,7 @@ static int srp_target_alloc(struct scsi_target *starget)
 	return 0;
 }
 
-static int srp_sdev_configure(struct scsi_device *sdev,
-			      struct queue_limits *lim)
+static int srp_slave_configure(struct scsi_device *sdev)
 {
 	struct Scsi_Host *shost = sdev->host;
 	struct srp_target_port *target = host_to_target(shost);
@@ -3063,12 +3067,12 @@ static struct attribute *srp_host_attrs[] = {
 
 ATTRIBUTE_GROUPS(srp_host);
 
-static const struct scsi_host_template srp_template = {
+static struct scsi_host_template srp_template = {
 	.module				= THIS_MODULE,
 	.name				= "InfiniBand SRP initiator",
 	.proc_name			= DRV_NAME,
 	.target_alloc			= srp_target_alloc,
-	.sdev_configure			= srp_sdev_configure,
+	.slave_configure		= srp_slave_configure,
 	.info				= srp_target_info,
 	.init_cmd_priv			= srp_init_cmd_priv,
 	.exit_cmd_priv			= srp_exit_cmd_priv,
@@ -3705,10 +3709,9 @@ static ssize_t add_target_store(struct device *dev,
 	target_host->max_id      = 1;
 	target_host->max_lun     = -1LL;
 	target_host->max_cmd_len = sizeof ((struct srp_cmd *) (void *) 0L)->cdb;
+	target_host->max_segment_size = ib_dma_max_seg_size(ibdev);
 
-	if (ibdev->attrs.kernel_cap_flags & IBK_SG_GAPS_REG)
-		target_host->max_segment_size = ib_dma_max_seg_size(ibdev);
-	else
+	if (!(ibdev->attrs.kernel_cap_flags & IBK_SG_GAPS_REG))
 		target_host->virt_boundary_mask = ~srp_dev->mr_page_mask;
 
 	target = host_to_target(target_host);

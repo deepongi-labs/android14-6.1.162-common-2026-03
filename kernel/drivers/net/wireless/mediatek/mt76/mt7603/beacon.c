@@ -107,7 +107,7 @@ void mt7603_pre_tbtt_tasklet(struct tasklet_struct *t)
 	struct sk_buff *skb;
 	int i, nframes;
 
-	if (dev->mphy.offchannel)
+	if (mt76_hw(dev)->conf.flags & IEEE80211_CONF_OFFCHANNEL)
 		return;
 
 	data.dev = dev;
@@ -195,8 +195,7 @@ void mt7603_beacon_set_timer(struct mt7603_dev *dev, int idx, int intval)
 		return;
 	}
 
-	if (intval)
-		dev->mt76.beacon_int = intval;
+	dev->mt76.beacon_int = intval;
 	mt76_wr(dev, MT_TBTT,
 		FIELD_PREP(MT_TBTT_PERIOD, intval) | MT_TBTT_CAL_ENABLE);
 

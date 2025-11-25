@@ -275,6 +275,11 @@ static inline struct target *target_from_target(struct dm_target *target)
 	return target->private;
 }
 
+static inline struct target *target_from_miscdev(struct miscdevice *miscdev)
+{
+	return container_of(miscdev, struct target, miscdev);
+}
+
 static inline struct channel *channel_from_file(struct file *file)
 {
 	WARN_ON(file->private_data == NULL);
@@ -1009,6 +1014,7 @@ static int dev_release(struct inode *inode, struct file *file)
 static const struct file_operations file_operations = {
 	.owner = THIS_MODULE,
 	.open = dev_open,
+	.llseek = no_llseek,
 	.read_iter = dev_read,
 	.write_iter = dev_write,
 	.release = dev_release,

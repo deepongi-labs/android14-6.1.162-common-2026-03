@@ -36,7 +36,9 @@ int io_statx_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	sx->buffer = u64_to_user_ptr(READ_ONCE(sqe->addr2));
 	sx->flags = READ_ONCE(sqe->statx_flags);
 
-	sx->filename = getname_uflags(path, sx->flags);
+	sx->filename = getname_flags(path,
+				     getname_statx_lookup_flags(sx->flags),
+				     NULL);
 
 	if (IS_ERR(sx->filename)) {
 		int ret = PTR_ERR(sx->filename);
@@ -46,7 +48,6 @@ int io_statx_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	}
 
 	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
 	return 0;
 }
 
@@ -55,11 +56,12 @@ int io_statx(struct io_kiocb *req, unsigned int issue_flags)
 	struct io_statx *sx = io_kiocb_to_cmd(req, struct io_statx);
 	int ret;
 
-	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
+	if (issue_flags & IO_URING_F_NONBLOCK)
+		return -EAGAIN;
 
 	ret = do_statx(sx->dfd, sx->filename, sx->flags, sx->mask, sx->buffer);
 	io_req_set_res(req, ret, 0);
-	return IOU_COMPLETE;
+	return IOU_OK;
 }
 
 void io_statx_cleanup(struct io_kiocb *req)

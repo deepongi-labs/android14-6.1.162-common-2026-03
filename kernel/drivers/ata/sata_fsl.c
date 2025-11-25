@@ -12,9 +12,6 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -22,6 +19,9 @@
 #include <scsi/scsi_cmnd.h>
 #include <linux/libata.h>
 #include <asm/io.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
+#include <linux/of_platform.h>
 
 static unsigned int intr_coalescing_count;
 module_param(intr_coalescing_count, int, S_IRUGO);
@@ -566,7 +566,7 @@ static unsigned int sata_fsl_qc_issue(struct ata_queued_cmd *qc)
 	return 0;
 }
 
-static void sata_fsl_qc_fill_rtf(struct ata_queued_cmd *qc)
+static bool sata_fsl_qc_fill_rtf(struct ata_queued_cmd *qc)
 {
 	struct sata_fsl_port_priv *pp = qc->ap->private_data;
 	struct sata_fsl_host_priv *host_priv = qc->ap->host->private_data;
@@ -577,6 +577,7 @@ static void sata_fsl_qc_fill_rtf(struct ata_queued_cmd *qc)
 	cd = pp->cmdentry + tag;
 
 	ata_tf_from_fis(cd->sfis, &qc->result_tf);
+	return true;
 }
 
 static int sata_fsl_scr_write(struct ata_link *link,
@@ -1041,7 +1042,7 @@ static void sata_fsl_error_handler(struct ata_port *ap)
 
 static void sata_fsl_post_internal_cmd(struct ata_queued_cmd *qc)
 {
-	if (qc->flags & ATA_QCFLAG_EH)
+	if (qc->flags & ATA_QCFLAG_FAILED)
 		qc->err_mask |= AC_ERR_OTHER;
 
 	if (qc->err_mask) {
@@ -1376,7 +1377,7 @@ static void sata_fsl_host_stop(struct ata_host *host)
 /*
  * scsi mid-layer and libata interface structures
  */
-static const struct scsi_host_template sata_fsl_sht = {
+static struct scsi_host_template sata_fsl_sht = {
 	ATA_NCQ_SHT_QD("sata_fsl", SATA_FSL_QUEUE_DEPTH),
 	.sg_tablesize = SATA_FSL_MAX_PRD_USABLE,
 	.dma_boundary = ATA_DMA_BOUNDARY,
@@ -1395,9 +1396,9 @@ static struct ata_port_operations sata_fsl_ops = {
 
 	.freeze = sata_fsl_freeze,
 	.thaw = sata_fsl_thaw,
-	.reset.softreset = sata_fsl_softreset,
-	.reset.hardreset = sata_fsl_hardreset,
-	.pmp_reset.softreset = sata_fsl_softreset,
+	.softreset = sata_fsl_softreset,
+	.hardreset = sata_fsl_hardreset,
+	.pmp_softreset = sata_fsl_softreset,
 	.error_handler = sata_fsl_error_handler,
 	.post_internal_cmd = sata_fsl_post_internal_cmd,
 
@@ -1526,7 +1527,7 @@ error_exit_with_cleanup:
 	return retval;
 }
 
-static void sata_fsl_remove(struct platform_device *ofdev)
+static int sata_fsl_remove(struct platform_device *ofdev)
 {
 	struct ata_host *host = platform_get_drvdata(ofdev);
 	struct sata_fsl_host_priv *host_priv = host->private_data;
@@ -1535,6 +1536,8 @@ static void sata_fsl_remove(struct platform_device *ofdev)
 	device_remove_file(&ofdev->dev, &host_priv->rx_watermark);
 
 	ata_host_detach(host);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

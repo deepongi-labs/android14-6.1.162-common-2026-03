@@ -4,9 +4,9 @@
 #include <linux/hwspinlock.h>
 #include <linux/iio/iio.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -83,8 +83,6 @@ struct sc27xx_adc_data {
 	struct device *dev;
 	struct regulator *volref;
 	struct regmap *regmap;
-	/* lock to protect against multiple access to the device */
-	struct mutex lock;
 	/*
 	 * One hardware spinlock to synchronize between the multiple
 	 * subsystems which will access the unique ADC controller.
@@ -508,13 +506,13 @@ static int sc27xx_adc_read(struct sc27xx_adc_data *data, int channel,
 		}
 	}
 
-	ret = regmap_set_bits(data->regmap, data->base + SC27XX_ADC_CTL,
-			      SC27XX_ADC_EN);
+	ret = regmap_update_bits(data->regmap, data->base + SC27XX_ADC_CTL,
+				 SC27XX_ADC_EN, SC27XX_ADC_EN);
 	if (ret)
 		goto regulator_restore;
 
-	ret = regmap_set_bits(data->regmap, data->base + SC27XX_ADC_INT_CLR,
-			      SC27XX_ADC_IRQ_CLR);
+	ret = regmap_update_bits(data->regmap, data->base + SC27XX_ADC_INT_CLR,
+				 SC27XX_ADC_IRQ_CLR, SC27XX_ADC_IRQ_CLR);
 	if (ret)
 		goto disable_adc;
 
@@ -537,8 +535,8 @@ static int sc27xx_adc_read(struct sc27xx_adc_data *data, int channel,
 	if (ret)
 		goto disable_adc;
 
-	ret = regmap_set_bits(data->regmap, data->base + SC27XX_ADC_CTL,
-			      SC27XX_ADC_CHN_RUN);
+	ret = regmap_update_bits(data->regmap, data->base + SC27XX_ADC_CTL,
+				 SC27XX_ADC_CHN_RUN, SC27XX_ADC_CHN_RUN);
 	if (ret)
 		goto disable_adc;
 
@@ -559,8 +557,8 @@ static int sc27xx_adc_read(struct sc27xx_adc_data *data, int channel,
 	value &= SC27XX_ADC_DATA_MASK;
 
 disable_adc:
-	regmap_clear_bits(data->regmap, data->base + SC27XX_ADC_CTL,
-			  SC27XX_ADC_EN);
+	regmap_update_bits(data->regmap, data->base + SC27XX_ADC_CTL,
+			   SC27XX_ADC_EN, 0);
 regulator_restore:
 	if ((data->var_data->set_volref) && (channel == 30 || channel == 31)) {
 		ret_volref = regulator_set_voltage(data->volref,
@@ -666,9 +664,9 @@ static int sc27xx_adc_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&data->lock);
+		mutex_lock(&indio_dev->mlock);
 		ret = sc27xx_adc_read(data, chan->channel, scale, &tmp);
-		mutex_unlock(&data->lock);
+		mutex_unlock(&indio_dev->mlock);
 
 		if (ret)
 			return ret;
@@ -677,10 +675,10 @@ static int sc27xx_adc_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 
 	case IIO_CHAN_INFO_PROCESSED:
-		mutex_lock(&data->lock);
+		mutex_lock(&indio_dev->mlock);
 		ret = sc27xx_adc_read_processed(data, chan->channel, scale,
 						&tmp);
-		mutex_unlock(&data->lock);
+		mutex_unlock(&indio_dev->mlock);
 
 		if (ret)
 			return ret;
@@ -765,14 +763,15 @@ static int sc27xx_adc_enable(struct sc27xx_adc_data *data)
 {
 	int ret;
 
-	ret = regmap_set_bits(data->regmap, data->var_data->module_en,
-			      SC27XX_MODULE_ADC_EN);
+	ret = regmap_update_bits(data->regmap, data->var_data->module_en,
+				 SC27XX_MODULE_ADC_EN, SC27XX_MODULE_ADC_EN);
 	if (ret)
 		return ret;
 
 	/* Enable ADC work clock and controller clock */
-	ret = regmap_set_bits(data->regmap, data->var_data->clk_en,
-			      SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN);
+	ret = regmap_update_bits(data->regmap, data->var_data->clk_en,
+				 SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN,
+				 SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN);
 	if (ret)
 		goto disable_adc;
 
@@ -788,11 +787,11 @@ static int sc27xx_adc_enable(struct sc27xx_adc_data *data)
 	return 0;
 
 disable_clk:
-	regmap_clear_bits(data->regmap, data->var_data->clk_en,
-			  SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN);
+	regmap_update_bits(data->regmap, data->var_data->clk_en,
+			   SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN, 0);
 disable_adc:
-	regmap_clear_bits(data->regmap, data->var_data->module_en,
-			  SC27XX_MODULE_ADC_EN);
+	regmap_update_bits(data->regmap, data->var_data->module_en,
+			   SC27XX_MODULE_ADC_EN, 0);
 
 	return ret;
 }
@@ -802,11 +801,11 @@ static void sc27xx_adc_disable(void *_data)
 	struct sc27xx_adc_data *data = _data;
 
 	/* Disable ADC work clock and controller clock */
-	regmap_clear_bits(data->regmap, data->var_data->clk_en,
-			  SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN);
+	regmap_update_bits(data->regmap, data->var_data->clk_en,
+			   SC27XX_CLK_ADC_EN | SC27XX_CLK_ADC_CLK_EN, 0);
 
-	regmap_clear_bits(data->regmap, data->var_data->module_en,
-			  SC27XX_MODULE_ADC_EN);
+	regmap_update_bits(data->regmap, data->var_data->module_en,
+			   SC27XX_MODULE_ADC_EN, 0);
 }
 
 static const struct sc27xx_adc_variant_data sc2731_data = {
@@ -935,9 +934,6 @@ static int sc27xx_adc_probe(struct platform_device *pdev)
 	indio_dev->info = &sc27xx_info;
 	indio_dev->channels = sc27xx_channels;
 	indio_dev->num_channels = ARRAY_SIZE(sc27xx_channels);
-
-	mutex_init(&sc27xx_data->lock);
-
 	ret = devm_iio_device_register(dev, indio_dev);
 	if (ret)
 		dev_err(dev, "could not register iio (ADC)");

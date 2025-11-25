@@ -16,6 +16,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/phy/tegra/xusb.h>
 #include <linux/pm_domain.h>
@@ -502,7 +503,6 @@ struct tegra_xudc {
 	struct clk_bulk_data *clks;
 
 	bool device_mode;
-	bool current_device_mode;
 	struct work_struct usb_role_sw_work;
 
 	struct phy **usb3_phy;
@@ -716,8 +716,6 @@ static void tegra_xudc_device_mode_on(struct tegra_xudc *xudc)
 
 	phy_set_mode_ext(xudc->curr_utmi_phy, PHY_MODE_USB_OTG,
 			 USB_ROLE_DEVICE);
-
-	xudc->current_device_mode = true;
 }
 
 static void tegra_xudc_device_mode_off(struct tegra_xudc *xudc)
@@ -727,8 +725,6 @@ static void tegra_xudc_device_mode_off(struct tegra_xudc *xudc)
 	int err;
 
 	dev_dbg(xudc->dev, "device mode off\n");
-
-	xudc->current_device_mode = false;
 
 	connected = !!(xudc_readl(xudc, PORTSC) & PORTSC_CCS);
 
@@ -800,19 +796,25 @@ static int tegra_xudc_get_phy_index(struct tegra_xudc *xudc,
 	return -1;
 }
 
-static void tegra_xudc_update_data_role(struct tegra_xudc *xudc,
-					      struct usb_phy *usbphy)
+static int tegra_xudc_vbus_notify(struct notifier_block *nb,
+					 unsigned long action, void *data)
 {
+	struct tegra_xudc *xudc = container_of(nb, struct tegra_xudc,
+					       vbus_nb);
+	struct usb_phy *usbphy = (struct usb_phy *)data;
 	int phy_index;
+
+	dev_dbg(xudc->dev, "%s(): event is %d\n", __func__, usbphy->last_event);
 
 	if ((xudc->device_mode && usbphy->last_event == USB_EVENT_VBUS) ||
 	    (!xudc->device_mode && usbphy->last_event != USB_EVENT_VBUS)) {
 		dev_dbg(xudc->dev, "Same role(%d) received. Ignore",
 			xudc->device_mode);
-		return;
+		return NOTIFY_OK;
 	}
 
-	xudc->device_mode = usbphy->last_event == USB_EVENT_VBUS;
+	xudc->device_mode = (usbphy->last_event == USB_EVENT_VBUS) ? true :
+								     false;
 
 	phy_index = tegra_xudc_get_phy_index(xudc, usbphy);
 	dev_dbg(xudc->dev, "%s(): current phy index is %d\n", __func__,
@@ -824,18 +826,6 @@ static void tegra_xudc_update_data_role(struct tegra_xudc *xudc,
 		xudc->curr_usbphy = usbphy;
 		schedule_work(&xudc->usb_role_sw_work);
 	}
-}
-
-static int tegra_xudc_vbus_notify(struct notifier_block *nb,
-					 unsigned long action, void *data)
-{
-	struct tegra_xudc *xudc = container_of(nb, struct tegra_xudc,
-					       vbus_nb);
-	struct usb_phy *usbphy = (struct usb_phy *)data;
-
-	dev_dbg(xudc->dev, "%s(): event is %d\n", __func__, usbphy->last_event);
-
-	tegra_xudc_update_data_role(xudc, usbphy);
 
 	return NOTIFY_OK;
 }
@@ -2169,14 +2159,15 @@ static int tegra_xudc_gadget_stop(struct usb_gadget *gadget)
 static int tegra_xudc_gadget_vbus_draw(struct usb_gadget *gadget,
 						unsigned int m_a)
 {
+	int ret = 0;
 	struct tegra_xudc *xudc = to_xudc(gadget);
 
 	dev_dbg(xudc->dev, "%s: %u mA\n", __func__, m_a);
 
 	if (xudc->curr_usbphy && xudc->curr_usbphy->chg_type == SDP_TYPE)
-		return usb_phy_set_power(xudc->curr_usbphy, m_a);
+		ret = usb_phy_set_power(xudc->curr_usbphy, m_a);
 
-	return 0;
+	return ret;
 }
 
 static int tegra_xudc_set_selfpowered(struct usb_gadget *gadget, int is_on)
@@ -3534,7 +3525,7 @@ static int tegra_xudc_phy_get(struct tegra_xudc *xudc)
 			/* Get usb-phy, if utmi phy is available */
 			xudc->usbphy[i] = devm_usb_get_phy_by_node(xudc->dev,
 						xudc->utmi_phy[i]->dev.of_node,
-						NULL);
+						&xudc->vbus_nb);
 			if (IS_ERR(xudc->usbphy[i])) {
 				err = PTR_ERR(xudc->usbphy[i]);
 				dev_err_probe(xudc->dev, err,
@@ -3684,19 +3675,6 @@ static struct tegra_xudc_soc tegra194_xudc_soc_data = {
 	.has_ipfs = false,
 };
 
-static struct tegra_xudc_soc tegra234_xudc_soc_data = {
-	.clock_names = tegra186_xudc_clock_names,
-	.num_clks = ARRAY_SIZE(tegra186_xudc_clock_names),
-	.num_phys = 4,
-	.u1_enable = true,
-	.u2_enable = true,
-	.lpm_enable = true,
-	.invalid_seq_num = false,
-	.pls_quirk = false,
-	.port_reset_quirk = false,
-	.has_ipfs = false,
-};
-
 static const struct of_device_id tegra_xudc_of_match[] = {
 	{
 		.compatible = "nvidia,tegra210-xudc",
@@ -3709,10 +3687,6 @@ static const struct of_device_id tegra_xudc_of_match[] = {
 	{
 		.compatible = "nvidia,tegra194-xudc",
 		.data = &tegra194_xudc_soc_data
-	},
-	{
-		.compatible = "nvidia,tegra234-xudc",
-		.data = &tegra234_xudc_soc_data
 	},
 	{ }
 };
@@ -3897,14 +3871,6 @@ static int tegra_xudc_probe(struct platform_device *pdev)
 		goto free_eps;
 	}
 
-	for (i = 0; i < xudc->soc->num_phys; i++) {
-		if (!xudc->usbphy[i])
-			continue;
-
-		usb_register_notifier(xudc->usbphy[i], &xudc->vbus_nb);
-		tegra_xudc_update_data_role(xudc, xudc->usbphy[i]);
-	}
-
 	return 0;
 
 free_eps:
@@ -3924,7 +3890,7 @@ put_padctl:
 	return err;
 }
 
-static void tegra_xudc_remove(struct platform_device *pdev)
+static int tegra_xudc_remove(struct platform_device *pdev)
 {
 	struct tegra_xudc *xudc = platform_get_drvdata(pdev);
 	unsigned int i;
@@ -3954,6 +3920,8 @@ static void tegra_xudc_remove(struct platform_device *pdev)
 	pm_runtime_put(xudc->dev);
 
 	tegra_xusb_padctl_put(xudc->padctl);
+
+	return 0;
 }
 
 static int __maybe_unused tegra_xudc_powergate(struct tegra_xudc *xudc)
@@ -4048,9 +4016,9 @@ static int __maybe_unused tegra_xudc_resume(struct device *dev)
 
 	spin_lock_irqsave(&xudc->lock, flags);
 	xudc->suspended = false;
-	if (xudc->device_mode != xudc->current_device_mode)
-		schedule_work(&xudc->usb_role_sw_work);
 	spin_unlock_irqrestore(&xudc->lock, flags);
+
+	schedule_work(&xudc->usb_role_sw_work);
 
 	pm_runtime_enable(dev);
 

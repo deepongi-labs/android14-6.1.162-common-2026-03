@@ -248,7 +248,8 @@ static void nft_synproxy_eval(const struct nft_expr *expr,
 }
 
 static int nft_synproxy_validate(const struct nft_ctx *ctx,
-				 const struct nft_expr *expr)
+				 const struct nft_expr *expr,
+				 const struct nft_data **data)
 {
 	if (ctx->family != NFPROTO_IPV4 &&
 	    ctx->family != NFPROTO_IPV6 &&
@@ -274,8 +275,7 @@ static void nft_synproxy_destroy(const struct nft_ctx *ctx,
 	nft_synproxy_do_destroy(ctx);
 }
 
-static int nft_synproxy_dump(struct sk_buff *skb,
-			     const struct nft_expr *expr, bool reset)
+static int nft_synproxy_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	struct nft_synproxy *priv = nft_expr_priv(expr);
 

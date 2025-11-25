@@ -322,10 +322,10 @@ static int cs42l51_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	}
 
 	switch (format & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBP_CFP:
+	case SND_SOC_DAIFMT_CBM_CFM:
 		cs42l51->func = MODE_MASTER;
 		break;
-	case SND_SOC_DAIFMT_CBC_CFC:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		cs42l51->func = MODE_SLAVE_AUTO;
 		break;
 	default:
@@ -703,7 +703,7 @@ const struct regmap_config cs42l51_regmap = {
 	.volatile_reg = cs42l51_volatile_reg,
 	.writeable_reg = cs42l51_writeable_reg,
 	.max_register = CS42L51_CHARGE_FREQ,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 };
 EXPORT_SYMBOL_GPL(cs42l51_regmap);
 
@@ -724,9 +724,12 @@ int cs42l51_probe(struct device *dev, struct regmap *regmap)
 	dev_set_drvdata(dev, cs42l51);
 	cs42l51->regmap = regmap;
 
-	cs42l51->mclk_handle = devm_clk_get_optional(dev, "MCLK");
-	if (IS_ERR(cs42l51->mclk_handle))
-		return PTR_ERR(cs42l51->mclk_handle);
+	cs42l51->mclk_handle = devm_clk_get(dev, "MCLK");
+	if (IS_ERR(cs42l51->mclk_handle)) {
+		if (PTR_ERR(cs42l51->mclk_handle) != -ENOENT)
+			return PTR_ERR(cs42l51->mclk_handle);
+		cs42l51->mclk_handle = NULL;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(cs42l51->supplies); i++)
 		cs42l51->supplies[i].supply = cs42l51_supply_names[i];
@@ -805,7 +808,7 @@ void cs42l51_remove(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(cs42l51_remove);
 
-int cs42l51_suspend(struct device *dev)
+int __maybe_unused cs42l51_suspend(struct device *dev)
 {
 	struct cs42l51_private *cs42l51 = dev_get_drvdata(dev);
 
@@ -816,7 +819,7 @@ int cs42l51_suspend(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(cs42l51_suspend);
 
-int cs42l51_resume(struct device *dev)
+int __maybe_unused cs42l51_resume(struct device *dev)
 {
 	struct cs42l51_private *cs42l51 = dev_get_drvdata(dev);
 

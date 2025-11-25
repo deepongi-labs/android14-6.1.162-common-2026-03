@@ -21,7 +21,7 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <asm/div64.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <media/dvb_frontend.h>
 #include "mxl5xx.h"
@@ -1644,6 +1644,8 @@ static int validate_sku(struct mxl *state)
 		default:
 			return -1;
 		}
+	} else {
+
 	}
 	return -1;
 }

@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/xattr.h>
 #include <linux/evm.h>
+#include <linux/iversion.h>
 #include <linux/fsverity.h>
 
 #include "ima.h"
@@ -131,8 +132,8 @@ int ima_store_template(struct ima_template_entry *entry,
  * value is invalidated.
  */
 void ima_add_violation(struct file *file, const unsigned char *filename,
-		       struct ima_iint_cache *iint, const char *op,
-		       const char *cause)
+		       struct integrity_iint_cache *iint,
+		       const char *op, const char *cause)
 {
 	struct ima_template_entry *entry;
 	struct inode *inode = file_inode(file);
@@ -162,10 +163,10 @@ err_out:
 
 /**
  * ima_get_action - appraise & measure decision based on policy.
- * @idmap: idmap of the mount the inode was found from
+ * @mnt_userns:	user namespace of the mount the inode was found from
  * @inode: pointer to the inode associated with the object being validated
  * @cred: pointer to credentials structure to validate
- * @prop: properties of the task being validated
+ * @secid: secid of the task being validated
  * @mask: contains the permission mask (MAY_READ, MAY_WRITE, MAY_EXEC,
  *        MAY_APPEND)
  * @func: caller identifier
@@ -178,16 +179,15 @@ err_out:
  *		subj=, obj=, type=, func=, mask=, fsmagic=
  *	subj,obj, and type: are LSM specific.
  *	func: FILE_CHECK | BPRM_CHECK | CREDS_CHECK | MMAP_CHECK | MODULE_CHECK
- *	| KEXEC_CMDLINE | KEY_CHECK | CRITICAL_DATA | SETXATTR_CHECK
- *	| MMAP_CHECK_REQPROT
+ *	| KEXEC_CMDLINE | KEY_CHECK | CRITICAL_DATA
  *	mask: contains the permission mask
  *	fsmagic: hex value
  *
  * Returns IMA_MEASURE, IMA_APPRAISE mask.
  *
  */
-int ima_get_action(struct mnt_idmap *idmap, struct inode *inode,
-		   const struct cred *cred, struct lsm_prop *prop, int mask,
+int ima_get_action(struct user_namespace *mnt_userns, struct inode *inode,
+		   const struct cred *cred, u32 secid, int mask,
 		   enum ima_hooks func, int *pcr,
 		   struct ima_template_desc **template_desc,
 		   const char *func_data, unsigned int *allowed_algos)
@@ -196,25 +196,24 @@ int ima_get_action(struct mnt_idmap *idmap, struct inode *inode,
 
 	flags &= ima_policy_flag;
 
-	return ima_match_policy(idmap, inode, cred, prop, func, mask,
+	return ima_match_policy(mnt_userns, inode, cred, secid, func, mask,
 				flags, pcr, template_desc, func_data,
 				allowed_algos);
 }
 
-static bool ima_get_verity_digest(struct ima_iint_cache *iint,
-				  struct inode *inode,
-				  struct ima_max_digest_data *hash)
+static int ima_get_verity_digest(struct integrity_iint_cache *iint,
+				 struct ima_max_digest_data *hash)
 {
-	enum hash_algo alg;
-	int digest_len;
+	enum hash_algo verity_alg;
+	int ret;
 
 	/*
 	 * On failure, 'measure' policy rules will result in a file data
 	 * hash containing 0's.
 	 */
-	digest_len = fsverity_get_digest(inode, hash->digest, NULL, &alg);
-	if (digest_len == 0)
-		return false;
+	ret = fsverity_get_digest(iint->inode, hash->digest, &verity_alg);
+	if (ret)
+		return ret;
 
 	/*
 	 * Unlike in the case of actually calculating the file hash, in
@@ -223,9 +222,9 @@ static bool ima_get_verity_digest(struct ima_iint_cache *iint,
 	 * mismatch between the verity algorithm and the xattr signature
 	 * algorithm, if one exists, will be detected later.
 	 */
-	hash->hdr.algo = alg;
-	hash->hdr.length = digest_len;
-	return true;
+	hash->hdr.algo = verity_alg;
+	hash->hdr.length = hash_digest_size[verity_alg];
+	return 0;
 }
 
 /*
@@ -238,22 +237,19 @@ static bool ima_get_verity_digest(struct ima_iint_cache *iint,
  *
  * Return 0 on success, error code otherwise
  */
-int ima_collect_measurement(struct ima_iint_cache *iint, struct file *file,
-			    void *buf, loff_t size, enum hash_algo algo,
-			    struct modsig *modsig)
+int ima_collect_measurement(struct integrity_iint_cache *iint,
+			    struct file *file, void *buf, loff_t size,
+			    enum hash_algo algo, struct modsig *modsig)
 {
 	const char *audit_cause = "failed";
 	struct inode *inode = file_inode(file);
 	struct inode *real_inode = d_real_inode(file_dentry(file));
 	struct ima_max_digest_data hash;
-	struct ima_digest_data *hash_hdr = container_of(&hash.hdr,
-						struct ima_digest_data, hdr);
 	struct name_snapshot filename;
-	struct kstat stat;
 	int result = 0;
 	int length;
 	void *tmpbuf;
-	u64 i_version = 0;
+	u64 i_version;
 
 	/*
 	 * Always collect the modsig, because IMA might have already collected
@@ -272,10 +268,7 @@ int ima_collect_measurement(struct ima_iint_cache *iint, struct file *file,
 	 * to an initial measurement/appraisal/audit, but was modified to
 	 * assume the file changed.
 	 */
-	result = vfs_getattr_nosec(&file->f_path, &stat, STATX_CHANGE_COOKIE,
-				   AT_STATX_SYNC_AS_STAT);
-	if (!result && (stat.result_mask & STATX_CHANGE_COOKIE))
-		i_version = stat.change_cookie;
+	i_version = inode_query_iversion(inode);
 	hash.hdr.algo = algo;
 	hash.hdr.length = hash_digest_size[algo];
 
@@ -283,14 +276,21 @@ int ima_collect_measurement(struct ima_iint_cache *iint, struct file *file,
 	memset(&hash.digest, 0, sizeof(hash.digest));
 
 	if (iint->flags & IMA_VERITY_REQUIRED) {
-		if (!ima_get_verity_digest(iint, inode, &hash)) {
+		result = ima_get_verity_digest(iint, &hash);
+		switch (result) {
+		case 0:
+			break;
+		case -ENODATA:
 			audit_cause = "no-verity-digest";
-			result = -ENODATA;
+			break;
+		default:
+			audit_cause = "invalid-verity-digest";
+			break;
 		}
 	} else if (buf) {
-		result = ima_calc_buffer_hash(buf, size, hash_hdr);
+		result = ima_calc_buffer_hash(buf, size, &hash.hdr);
 	} else {
-		result = ima_calc_file_hash(file, hash_hdr);
+		result = ima_calc_file_hash(file, &hash.hdr);
 	}
 
 	if (result && result != -EBADF && result != -EINVAL)
@@ -305,11 +305,11 @@ int ima_collect_measurement(struct ima_iint_cache *iint, struct file *file,
 
 	iint->ima_hash = tmpbuf;
 	memcpy(iint->ima_hash, &hash, length);
-	if (real_inode == inode)
-		iint->real_inode.version = i_version;
-	else
-		integrity_inode_attrs_store(&iint->real_inode, i_version,
-					    real_inode);
+	iint->version = i_version;
+	if (real_inode != inode) {
+		iint->real_ino = real_inode->i_ino;
+		iint->real_dev = real_inode->i_sb->s_dev;
+	}
 
 	/* Possibly temporary failure due to type of read (eg. O_DIRECT) */
 	if (!result)
@@ -345,8 +345,8 @@ out:
  *
  * Must be called with iint->mutex held.
  */
-void ima_store_measurement(struct ima_iint_cache *iint, struct file *file,
-			   const unsigned char *filename,
+void ima_store_measurement(struct integrity_iint_cache *iint,
+			   struct file *file, const unsigned char *filename,
 			   struct evm_ima_xattr_data *xattr_value,
 			   int xattr_len, const struct modsig *modsig, int pcr,
 			   struct ima_template_desc *template_desc)
@@ -389,7 +389,7 @@ void ima_store_measurement(struct ima_iint_cache *iint, struct file *file,
 		ima_free_template_entry(entry);
 }
 
-void ima_audit_measurement(struct ima_iint_cache *iint,
+void ima_audit_measurement(struct integrity_iint_cache *iint,
 			   const unsigned char *filename)
 {
 	struct audit_buffer *ab;

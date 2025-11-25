@@ -3,7 +3,6 @@
 #define _TOOLS_LINUX_BITMAP_H
 
 #include <string.h>
-#include <asm-generic/bitsperlong.h>
 #include <linux/align.h>
 #include <linux/bitops.h>
 #include <linux/find.h>
@@ -20,8 +19,7 @@ bool __bitmap_and(unsigned long *dst, const unsigned long *bitmap1,
 		 const unsigned long *bitmap2, unsigned int bits);
 bool __bitmap_equal(const unsigned long *bitmap1,
 		    const unsigned long *bitmap2, unsigned int bits);
-void __bitmap_set(unsigned long *map, unsigned int start, int len);
-void __bitmap_clear(unsigned long *map, unsigned int start, int len);
+void bitmap_clear(unsigned long *map, unsigned int start, int len);
 bool __bitmap_intersects(const unsigned long *bitmap1,
 			 const unsigned long *bitmap2, unsigned int bits);
 
@@ -81,9 +79,38 @@ static inline void bitmap_or(unsigned long *dst, const unsigned long *src1,
 		__bitmap_or(dst, src1, src2, nbits);
 }
 
-static inline unsigned long *bitmap_alloc(unsigned int nbits, gfp_t flags __maybe_unused)
+/**
+ * test_and_set_bit - Set a bit and return its old value
+ * @nr: Bit to set
+ * @addr: Address to count from
+ */
+static inline int test_and_set_bit(int nr, unsigned long *addr)
 {
-	return malloc(bitmap_size(nbits));
+	unsigned long mask = BIT_MASK(nr);
+	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+	unsigned long old;
+
+	old = *p;
+	*p = old | mask;
+
+	return (old & mask) != 0;
+}
+
+/**
+ * test_and_clear_bit - Clear a bit and return its old value
+ * @nr: Bit to clear
+ * @addr: Address to count from
+ */
+static inline int test_and_clear_bit(int nr, unsigned long *addr)
+{
+	unsigned long mask = BIT_MASK(nr);
+	unsigned long *p = ((unsigned long *)addr) + BIT_WORD(nr);
+	unsigned long old;
+
+	old = *p;
+	*p = old & ~mask;
+
+	return (old & mask) != 0;
 }
 
 /**
@@ -157,34 +184,4 @@ static inline bool bitmap_intersects(const unsigned long *src1,
 		return __bitmap_intersects(src1, src2, nbits);
 }
 
-static inline void bitmap_set(unsigned long *map, unsigned int start, unsigned int nbits)
-{
-	if (__builtin_constant_p(nbits) && nbits == 1)
-		__set_bit(start, map);
-	else if (small_const_nbits(start + nbits))
-		*map |= GENMASK(start + nbits - 1, start);
-	else if (__builtin_constant_p(start & BITMAP_MEM_MASK) &&
-		 IS_ALIGNED(start, BITMAP_MEM_ALIGNMENT) &&
-		 __builtin_constant_p(nbits & BITMAP_MEM_MASK) &&
-		 IS_ALIGNED(nbits, BITMAP_MEM_ALIGNMENT))
-		memset((char *)map + start / 8, 0xff, nbits / 8);
-	else
-		__bitmap_set(map, start, nbits);
-}
-
-static inline void bitmap_clear(unsigned long *map, unsigned int start,
-			       unsigned int nbits)
-{
-	if (__builtin_constant_p(nbits) && nbits == 1)
-		__clear_bit(start, map);
-	else if (small_const_nbits(start + nbits))
-		*map &= ~GENMASK(start + nbits - 1, start);
-	else if (__builtin_constant_p(start & BITMAP_MEM_MASK) &&
-		 IS_ALIGNED(start, BITMAP_MEM_ALIGNMENT) &&
-		 __builtin_constant_p(nbits & BITMAP_MEM_MASK) &&
-		 IS_ALIGNED(nbits, BITMAP_MEM_ALIGNMENT))
-		memset((char *)map + start / 8, 0, nbits / 8);
-	else
-		__bitmap_clear(map, start, nbits);
-}
 #endif /* _TOOLS_LINUX_BITMAP_H */

@@ -7,7 +7,6 @@
 
 #include "fsverity_private.h"
 
-#include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
 
@@ -33,7 +32,7 @@ int fsverity_init_merkle_tree_params(struct merkle_tree_params *params,
 				     unsigned int log_blocksize,
 				     const u8 *salt, size_t salt_size)
 {
-	const struct fsverity_hash_alg *hash_alg;
+	struct fsverity_hash_alg *hash_alg;
 	int err;
 	u64 blocks;
 	u64 blocks_in_level[FS_VERITY_MAX_LEVELS];
@@ -43,18 +42,18 @@ int fsverity_init_merkle_tree_params(struct merkle_tree_params *params,
 	memset(params, 0, sizeof(*params));
 
 	hash_alg = fsverity_get_hash_alg(inode, hash_algorithm);
-	if (!hash_alg)
-		return -EINVAL;
+	if (IS_ERR(hash_alg))
+		return PTR_ERR(hash_alg);
 	params->hash_alg = hash_alg;
 	params->digest_size = hash_alg->digest_size;
 
-	if (salt_size) {
-		params->hashstate =
-			fsverity_prepare_hash_state(hash_alg, salt, salt_size);
-		if (!params->hashstate) {
-			err = -ENOMEM;
-			goto out_err;
-		}
+	params->hashstate = fsverity_prepare_hash_state(hash_alg, salt,
+							salt_size);
+	if (IS_ERR(params->hashstate)) {
+		err = PTR_ERR(params->hashstate);
+		params->hashstate = NULL;
+		fsverity_err(inode, "Error %d preparing hash state", err);
+		goto out_err;
 	}
 
 	/*
@@ -84,7 +83,7 @@ int fsverity_init_merkle_tree_params(struct merkle_tree_params *params,
 	params->log_blocks_per_page = PAGE_SHIFT - log_blocksize;
 	params->blocks_per_page = 1 << params->log_blocks_per_page;
 
-	if (WARN_ON_ONCE(!is_power_of_2(params->digest_size))) {
+	if (WARN_ON(!is_power_of_2(params->digest_size))) {
 		err = -EINVAL;
 		goto out_err;
 	}
@@ -157,22 +156,25 @@ out_err:
 
 /*
  * Compute the file digest by hashing the fsverity_descriptor excluding the
- * builtin signature and with the sig_size field set to 0.
+ * signature and with the sig_size field set to 0.
  */
-static void compute_file_digest(const struct fsverity_hash_alg *hash_alg,
-				struct fsverity_descriptor *desc,
-				u8 *file_digest)
+static int compute_file_digest(struct fsverity_hash_alg *hash_alg,
+			       struct fsverity_descriptor *desc,
+			       u8 *file_digest)
 {
 	__le32 sig_size = desc->sig_size;
+	int err;
 
 	desc->sig_size = 0;
-	fsverity_hash_buffer(hash_alg, desc, sizeof(*desc), file_digest);
+	err = fsverity_hash_buffer(hash_alg, desc, sizeof(*desc), file_digest);
 	desc->sig_size = sig_size;
+
+	return err;
 }
 
 /*
  * Create a new fsverity_info from the given fsverity_descriptor (with optional
- * appended builtin signature), and check the signature if present.  The
+ * appended signature), and check the signature if present.  The
  * fsverity_descriptor must have already undergone basic validation.
  */
 struct fsverity_info *fsverity_create_info(const struct inode *inode,
@@ -199,7 +201,12 @@ struct fsverity_info *fsverity_create_info(const struct inode *inode,
 
 	memcpy(vi->root_hash, desc->root_hash, vi->tree_params.digest_size);
 
-	compute_file_digest(vi->tree_params.hash_alg, desc, vi->file_digest);
+	err = compute_file_digest(vi->tree_params.hash_alg, desc,
+				  vi->file_digest);
+	if (err) {
+		fsverity_err(inode, "Error %d computing file digest", err);
+		goto fail;
+	}
 
 	err = fsverity_verify_signature(vi, desc->signature,
 					le32_to_cpu(desc->sig_size));
@@ -232,6 +239,7 @@ struct fsverity_info *fsverity_create_info(const struct inode *inode,
 			err = -ENOMEM;
 			goto fail;
 		}
+		spin_lock_init(&vi->hash_page_init_lock);
 	}
 
 	return vi;
@@ -244,17 +252,17 @@ fail:
 void fsverity_set_info(struct inode *inode, struct fsverity_info *vi)
 {
 	/*
-	 * Multiple tasks may race to set the inode's verity info pointer, so
-	 * use cmpxchg_release().  This pairs with the smp_load_acquire() in
-	 * fsverity_get_info().  I.e., publish the pointer with a RELEASE
-	 * barrier so that other tasks can ACQUIRE it.
+	 * Multiple tasks may race to set ->i_verity_info, so use
+	 * cmpxchg_release().  This pairs with the smp_load_acquire() in
+	 * fsverity_get_info().  I.e., here we publish ->i_verity_info with a
+	 * RELEASE barrier so that other tasks can ACQUIRE it.
 	 */
-	if (cmpxchg_release(fsverity_info_addr(inode), NULL, vi) != NULL) {
-		/* Lost the race, so free the verity info we allocated. */
+	if (cmpxchg_release(&inode->i_verity_info, NULL, vi) != NULL) {
+		/* Lost the race, so free the fsverity_info we allocated. */
 		fsverity_free_info(vi);
 		/*
-		 * Afterwards, the caller may access the inode's verity info
-		 * directly, so make sure to ACQUIRE the winning verity info.
+		 * Afterwards, the caller may access ->i_verity_info directly,
+		 * so make sure to ACQUIRE the winning fsverity_info.
 		 */
 		(void)fsverity_get_info(inode);
 	}
@@ -311,8 +319,8 @@ static bool validate_fsverity_descriptor(struct inode *inode,
 }
 
 /*
- * Read the inode's fsverity_descriptor (with optional appended builtin
- * signature) from the filesystem, and do basic validation of it.
+ * Read the inode's fsverity_descriptor (with optional appended signature) from
+ * the filesystem, and do basic validation of it.
  */
 int fsverity_get_descriptor(struct inode *inode,
 			    struct fsverity_descriptor **desc_ret)
@@ -350,6 +358,7 @@ int fsverity_get_descriptor(struct inode *inode,
 	return 0;
 }
 
+/* Ensure the inode has an ->i_verity_info */
 static int ensure_verity_info(struct inode *inode)
 {
 	struct fsverity_info *vi = fsverity_get_info(inode);
@@ -394,17 +403,23 @@ EXPORT_SYMBOL_GPL(__fsverity_prepare_setattr);
 
 void __fsverity_cleanup_inode(struct inode *inode)
 {
-	struct fsverity_info **vi_addr = fsverity_info_addr(inode);
-
-	fsverity_free_info(*vi_addr);
-	*vi_addr = NULL;
+	fsverity_free_info(inode->i_verity_info);
+	inode->i_verity_info = NULL;
 }
 EXPORT_SYMBOL_GPL(__fsverity_cleanup_inode);
 
-void __init fsverity_init_info_cache(void)
+int __init fsverity_init_info_cache(void)
 {
-	fsverity_info_cachep = KMEM_CACHE_USERCOPY(
-					fsverity_info,
-					SLAB_RECLAIM_ACCOUNT | SLAB_PANIC,
-					file_digest);
+	fsverity_info_cachep = KMEM_CACHE_USERCOPY(fsverity_info,
+						   SLAB_RECLAIM_ACCOUNT,
+						   file_digest);
+	if (!fsverity_info_cachep)
+		return -ENOMEM;
+	return 0;
+}
+
+void __init fsverity_exit_info_cache(void)
+{
+	kmem_cache_destroy(fsverity_info_cachep);
+	fsverity_info_cachep = NULL;
 }

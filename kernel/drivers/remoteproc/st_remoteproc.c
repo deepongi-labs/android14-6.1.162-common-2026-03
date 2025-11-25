@@ -16,9 +16,10 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
-#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/remoteproc.h>
 #include <linux/reset.h>
@@ -290,23 +291,26 @@ static int st_rproc_parse_dt(struct platform_device *pdev)
 	if (ddata->config->sw_reset) {
 		ddata->sw_reset = devm_reset_control_get_exclusive(dev,
 								   "sw_reset");
-		if (IS_ERR(ddata->sw_reset))
-			return dev_err_probe(dev, PTR_ERR(ddata->sw_reset),
-					     "Failed to get S/W Reset\n");
+		if (IS_ERR(ddata->sw_reset)) {
+			dev_err(dev, "Failed to get S/W Reset\n");
+			return PTR_ERR(ddata->sw_reset);
+		}
 	}
 
 	if (ddata->config->pwr_reset) {
 		ddata->pwr_reset = devm_reset_control_get_exclusive(dev,
 								    "pwr_reset");
-		if (IS_ERR(ddata->pwr_reset))
-			return dev_err_probe(dev, PTR_ERR(ddata->pwr_reset),
-					     "Failed to get Power Reset\n");
+		if (IS_ERR(ddata->pwr_reset)) {
+			dev_err(dev, "Failed to get Power Reset\n");
+			return PTR_ERR(ddata->pwr_reset);
+		}
 	}
 
 	ddata->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(ddata->clk))
-		return dev_err_probe(dev, PTR_ERR(ddata->clk),
-				     "Failed to get clock\n");
+	if (IS_ERR(ddata->clk)) {
+		dev_err(dev, "Failed to get clock\n");
+		return PTR_ERR(ddata->clk);
+	}
 
 	err = of_property_read_u32(np, "clock-frequency", &ddata->clk_rate);
 	if (err) {
@@ -314,11 +318,18 @@ static int st_rproc_parse_dt(struct platform_device *pdev)
 		return err;
 	}
 
-	ddata->boot_base = syscon_regmap_lookup_by_phandle_args(np, "st,syscfg",
-								1, &ddata->boot_offset);
-	if (IS_ERR(ddata->boot_base))
-		return dev_err_probe(dev, PTR_ERR(ddata->boot_base),
-				     "Boot base not found\n");
+	ddata->boot_base = syscon_regmap_lookup_by_phandle(np, "st,syscfg");
+	if (IS_ERR(ddata->boot_base)) {
+		dev_err(dev, "Boot base not found\n");
+		return PTR_ERR(ddata->boot_base);
+	}
+
+	err = of_property_read_u32_index(np, "st,syscfg", 1,
+					 &ddata->boot_offset);
+	if (err) {
+		dev_err(dev, "Boot offset not found\n");
+		return -EINVAL;
+	}
 
 	err = clk_prepare(ddata->clk);
 	if (err)
@@ -330,6 +341,7 @@ static int st_rproc_parse_dt(struct platform_device *pdev)
 static int st_rproc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	const struct of_device_id *match;
 	struct st_rproc *ddata;
 	struct device_node *np = dev->of_node;
 	struct rproc *rproc;
@@ -337,21 +349,25 @@ static int st_rproc_probe(struct platform_device *pdev)
 	int enabled;
 	int ret, i;
 
-	rproc = devm_rproc_alloc(dev, np->name, &st_rproc_ops, NULL, sizeof(*ddata));
+	match = of_match_device(st_rproc_match, dev);
+	if (!match || !match->data) {
+		dev_err(dev, "No device match found\n");
+		return -ENODEV;
+	}
+
+	rproc = rproc_alloc(dev, np->name, &st_rproc_ops, NULL, sizeof(*ddata));
 	if (!rproc)
 		return -ENOMEM;
 
 	rproc->has_iommu = false;
 	ddata = rproc->priv;
-	ddata->config = (struct st_rproc_config *)device_get_match_data(dev);
-	if (!ddata->config)
-		return -ENODEV;
+	ddata->config = (struct st_rproc_config *)match->data;
 
 	platform_set_drvdata(pdev, rproc);
 
 	ret = st_rproc_parse_dt(pdev);
 	if (ret)
-		return ret;
+		goto free_rproc;
 
 	enabled = st_rproc_state(pdev);
 	if (enabled < 0) {
@@ -366,7 +382,7 @@ static int st_rproc_probe(struct platform_device *pdev)
 		clk_set_rate(ddata->clk, ddata->clk_rate);
 	}
 
-	if (of_property_present(np, "mbox-names")) {
+	if (of_get_property(np, "mbox-names", NULL)) {
 		ddata->mbox_client_vq0.dev		= dev;
 		ddata->mbox_client_vq0.tx_done		= NULL;
 		ddata->mbox_client_vq0.tx_block	= false;
@@ -385,32 +401,32 @@ static int st_rproc_probe(struct platform_device *pdev)
 		 */
 		chan = mbox_request_channel_byname(&ddata->mbox_client_vq0, "vq0_rx");
 		if (IS_ERR(chan)) {
-			ret = dev_err_probe(&rproc->dev, PTR_ERR(chan),
-					    "failed to request mbox chan 0\n");
+			dev_err(&rproc->dev, "failed to request mbox chan 0\n");
+			ret = PTR_ERR(chan);
 			goto free_clk;
 		}
 		ddata->mbox_chan[ST_RPROC_VQ0 * MBOX_MAX + MBOX_RX] = chan;
 
 		chan = mbox_request_channel_byname(&ddata->mbox_client_vq0, "vq0_tx");
 		if (IS_ERR(chan)) {
-			ret = dev_err_probe(&rproc->dev, PTR_ERR(chan),
-					    "failed to request mbox chan 0\n");
+			dev_err(&rproc->dev, "failed to request mbox chan 0\n");
+			ret = PTR_ERR(chan);
 			goto free_mbox;
 		}
 		ddata->mbox_chan[ST_RPROC_VQ0 * MBOX_MAX + MBOX_TX] = chan;
 
 		chan = mbox_request_channel_byname(&ddata->mbox_client_vq1, "vq1_rx");
 		if (IS_ERR(chan)) {
-			ret = dev_err_probe(&rproc->dev, PTR_ERR(chan),
-					    "failed to request mbox chan 1\n");
+			dev_err(&rproc->dev, "failed to request mbox chan 1\n");
+			ret = PTR_ERR(chan);
 			goto free_mbox;
 		}
 		ddata->mbox_chan[ST_RPROC_VQ1 * MBOX_MAX + MBOX_RX] = chan;
 
 		chan = mbox_request_channel_byname(&ddata->mbox_client_vq1, "vq1_tx");
 		if (IS_ERR(chan)) {
-			ret = dev_err_probe(&rproc->dev, PTR_ERR(chan),
-					    "failed to request mbox chan 1\n");
+			dev_err(&rproc->dev, "failed to request mbox chan 1\n");
+			ret = PTR_ERR(chan);
 			goto free_mbox;
 		}
 		ddata->mbox_chan[ST_RPROC_VQ1 * MBOX_MAX + MBOX_TX] = chan;
@@ -427,11 +443,12 @@ free_mbox:
 		mbox_free_channel(ddata->mbox_chan[i]);
 free_clk:
 	clk_unprepare(ddata->clk);
-
+free_rproc:
+	rproc_free(rproc);
 	return ret;
 }
 
-static void st_rproc_remove(struct platform_device *pdev)
+static int st_rproc_remove(struct platform_device *pdev)
 {
 	struct rproc *rproc = platform_get_drvdata(pdev);
 	struct st_rproc *ddata = rproc->priv;
@@ -443,6 +460,10 @@ static void st_rproc_remove(struct platform_device *pdev)
 
 	for (i = 0; i < ST_RPROC_MAX_VRING * MBOX_MAX; i++)
 		mbox_free_channel(ddata->mbox_chan[i]);
+
+	rproc_free(rproc);
+
+	return 0;
 }
 
 static struct platform_driver st_rproc_driver = {

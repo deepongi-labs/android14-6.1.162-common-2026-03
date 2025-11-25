@@ -55,7 +55,7 @@ struct coproc_instance {
 	struct vas_window *txwin;
 };
 
-static char *coproc_devnode(const struct device *dev, umode_t *mode)
+static char *coproc_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "crypto/%s", dev_name(dev));
 }
@@ -414,7 +414,7 @@ static vm_fault_t vas_mmap_fault(struct vm_fault *vmf)
 	/*
 	 * When the LPAR lost credits due to core removal or during
 	 * migration, invalidate the existing mapping for the current
-	 * paste addresses and set windows in-active (zap_vma_pages in
+	 * paste addresses and set windows in-active (zap_page_range in
 	 * reconfig_close_windows()).
 	 * New mapping will be done later after migration or new credits
 	 * available. So continue to receive faults if the user space
@@ -425,22 +425,23 @@ static vm_fault_t vas_mmap_fault(struct vm_fault *vmf)
 		return VM_FAULT_SIGBUS;
 	}
 
+	mutex_lock(&txwin->task_ref.mmap_mutex);
 	/*
 	 * The window may be inactive due to lost credit (Ex: core
 	 * removal with DLPAR). If the window is active again when
 	 * the credit is available, map the new paste address at the
 	 * window virtual address.
 	 */
-	scoped_guard(mutex, &txwin->task_ref.mmap_mutex) {
-		if (txwin->status == VAS_WIN_ACTIVE) {
-			paste_addr = cp_inst->coproc->vops->paste_addr(txwin);
-			if (paste_addr) {
-				fault = vmf_insert_pfn(vma, vma->vm_start,
-						(paste_addr >> PAGE_SHIFT));
-				return fault;
-			}
+	if (txwin->status == VAS_WIN_ACTIVE) {
+		paste_addr = cp_inst->coproc->vops->paste_addr(txwin);
+		if (paste_addr) {
+			fault = vmf_insert_pfn(vma, vma->vm_start,
+					(paste_addr >> PAGE_SHIFT));
+			mutex_unlock(&txwin->task_ref.mmap_mutex);
+			return fault;
 		}
 	}
+	mutex_unlock(&txwin->task_ref.mmap_mutex);
 
 	/*
 	 * Received this fault due to closing the actual window.
@@ -493,8 +494,9 @@ static void vas_mmap_close(struct vm_area_struct *vma)
 		return;
 	}
 
-	scoped_guard(mutex, &txwin->task_ref.mmap_mutex)
-		txwin->task_ref.vma = NULL;
+	mutex_lock(&txwin->task_ref.mmap_mutex);
+	txwin->task_ref.vma = NULL;
+	mutex_unlock(&txwin->task_ref.mmap_mutex);
 }
 
 static const struct vm_operations_struct vas_vm_ops = {
@@ -550,16 +552,18 @@ static int coproc_mmap(struct file *fp, struct vm_area_struct *vma)
 	 * close/open event and allows mmap() only when the window is
 	 * active.
 	 */
-	guard(mutex)(&txwin->task_ref.mmap_mutex);
+	mutex_lock(&txwin->task_ref.mmap_mutex);
 	if (txwin->status != VAS_WIN_ACTIVE) {
 		pr_err("Window is not active\n");
-		return -EACCES;
+		rc = -EACCES;
+		goto out;
 	}
 
 	paste_addr = cp_inst->coproc->vops->paste_addr(txwin);
 	if (!paste_addr) {
 		pr_err("Window paste address failed\n");
-		return -EINVAL;
+		rc = -EINVAL;
+		goto out;
 	}
 
 	pfn = paste_addr >> PAGE_SHIFT;
@@ -579,6 +583,8 @@ static int coproc_mmap(struct file *fp, struct vm_area_struct *vma)
 	txwin->task_ref.vma = vma;
 	vma->vm_ops = &vas_vm_ops;
 
+out:
+	mutex_unlock(&txwin->task_ref.mmap_mutex);
 	return rc;
 }
 
@@ -619,7 +625,7 @@ int vas_register_coproc_api(struct module *mod, enum vas_cop_type cop_type,
 	pr_devel("%s device allocated, dev [%i,%i]\n", name,
 			MAJOR(coproc_device.devt), MINOR(coproc_device.devt));
 
-	coproc_device.class = class_create(name);
+	coproc_device.class = class_create(mod, name);
 	if (IS_ERR(coproc_device.class)) {
 		rc = PTR_ERR(coproc_device.class);
 		pr_err("Unable to create %s class %d\n", name, rc);

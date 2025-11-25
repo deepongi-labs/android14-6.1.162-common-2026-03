@@ -95,9 +95,9 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
 		patch_state = current->patch_state;
 
-		WARN_ON_ONCE(patch_state == KLP_TRANSITION_IDLE);
+		WARN_ON_ONCE(patch_state == KLP_UNDEFINED);
 
-		if (patch_state == KLP_TRANSITION_UNPATCHED) {
+		if (patch_state == KLP_UNPATCHED) {
 			/*
 			 * Use the previously patched version of the function.
 			 * If no previous patches exist, continue with the
@@ -118,7 +118,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (func->nop)
 		goto unlock;
 
-	ftrace_regs_set_instruction_pointer(fregs, (unsigned long)func->new_func);
+	ftrace_instruction_pointer_set(fregs, (unsigned long)func->new_func);
 
 unlock:
 	ftrace_test_recursion_unlock(bit);

@@ -35,7 +35,6 @@
 #include <net/sock.h>
 #include <linux/in.h>
 #include <linux/export.h>
-#include <linux/sched/clock.h>
 #include <linux/time.h>
 #include <linux/rds.h>
 
@@ -202,8 +201,8 @@ static void rds_recv_hs_exthdrs(struct rds_header *hdr,
 	unsigned int pos = 0, type, len;
 	union {
 		struct rds_ext_header_version version;
-		__be16 rds_npaths;
-		__be32 rds_gen_num;
+		u16 rds_npaths;
+		u32 rds_gen_num;
 	} buffer;
 	u32 new_peer_gen_num = 0;
 

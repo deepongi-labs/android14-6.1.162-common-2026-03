@@ -237,7 +237,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs)
 	if (is_write(regs))
 		flags |= FAULT_FLAG_WRITE;
 retry:
-	vma = lock_mm_and_find_vma(mm, addr, regs);
+	vma = lock_mm_and_find_vma(mm, address, regs);
 	if (unlikely(!vma)) {
 		bad_area_nosemaphore(regs, mm, code, addr);
 		return;
@@ -277,7 +277,7 @@ retry:
 	if (fault & VM_FAULT_COMPLETED)
 		return;
 
-	if (unlikely(fault & VM_FAULT_RETRY)) {
+	if (unlikely((fault & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))) {
 		flags |= FAULT_FLAG_TRIED;
 
 		/*

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Combined Ethernet driver for Motorola MPC8xx and MPC82xx.
  *
@@ -7,6 +6,10 @@
  *
  * 2005 (c) MontaVista Software, Inc.
  * Vitaly Bordug <vbordug@ru.mvista.com>
+ *
+ * This file is licensed under the terms of the GNU General Public License
+ * version 2. This program is licensed "as is" without any warranty of any
+ * kind, whether express or implied.
  */
 
 #include <linux/module.h>
@@ -26,8 +29,8 @@
 
 struct bb_info {
 	struct mdiobb_ctrl ctrl;
-	u32 __iomem *dir;
-	u32 __iomem *dat;
+	__be32 __iomem *dir;
+	__be32 __iomem *dat;
 	u32 mdio_msk;
 	u32 mdc_msk;
 };
@@ -189,7 +192,7 @@ out:
 	return ret;
 }
 
-static void fs_enet_mdio_remove(struct platform_device *ofdev)
+static int fs_enet_mdio_remove(struct platform_device *ofdev)
 {
 	struct mii_bus *bus = platform_get_drvdata(ofdev);
 	struct bb_info *bitbang = bus->priv;
@@ -198,6 +201,8 @@ static void fs_enet_mdio_remove(struct platform_device *ofdev)
 	free_mdio_bitbang(bus);
 	iounmap(bitbang->dir);
 	kfree(bitbang);
+
+	return 0;
 }
 
 static const struct of_device_id fs_enet_mdio_bb_match[] = {

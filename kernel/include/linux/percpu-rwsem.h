@@ -8,7 +8,9 @@
 #include <linux/wait.h>
 #include <linux/rcu_sync.h>
 #include <linux/lockdep.h>
-#include <linux/cleanup.h>
+
+void _trace_android_vh_record_pcpu_rwsem_starttime(
+		struct task_struct *tsk, unsigned long settime);
 
 struct percpu_rw_semaphore {
 	struct rcu_sync		rss;
@@ -20,6 +22,9 @@ struct percpu_rw_semaphore {
 	struct lockdep_map	dep_map;
 #endif
 };
+
+void _trace_android_vh_record_pcpu_rwsem_time_early(
+		unsigned long settime, struct percpu_rw_semaphore *sem);
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 #define __PERCPU_RWSEM_DEP_MAP_INIT(lockname)	.dep_map = { .name = #lockname },
@@ -43,16 +48,17 @@ is_static struct percpu_rw_semaphore name = {				\
 #define DEFINE_STATIC_PERCPU_RWSEM(name)	\
 	__DEFINE_PERCPU_RWSEM(name, static)
 
-extern bool __percpu_down_read(struct percpu_rw_semaphore *, bool, bool);
+extern bool __percpu_down_read(struct percpu_rw_semaphore *, bool);
 
-static inline void percpu_down_read_internal(struct percpu_rw_semaphore *sem,
-					     bool freezable)
+static inline void percpu_down_read(struct percpu_rw_semaphore *sem)
 {
 	might_sleep();
 
 	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
 
 	preempt_disable();
+	_trace_android_vh_record_pcpu_rwsem_time_early(jiffies, sem);
+
 	/*
 	 * We are in an RCU-sched read-side critical section, so the writer
 	 * cannot both change sem->state from readers_fast and start checking
@@ -64,23 +70,13 @@ static inline void percpu_down_read_internal(struct percpu_rw_semaphore *sem,
 	if (likely(rcu_sync_is_idle(&sem->rss)))
 		this_cpu_inc(*sem->read_count);
 	else
-		__percpu_down_read(sem, false, freezable); /* Unconditional memory barrier */
+		__percpu_down_read(sem, false); /* Unconditional memory barrier */
 	/*
 	 * The preempt_enable() prevents the compiler from
 	 * bleeding the critical section out.
 	 */
 	preempt_enable();
-}
-
-static inline void percpu_down_read(struct percpu_rw_semaphore *sem)
-{
-	percpu_down_read_internal(sem, false);
-}
-
-static inline void percpu_down_read_freezable(struct percpu_rw_semaphore *sem,
-					      bool freeze)
-{
-	percpu_down_read_internal(sem, freeze);
+	_trace_android_vh_record_pcpu_rwsem_starttime(current, jiffies);
 }
 
 static inline bool percpu_down_read_trylock(struct percpu_rw_semaphore *sem)
@@ -94,15 +90,18 @@ static inline bool percpu_down_read_trylock(struct percpu_rw_semaphore *sem)
 	if (likely(rcu_sync_is_idle(&sem->rss)))
 		this_cpu_inc(*sem->read_count);
 	else
-		ret = __percpu_down_read(sem, true, false); /* Unconditional memory barrier */
+		ret = __percpu_down_read(sem, true); /* Unconditional memory barrier */
 	preempt_enable();
 	/*
 	 * The barrier() from preempt_enable() prevents the compiler from
 	 * bleeding the critical section out.
 	 */
 
-	if (ret)
+	if (ret) {
+		_trace_android_vh_record_pcpu_rwsem_time_early(jiffies, sem);
+		_trace_android_vh_record_pcpu_rwsem_starttime(current, jiffies);
 		rwsem_acquire_read(&sem->dep_map, 0, 1, _RET_IP_);
+	}
 
 	return ret;
 }
@@ -131,19 +130,14 @@ static inline void percpu_up_read(struct percpu_rw_semaphore *sem)
 		this_cpu_dec(*sem->read_count);
 		rcuwait_wake_up(&sem->writer);
 	}
+	_trace_android_vh_record_pcpu_rwsem_time_early(0, sem);
+	_trace_android_vh_record_pcpu_rwsem_starttime(current, 0);
 	preempt_enable();
 }
 
 extern bool percpu_is_read_locked(struct percpu_rw_semaphore *);
 extern void percpu_down_write(struct percpu_rw_semaphore *);
 extern void percpu_up_write(struct percpu_rw_semaphore *);
-
-DEFINE_GUARD(percpu_read, struct percpu_rw_semaphore *,
-	     percpu_down_read(_T), percpu_up_read(_T))
-DEFINE_GUARD_COND(percpu_read, _try, percpu_down_read_trylock(_T))
-
-DEFINE_GUARD(percpu_write, struct percpu_rw_semaphore *,
-	     percpu_down_write(_T), percpu_up_write(_T))
 
 static inline bool percpu_is_write_locked(struct percpu_rw_semaphore *sem)
 {
@@ -165,7 +159,7 @@ extern void percpu_free_rwsem(struct percpu_rw_semaphore *);
 #define percpu_rwsem_assert_held(sem)	lockdep_assert_held(sem)
 
 static inline void percpu_rwsem_release(struct percpu_rw_semaphore *sem,
-					unsigned long ip)
+					bool read, unsigned long ip)
 {
 	lock_release(&sem->dep_map, ip);
 }

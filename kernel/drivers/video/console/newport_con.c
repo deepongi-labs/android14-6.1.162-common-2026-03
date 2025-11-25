@@ -367,8 +367,8 @@ static void newport_clear(struct vc_data *vc, unsigned int sy, unsigned int sx,
 	}
 }
 
-static void newport_putc(struct vc_data *vc, u16 charattr, unsigned int ypos,
-			 unsigned int xpos)
+static void newport_putc(struct vc_data *vc, int charattr, int ypos,
+			 int xpos)
 {
 	unsigned char *p;
 
@@ -396,13 +396,12 @@ static void newport_putc(struct vc_data *vc, u16 charattr, unsigned int ypos,
 	RENDER(npregs, p);
 }
 
-static void newport_putcs(struct vc_data *vc, const u16 *s,
-			  unsigned int count, unsigned int ypos,
-			  unsigned int xpos)
+static void newport_putcs(struct vc_data *vc, const unsigned short *s,
+			  int count, int ypos, int xpos)
 {
+	int i;
+	int charattr;
 	unsigned char *p;
-	unsigned int i;
-	u16 charattr;
 
 	charattr = (scr_readw(s) >> 8) & 0xff;
 
@@ -438,25 +437,29 @@ static void newport_putcs(struct vc_data *vc, const u16 *s,
 	}
 }
 
-static void newport_cursor(struct vc_data *vc, bool enable)
+static void newport_cursor(struct vc_data *vc, int mode)
 {
 	unsigned short treg;
 	int xcurs, ycurs;
 
-	treg = newport_vc2_get(npregs, VC2_IREG_CONTROL);
-
-	if (!enable) {
+	switch (mode) {
+	case CM_ERASE:
+		treg = newport_vc2_get(npregs, VC2_IREG_CONTROL);
 		newport_vc2_set(npregs, VC2_IREG_CONTROL,
 				(treg & ~(VC2_CTRL_ECDISP)));
-		return;
-	}
+		break;
 
-	newport_vc2_set(npregs, VC2_IREG_CONTROL, (treg | VC2_CTRL_ECDISP));
-	xcurs = (vc->vc_pos - vc->vc_visible_origin) / 2;
-	ycurs = ((xcurs / vc->vc_cols) << 4) + 31;
-	xcurs = ((xcurs % vc->vc_cols) << 3) + xcurs_correction;
-	newport_vc2_set(npregs, VC2_IREG_CURSX, xcurs);
-	newport_vc2_set(npregs, VC2_IREG_CURSY, ycurs);
+	case CM_MOVE:
+	case CM_DRAW:
+		treg = newport_vc2_get(npregs, VC2_IREG_CONTROL);
+		newport_vc2_set(npregs, VC2_IREG_CONTROL,
+				(treg | VC2_CTRL_ECDISP));
+		xcurs = (vc->vc_pos - vc->vc_visible_origin) / 2;
+		ycurs = ((xcurs / vc->vc_cols) << 4) + 31;
+		xcurs = ((xcurs % vc->vc_cols) << 3) + xcurs_correction;
+		newport_vc2_set(npregs, VC2_IREG_CURSX, xcurs);
+		newport_vc2_set(npregs, VC2_IREG_CURSY, ycurs);
+	}
 }
 
 static bool newport_switch(struct vc_data *vc)
@@ -476,12 +479,11 @@ static bool newport_switch(struct vc_data *vc)
 	return true;
 }
 
-static bool newport_blank(struct vc_data *c, enum vesa_blank_mode blank,
-			  bool mode_switch)
+static int newport_blank(struct vc_data *c, int blank, int mode_switch)
 {
 	unsigned short treg;
 
-	if (blank == VESA_NO_BLANKING) {
+	if (blank == 0) {
 		/* unblank console */
 		treg = newport_vc2_get(npregs, VC2_IREG_CONTROL);
 		newport_vc2_set(npregs, VC2_IREG_CONTROL,
@@ -492,12 +494,10 @@ static bool newport_blank(struct vc_data *c, enum vesa_blank_mode blank,
 		newport_vc2_set(npregs, VC2_IREG_CONTROL,
 				(treg & ~(VC2_CTRL_EDISP)));
 	}
-
-	return true;
+	return 1;
 }
 
-static int newport_set_font(int unit, const struct console_font *op,
-			    unsigned int vpitch)
+static int newport_set_font(int unit, struct console_font *op)
 {
 	int w = op->width;
 	int h = op->height;
@@ -507,7 +507,7 @@ static int newport_set_font(int unit, const struct console_font *op,
 
 	/* ladis: when I grow up, there will be a day... and more sizes will
 	 * be supported ;-) */
-	if ((w != 8) || (h != 16) || (vpitch != 32)
+	if ((w != 8) || (h != 16)
 	    || (op->charcount != 256 && op->charcount != 512))
 		return -EINVAL;
 
@@ -564,16 +564,14 @@ static int newport_set_def_font(int unit, struct console_font *op)
 	return 0;
 }
 
-static int newport_font_default(struct vc_data *vc, struct console_font *op,
-				const char *name)
+static int newport_font_default(struct vc_data *vc, struct console_font *op, char *name)
 {
 	return newport_set_def_font(vc->vc_num, op);
 }
 
-static int newport_font_set(struct vc_data *vc, const struct console_font *font,
-			    unsigned int vpitch, unsigned int flags)
+static int newport_font_set(struct vc_data *vc, struct console_font *font, unsigned flags)
 {
-	return newport_set_font(vc->vc_num, font, vpitch);
+	return newport_set_font(vc->vc_num, font);
 }
 
 static bool newport_scroll(struct vc_data *vc, unsigned int t, unsigned int b,
@@ -744,5 +742,4 @@ static struct gio_driver newport_driver = {
 };
 module_driver(newport_driver, gio_register_driver, gio_unregister_driver);
 
-MODULE_DESCRIPTION("SGI Newport console driver");
 MODULE_LICENSE("GPL");

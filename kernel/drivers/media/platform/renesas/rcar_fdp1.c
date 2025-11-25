@@ -18,6 +18,7 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/sched.h>
@@ -253,8 +254,7 @@ MODULE_PARM_DESC(debug, "activate debug info");
 
 /* Internal Data (HW Version) */
 #define FD1_IP_INTDATA			0x0800
-/* R-Car Gen2 HW manual says zero, but actual value matches R-Car H3 ES1.x */
-#define FD1_IP_GEN2			0x02010101
+#define FD1_IP_H3_ES1			0x02010101
 #define FD1_IP_M3W			0x02010202
 #define FD1_IP_H3			0x02010203
 #define FD1_IP_M3N			0x02010204
@@ -630,9 +630,9 @@ struct fdp1_ctx {
 	struct fdp1_field_buffer	*previous;
 };
 
-static inline struct fdp1_ctx *file_to_ctx(struct file *filp)
+static inline struct fdp1_ctx *fh_to_ctx(struct v4l2_fh *fh)
 {
-	return container_of(file_to_v4l2_fh(filp), struct fdp1_ctx, fh);
+	return container_of(fh, struct fdp1_ctx, fh);
 }
 
 static struct fdp1_q_data *get_q_data(struct fdp1_ctx *ctx,
@@ -1406,8 +1406,8 @@ static int fdp1_enum_fmt_vid_out(struct file *file, void *priv,
 
 static int fdp1_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
-	struct fdp1_ctx *ctx = file_to_ctx(file);
 	struct fdp1_q_data *q_data;
+	struct fdp1_ctx *ctx = fh_to_ctx(priv);
 
 	if (!v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type))
 		return -EINVAL;
@@ -1584,7 +1584,7 @@ static void fdp1_try_fmt_capture(struct fdp1_ctx *ctx,
 
 static int fdp1_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
-	struct fdp1_ctx *ctx = file_to_ctx(file);
+	struct fdp1_ctx *ctx = fh_to_ctx(priv);
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		fdp1_try_fmt_output(ctx, NULL, &f->fmt.pix_mp);
@@ -1655,7 +1655,7 @@ static void fdp1_set_format(struct fdp1_ctx *ctx,
 
 static int fdp1_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
-	struct fdp1_ctx *ctx = file_to_ctx(file);
+	struct fdp1_ctx *ctx = fh_to_ctx(priv);
 	struct v4l2_m2m_ctx *m2m_ctx = ctx->fh.m2m_ctx;
 	struct vb2_queue *vq = v4l2_m2m_get_vq(m2m_ctx, f->type);
 
@@ -2032,6 +2032,8 @@ static const struct vb2_ops fdp1_qops = {
 	.buf_queue	 = fdp1_buf_queue,
 	.start_streaming = fdp1_start_streaming,
 	.stop_streaming  = fdp1_stop_streaming,
+	.wait_prepare	 = vb2_ops_wait_prepare,
+	.wait_finish	 = vb2_ops_wait_finish,
 };
 
 static int queue_init(void *priv, struct vb2_queue *src_vq,
@@ -2088,6 +2090,7 @@ static int fdp1_open(struct file *file)
 	}
 
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
+	file->private_data = &ctx->fh;
 	ctx->fdp1 = fdp1;
 
 	/* Initialise Queues */
@@ -2136,7 +2139,7 @@ static int fdp1_open(struct file *file)
 	if (ret < 0)
 		goto error_pm;
 
-	v4l2_fh_add(&ctx->fh, file);
+	v4l2_fh_add(&ctx->fh);
 
 	dprintk(fdp1, "Created instance: %p, m2m_ctx: %p\n",
 		ctx, ctx->fh.m2m_ctx);
@@ -2157,11 +2160,11 @@ done:
 static int fdp1_release(struct file *file)
 {
 	struct fdp1_dev *fdp1 = video_drvdata(file);
-	struct fdp1_ctx *ctx = file_to_ctx(file);
+	struct fdp1_ctx *ctx = fh_to_ctx(file->private_data);
 
 	dprintk(fdp1, "Releasing instance %p\n", ctx);
 
-	v4l2_fh_del(&ctx->fh, file);
+	v4l2_fh_del(&ctx->fh);
 	v4l2_fh_exit(&ctx->fh);
 	v4l2_ctrl_handler_free(&ctx->hdl);
 	mutex_lock(&fdp1->dev_mutex);
@@ -2358,8 +2361,8 @@ static int fdp1_probe(struct platform_device *pdev)
 
 	hw_version = fdp1_read(fdp1, FD1_IP_INTDATA);
 	switch (hw_version) {
-	case FD1_IP_GEN2:
-		dprintk(fdp1, "FDP1 Version R-Car Gen2\n");
+	case FD1_IP_H3_ES1:
+		dprintk(fdp1, "FDP1 Version R-Car H3 ES1\n");
 		break;
 	case FD1_IP_M3W:
 		dprintk(fdp1, "FDP1 Version R-Car M3-W\n");
@@ -2397,7 +2400,7 @@ put_dev:
 	return ret;
 }
 
-static void fdp1_remove(struct platform_device *pdev)
+static int fdp1_remove(struct platform_device *pdev)
 {
 	struct fdp1_dev *fdp1 = platform_get_drvdata(pdev);
 
@@ -2406,9 +2409,11 @@ static void fdp1_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&fdp1->v4l2_dev);
 	pm_runtime_disable(&pdev->dev);
 	rcar_fcp_put(fdp1->fcp);
+
+	return 0;
 }
 
-static int fdp1_pm_runtime_suspend(struct device *dev)
+static int __maybe_unused fdp1_pm_runtime_suspend(struct device *dev)
 {
 	struct fdp1_dev *fdp1 = dev_get_drvdata(dev);
 
@@ -2417,7 +2422,7 @@ static int fdp1_pm_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int fdp1_pm_runtime_resume(struct device *dev)
+static int __maybe_unused fdp1_pm_runtime_resume(struct device *dev)
 {
 	struct fdp1_dev *fdp1 = dev_get_drvdata(dev);
 
@@ -2428,7 +2433,9 @@ static int fdp1_pm_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops fdp1_pm_ops = {
-	RUNTIME_PM_OPS(fdp1_pm_runtime_suspend, fdp1_pm_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(fdp1_pm_runtime_suspend,
+			   fdp1_pm_runtime_resume,
+			   NULL)
 };
 
 static const struct of_device_id fdp1_dt_ids[] = {
@@ -2443,7 +2450,7 @@ static struct platform_driver fdp1_pdrv = {
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.of_match_table = fdp1_dt_ids,
-		.pm	= pm_ptr(&fdp1_pm_ops),
+		.pm	= &fdp1_pm_ops,
 	},
 };
 

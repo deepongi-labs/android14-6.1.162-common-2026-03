@@ -32,7 +32,6 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/i2c-pxa.h>
-#include <linux/property.h>
 #include <linux/slab.h>
 
 /* I2C register field definitions */
@@ -218,7 +217,7 @@ static const struct platform_device_id i2c_pxa_id_table[] = {
 	{ "ce4100-i2c",		REGS_CE4100 },
 	{ "pxa910-i2c",		REGS_PXA910 },
 	{ "armada-3700-i2c",	REGS_A3700  },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(platform, i2c_pxa_id_table);
 
@@ -324,7 +323,6 @@ static void decode_ISR(unsigned int val)
 	decode_bits(KERN_DEBUG "ISR", isr_bits, ARRAY_SIZE(isr_bits), val);
 }
 
-#ifdef CONFIG_I2C_PXA_SLAVE
 static const struct bits icr_bits[] = {
 	PXA_BIT(ICR_START,  "START",	NULL),
 	PXA_BIT(ICR_STOP,   "STOP",	NULL),
@@ -343,6 +341,7 @@ static const struct bits icr_bits[] = {
 	PXA_BIT(ICR_UR,     "UR",		"ur"),
 };
 
+#ifdef CONFIG_I2C_PXA_SLAVE
 static void decode_ICR(unsigned int val)
 {
 	decode_bits(KERN_DEBUG "ICR", icr_bits, ARRAY_SIZE(icr_bits), val);
@@ -826,7 +825,7 @@ static inline void i2c_pxa_stop_message(struct pxa_i2c *i2c)
 static int i2c_pxa_send_mastercode(struct pxa_i2c *i2c)
 {
 	u32 icr;
-	long time_left;
+	long timeout;
 
 	spin_lock_irq(&i2c->lock);
 	i2c->highmode_enter = true;
@@ -837,12 +836,12 @@ static int i2c_pxa_send_mastercode(struct pxa_i2c *i2c)
 	writel(icr, _ICR(i2c));
 
 	spin_unlock_irq(&i2c->lock);
-	time_left = wait_event_timeout(i2c->wait,
-				       i2c->highmode_enter == false, HZ * 1);
+	timeout = wait_event_timeout(i2c->wait,
+			i2c->highmode_enter == false, HZ * 1);
 
 	i2c->highmode_enter = false;
 
-	return (time_left == 0) ? I2C_RETRY : 0;
+	return (timeout == 0) ? I2C_RETRY : 0;
 }
 
 /*
@@ -1050,7 +1049,7 @@ static irqreturn_t i2c_pxa_handler(int this_irq, void *dev_id)
  */
 static int i2c_pxa_do_xfer(struct pxa_i2c *i2c, struct i2c_msg *msg, int num)
 {
-	long time_left;
+	long timeout;
 	int ret;
 
 	/*
@@ -1095,7 +1094,7 @@ static int i2c_pxa_do_xfer(struct pxa_i2c *i2c, struct i2c_msg *msg, int num)
 	/*
 	 * The rest of the processing occurs in the interrupt handler.
 	 */
-	time_left = wait_event_timeout(i2c->wait, i2c->msg_num == 0, HZ * 5);
+	timeout = wait_event_timeout(i2c->wait, i2c->msg_num == 0, HZ * 5);
 	i2c_pxa_stop_message(i2c);
 
 	/*
@@ -1103,7 +1102,7 @@ static int i2c_pxa_do_xfer(struct pxa_i2c *i2c, struct i2c_msg *msg, int num)
 	 */
 	ret = i2c->msg_idx;
 
-	if (!time_left && i2c->msg_num) {
+	if (!timeout && i2c->msg_num) {
 		i2c_pxa_scream_blue_murder(i2c, "timeout with active message");
 		i2c_recover_bus(&i2c->adap);
 		ret = I2C_RETRY;
@@ -1154,11 +1153,11 @@ static u32 i2c_pxa_functionality(struct i2c_adapter *adap)
 }
 
 static const struct i2c_algorithm i2c_pxa_algorithm = {
-	.xfer = i2c_pxa_xfer,
-	.functionality = i2c_pxa_functionality,
+	.master_xfer	= i2c_pxa_xfer,
+	.functionality	= i2c_pxa_functionality,
 #ifdef CONFIG_I2C_PXA_SLAVE
-	.reg_slave = i2c_pxa_slave_reg,
-	.unreg_slave = i2c_pxa_slave_unreg,
+	.reg_slave	= i2c_pxa_slave_reg,
+	.unreg_slave	= i2c_pxa_slave_unreg,
 #endif
 };
 
@@ -1244,11 +1243,11 @@ static int i2c_pxa_pio_xfer(struct i2c_adapter *adap,
 }
 
 static const struct i2c_algorithm i2c_pxa_pio_algorithm = {
-	.xfer = i2c_pxa_pio_xfer,
-	.functionality = i2c_pxa_functionality,
+	.master_xfer	= i2c_pxa_pio_xfer,
+	.functionality	= i2c_pxa_functionality,
 #ifdef CONFIG_I2C_PXA_SLAVE
-	.reg_slave = i2c_pxa_slave_reg,
-	.unreg_slave = i2c_pxa_slave_unreg,
+	.reg_slave	= i2c_pxa_slave_reg,
+	.unreg_slave	= i2c_pxa_slave_unreg,
 #endif
 };
 
@@ -1256,17 +1255,21 @@ static int i2c_pxa_probe_dt(struct platform_device *pdev, struct pxa_i2c *i2c,
 			    enum pxa_i2c_types *i2c_types)
 {
 	struct device_node *np = pdev->dev.of_node;
+	const struct of_device_id *of_id =
+			of_match_device(i2c_pxa_dt_ids, &pdev->dev);
 
-	if (!pdev->dev.of_node)
+	if (!of_id)
 		return 1;
 
 	/* For device tree we always use the dynamic or alias-assigned ID */
 	i2c->adap.nr = -1;
 
-	i2c->use_pio = of_property_read_bool(np, "mrvl,i2c-polling");
-	i2c->fast_mode = of_property_read_bool(np, "mrvl,i2c-fast-mode");
+	if (of_get_property(np, "mrvl,i2c-polling", NULL))
+		i2c->use_pio = 1;
+	if (of_get_property(np, "mrvl,i2c-fast-mode", NULL))
+		i2c->fast_mode = 1;
 
-	*i2c_types = (enum pxa_i2c_types)device_get_match_data(&pdev->dev);
+	*i2c_types = (enum pxa_i2c_types)(of_id->data);
 
 	return 0;
 }
@@ -1421,7 +1424,7 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	struct i2c_pxa_platform_data *plat = dev_get_platdata(&dev->dev);
 	enum pxa_i2c_types i2c_type;
 	struct pxa_i2c *i2c;
-	struct resource *res;
+	struct resource *res = NULL;
 	int ret, irq;
 
 	i2c = devm_kzalloc(&dev->dev, sizeof(struct pxa_i2c), GFP_KERNEL);
@@ -1438,7 +1441,8 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	i2c->adap.dev.of_node = dev->dev.of_node;
 #endif
 
-	i2c->reg_base = devm_platform_get_and_ioremap_resource(dev, 0, &res);
+	res = platform_get_resource(dev, IORESOURCE_MEM, 0);
+	i2c->reg_base = devm_ioremap_resource(&dev->dev, res);
 	if (IS_ERR(i2c->reg_base))
 		return PTR_ERR(i2c->reg_base);
 
@@ -1462,9 +1466,10 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	strscpy(i2c->adap.name, "pxa_i2c-i2c", sizeof(i2c->adap.name));
 
 	i2c->clk = devm_clk_get(&dev->dev, NULL);
-	if (IS_ERR(i2c->clk))
-		return dev_err_probe(&dev->dev, PTR_ERR(i2c->clk),
-				     "failed to get the clk\n");
+	if (IS_ERR(i2c->clk)) {
+		dev_err(&dev->dev, "failed to get the clk: %ld\n", PTR_ERR(i2c->clk));
+		return PTR_ERR(i2c->clk);
+	}
 
 	i2c->reg_ibmr = i2c->reg_base + pxa_reg_layout[i2c_type].ibmr;
 	i2c->reg_idbr = i2c->reg_base + pxa_reg_layout[i2c_type].idbr;
@@ -1542,15 +1547,18 @@ ereqirq:
 	return ret;
 }
 
-static void i2c_pxa_remove(struct platform_device *dev)
+static int i2c_pxa_remove(struct platform_device *dev)
 {
 	struct pxa_i2c *i2c = platform_get_drvdata(dev);
 
 	i2c_del_adapter(&i2c->adap);
 
 	clk_disable_unprepare(i2c->clk);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM
 static int i2c_pxa_suspend_noirq(struct device *dev)
 {
 	struct pxa_i2c *i2c = dev_get_drvdata(dev);
@@ -1575,12 +1583,17 @@ static const struct dev_pm_ops i2c_pxa_dev_pm_ops = {
 	.resume_noirq = i2c_pxa_resume_noirq,
 };
 
+#define I2C_PXA_DEV_PM_OPS (&i2c_pxa_dev_pm_ops)
+#else
+#define I2C_PXA_DEV_PM_OPS NULL
+#endif
+
 static struct platform_driver i2c_pxa_driver = {
 	.probe		= i2c_pxa_probe,
 	.remove		= i2c_pxa_remove,
 	.driver		= {
 		.name	= "pxa2xx-i2c",
-		.pm	= pm_sleep_ptr(&i2c_pxa_dev_pm_ops),
+		.pm	= I2C_PXA_DEV_PM_OPS,
 		.of_match_table = i2c_pxa_dt_ids,
 	},
 	.id_table	= i2c_pxa_id_table,
@@ -1596,7 +1609,6 @@ static void __exit i2c_adap_pxa_exit(void)
 	platform_driver_unregister(&i2c_pxa_driver);
 }
 
-MODULE_DESCRIPTION("Intel PXA2XX I2C adapter");
 MODULE_LICENSE("GPL");
 
 subsys_initcall(i2c_adap_pxa_init);

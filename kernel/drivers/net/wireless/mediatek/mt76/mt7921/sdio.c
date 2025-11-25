@@ -13,12 +13,11 @@
 
 #include "mt7921.h"
 #include "../sdio.h"
-#include "../mt76_connac2_mac.h"
+#include "mac.h"
 #include "mcu.h"
 
 static const struct sdio_device_id mt7921s_table[] = {
-	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, 0x7901),
-		.driver_data = (kernel_ulong_t)MT7921_FIRMWARE_WM },
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_MEDIATEK, 0x7901) },
 	{ }	/* Terminating entry */
 };
 
@@ -27,7 +26,7 @@ static void mt7921s_txrx_worker(struct mt76_worker *w)
 	struct mt76_sdio *sdio = container_of(w, struct mt76_sdio,
 					      txrx_worker);
 	struct mt76_dev *mdev = container_of(sdio, struct mt76_dev, sdio);
-	struct mt792x_dev *dev = container_of(mdev, struct mt792x_dev, mt76);
+	struct mt7921_dev *dev = container_of(mdev, struct mt7921_dev, mt76);
 
 	if (!mt76_connac_pm_ref(&dev->mphy, &dev->pm)) {
 		queue_work(mdev->wq, &dev->pm.wake_work);
@@ -38,7 +37,7 @@ static void mt7921s_txrx_worker(struct mt76_worker *w)
 	mt76_connac_pm_unref(&dev->mphy, &dev->pm);
 }
 
-static void mt7921s_unregister_device(struct mt792x_dev *dev)
+static void mt7921s_unregister_device(struct mt7921_dev *dev)
 {
 	struct mt76_connac_pm *pm = &dev->pm;
 
@@ -90,7 +89,6 @@ static int mt7921s_probe(struct sdio_func *func,
 {
 	static const struct mt76_driver_ops drv_ops = {
 		.txwi_size = MT_SDIO_TXD_SIZE,
-		.drv_flags = MT_DRV_AMSDU_OFFLOAD,
 		.survey_flags = SURVEY_INFO_TIME_TX |
 				SURVEY_INFO_TIME_RX |
 				SURVEY_INFO_TIME_BSS_RX,
@@ -99,11 +97,11 @@ static int mt7921s_probe(struct sdio_func *func,
 		.tx_status_data = mt7921_usb_sdio_tx_status_data,
 		.rx_skb = mt7921_queue_rx_skb,
 		.rx_check = mt7921_rx_check,
+		.sta_ps = mt7921_sta_ps,
 		.sta_add = mt7921_mac_sta_add,
-		.sta_event = mt7921_mac_sta_event,
+		.sta_assoc = mt7921_mac_sta_assoc,
 		.sta_remove = mt7921_mac_sta_remove,
-		.update_survey = mt792x_update_channel,
-		.set_channel = mt7921_set_channel,
+		.update_survey = mt7921_update_channel,
 	};
 	static const struct mt76_bus_ops mt7921s_ops = {
 		.rr = mt76s_rr,
@@ -115,31 +113,26 @@ static int mt7921s_probe(struct sdio_func *func,
 		.rd_rp = mt76s_rd_rp,
 		.type = MT76_BUS_SDIO,
 	};
-	static const struct mt792x_hif_ops mt7921_sdio_ops = {
+	static const struct mt7921_hif_ops mt7921_sdio_ops = {
 		.init_reset = mt7921s_init_reset,
 		.reset = mt7921s_mac_reset,
 		.mcu_init = mt7921s_mcu_init,
 		.drv_own = mt7921s_mcu_drv_pmctrl,
 		.fw_own = mt7921s_mcu_fw_pmctrl,
 	};
-	struct ieee80211_ops *ops;
-	struct mt792x_dev *dev;
+
+	struct mt7921_dev *dev;
 	struct mt76_dev *mdev;
-	u8 features;
 	int ret;
 
-	ops = mt792x_get_mac80211_ops(&func->dev, &mt7921_ops,
-				      (void *)id->driver_data, &features);
-	if (!ops)
-		return -ENOMEM;
-
-	mdev = mt76_alloc_device(&func->dev, sizeof(*dev), ops, &drv_ops);
+	mdev = mt76_alloc_device(&func->dev, sizeof(*dev), &mt7921_ops,
+				 &drv_ops);
 	if (!mdev)
 		return -ENOMEM;
 
-	dev = container_of(mdev, struct mt792x_dev, mt76);
-	dev->fw_features = features;
+	dev = container_of(mdev, struct mt7921_dev, mt76);
 	dev->hif_ops = &mt7921_sdio_ops;
+
 	sdio_set_drvdata(func, dev);
 
 	ret = mt76s_init(mdev, func, &mt7921s_ops);
@@ -149,8 +142,6 @@ static int mt7921s_probe(struct sdio_func *func,
 	ret = mt76s_hw_init(mdev, func, MT76_CONNAC2_SDIO);
 	if (ret)
 		goto error;
-
-	atomic_set(&mdev->bus_hung, false);
 
 	mdev->rev = (mt76_rr(dev, MT_HW_CHIPID) << 16) |
 		    (mt76_rr(dev, MT_HW_REV) & 0xff);
@@ -199,7 +190,7 @@ error:
 
 static void mt7921s_remove(struct sdio_func *func)
 {
-	struct mt792x_dev *dev = sdio_get_drvdata(func);
+	struct mt7921_dev *dev = sdio_get_drvdata(func);
 
 	mt7921s_unregister_device(dev);
 }
@@ -207,7 +198,7 @@ static void mt7921s_remove(struct sdio_func *func)
 static int mt7921s_suspend(struct device *__dev)
 {
 	struct sdio_func *func = dev_to_sdio_func(__dev);
-	struct mt792x_dev *dev = sdio_get_drvdata(func);
+	struct mt7921_dev *dev = sdio_get_drvdata(func);
 	struct mt76_connac_pm *pm = &dev->pm;
 	struct mt76_dev *mdev = &dev->mt76;
 	int err;
@@ -219,9 +210,7 @@ static int mt7921s_suspend(struct device *__dev)
 	cancel_delayed_work_sync(&pm->ps_work);
 	cancel_work_sync(&pm->wake_work);
 
-	mt7921_roc_abort_sync(dev);
-
-	err = mt792x_mcu_drv_pmctrl(dev);
+	err = mt7921_mcu_drv_pmctrl(dev);
 	if (err < 0)
 		goto restore_suspend;
 
@@ -242,14 +231,14 @@ static int mt7921s_suspend(struct device *__dev)
 			   mt76s_txqs_empty(&dev->mt76), 5 * HZ);
 
 	/* It is supposed that SDIO bus is idle at the point */
-	err = mt76_connac_mcu_set_hif_suspend(mdev, true, true);
+	err = mt76_connac_mcu_set_hif_suspend(mdev, true);
 	if (err)
 		goto restore_worker;
 
 	mt76_worker_disable(&mdev->sdio.txrx_worker);
 	mt76_worker_disable(&mdev->sdio.net_worker);
 
-	err = mt792x_mcu_fw_pmctrl(dev);
+	err = mt7921_mcu_fw_pmctrl(dev);
 	if (err)
 		goto restore_txrx_worker;
 
@@ -260,7 +249,7 @@ static int mt7921s_suspend(struct device *__dev)
 restore_txrx_worker:
 	mt76_worker_enable(&mdev->sdio.net_worker);
 	mt76_worker_enable(&mdev->sdio.txrx_worker);
-	mt76_connac_mcu_set_hif_suspend(mdev, false, true);
+	mt76_connac_mcu_set_hif_suspend(mdev, false);
 
 restore_worker:
 	mt76_worker_enable(&mdev->tx_worker);
@@ -275,7 +264,7 @@ restore_suspend:
 	pm->suspended = false;
 
 	if (err < 0)
-		mt792x_reset(&dev->mt76);
+		mt7921_reset(&dev->mt76);
 
 	return err;
 }
@@ -283,14 +272,14 @@ restore_suspend:
 static int mt7921s_resume(struct device *__dev)
 {
 	struct sdio_func *func = dev_to_sdio_func(__dev);
-	struct mt792x_dev *dev = sdio_get_drvdata(func);
+	struct mt7921_dev *dev = sdio_get_drvdata(func);
 	struct mt76_connac_pm *pm = &dev->pm;
 	struct mt76_dev *mdev = &dev->mt76;
 	int err;
 
 	clear_bit(MT76_STATE_SUSPEND, &mdev->phy.state);
 
-	err = mt792x_mcu_drv_pmctrl(dev);
+	err = mt7921_mcu_drv_pmctrl(dev);
 	if (err < 0)
 		goto failed;
 
@@ -304,12 +293,12 @@ static int mt7921s_resume(struct device *__dev)
 	if (!pm->ds_enable)
 		mt76_connac_mcu_set_deep_sleep(mdev, false);
 
-	err = mt76_connac_mcu_set_hif_suspend(mdev, false, true);
+	err = mt76_connac_mcu_set_hif_suspend(mdev, false);
 failed:
 	pm->suspended = false;
 
 	if (err < 0)
-		mt792x_reset(&dev->mt76);
+		mt7921_reset(&dev->mt76);
 
 	return err;
 }
@@ -328,6 +317,5 @@ static struct sdio_driver mt7921s_driver = {
 	.drv.pm		= pm_sleep_ptr(&mt7921s_pm_ops),
 };
 module_sdio_driver(mt7921s_driver);
-MODULE_DESCRIPTION("MediaTek MT7921S (SDIO) wireless driver");
 MODULE_AUTHOR("Sean Wang <sean.wang@mediatek.com>");
 MODULE_LICENSE("Dual BSD/GPL");

@@ -1,34 +1,18 @@
-Buffer Sharing and Synchronization (dma-buf)
-============================================
+Buffer Sharing and Synchronization
+==================================
 
 The dma-buf subsystem provides the framework for sharing buffers for
 hardware (DMA) access across multiple device drivers and subsystems, and
 for synchronizing asynchronous hardware access.
 
-As an example, it is used extensively by the DRM subsystem to exchange
-buffers between processes, contexts, library APIs within the same
-process, and also to exchange buffers with other subsystems such as
-V4L2.
+This is used, for example, by drm "prime" multi-GPU support, but is of
+course not limited to GPU use cases.
 
-This document describes the way in which kernel subsystems can use and
-interact with the three main primitives offered by dma-buf:
-
- - dma-buf, representing a sg_table and exposed to userspace as a file
-   descriptor to allow passing between processes, subsystems, devices,
-   etc;
- - dma-fence, providing a mechanism to signal when an asynchronous
-   hardware operation has completed; and
- - dma-resv, which manages a set of dma-fences for a particular dma-buf
-   allowing implicit (kernel-ordered) synchronization of work to
-   preserve the illusion of coherent access
-
-
-Userspace API principles and use
---------------------------------
-
-For more details on how to design your subsystem's API for dma-buf use, please
-see Documentation/userspace-api/dma-buf-alloc-exchange.rst.
-
+The three main components of this are: (1) dma-buf, representing a
+sg_table and exposed to userspace as a file descriptor to allow passing
+between devices, (2) fence, which provides a mechanism to signal when
+one device has finished access, and (3) reservation, which manages the
+shared or exclusive fence(s) associated with the buffer.
 
 Shared DMA Buffers
 ------------------
@@ -77,7 +61,7 @@ consider though:
   the usual size discover pattern size = SEEK_END(0); SEEK_SET(0). Every other
   llseek operation will report -EINVAL.
 
-  If llseek on dma-buf FDs isn't supported the kernel will report -ESPIPE for all
+  If llseek on dma-buf FDs isn't support the kernel will report -ESPIPE for all
   cases. Userspace can use this to detect support for discovering the dma-buf
   size using llseek.
 
@@ -135,12 +119,6 @@ DMA Buffer ioctls
 
 .. kernel-doc:: include/uapi/linux/dma-buf.h
 
-DMA-BUF locking convention
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. kernel-doc:: drivers/dma-buf/dma-buf.c
-   :doc: locking convention
-
 Kernel Functions and Structures Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -180,12 +158,6 @@ DMA Fence Signalling Annotations
 .. kernel-doc:: drivers/dma-buf/dma-fence.c
    :doc: fence signalling annotation
 
-DMA Fence Deadline Hints
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. kernel-doc:: drivers/dma-buf/dma-fence.c
-   :doc: deadline hints
-
 DMA Fences Functions Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -219,19 +191,13 @@ DMA Fence unwrap
 .. kernel-doc:: include/linux/dma-fence-unwrap.h
    :internal:
 
-DMA Fence Sync File
-~~~~~~~~~~~~~~~~~~~
+DMA Fence uABI/Sync File
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. kernel-doc:: drivers/dma-buf/sync_file.c
    :export:
 
 .. kernel-doc:: include/linux/sync_file.h
-   :internal:
-
-DMA Fence Sync File uABI
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. kernel-doc:: include/uapi/linux/sync_file.h
    :internal:
 
 Indefinite DMA Fences
@@ -292,7 +258,7 @@ through memory management dependencies which userspace is unaware of, which
 randomly hangs workloads until the timeout kicks in. Workloads, which from
 userspace's perspective, do not contain a deadlock.  In such a mixed fencing
 architecture there is no single entity with knowledge of all dependencies.
-Therefore preventing such deadlocks from within the kernel is not possible.
+Thefore preventing such deadlocks from within the kernel is not possible.
 
 The only solution to avoid dependencies loops is by not allowing indefinite
 fences in the kernel. This means:

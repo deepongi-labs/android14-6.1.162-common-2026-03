@@ -21,7 +21,7 @@
 #include <linux/in.h>
 #include <linux/export.h>
 #include <linux/t10-pi.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <scsi/scsi_common.h>
@@ -37,6 +37,7 @@
 #include "target_core_ua.h"
 
 static DEFINE_MUTEX(device_mutex);
+static LIST_HEAD(device_list);
 static DEFINE_IDR(devices_idr);
 
 static struct se_hba *lun0_hba;
@@ -55,14 +56,14 @@ transport_lookup_cmd_lun(struct se_cmd *se_cmd)
 	rcu_read_lock();
 	deve = target_nacl_find_deve(nacl, se_cmd->orig_fe_lun);
 	if (deve) {
-		this_cpu_inc(deve->stats->total_cmds);
+		atomic_long_inc(&deve->total_cmds);
 
 		if (se_cmd->data_direction == DMA_TO_DEVICE)
-			this_cpu_add(deve->stats->write_bytes,
-				     se_cmd->data_length);
+			atomic_long_add(se_cmd->data_length,
+					&deve->write_bytes);
 		else if (se_cmd->data_direction == DMA_FROM_DEVICE)
-			this_cpu_add(deve->stats->read_bytes,
-				     se_cmd->data_length);
+			atomic_long_add(se_cmd->data_length,
+					&deve->read_bytes);
 
 		if ((se_cmd->data_direction == DMA_TO_DEVICE) &&
 		    deve->lun_access_ro) {
@@ -126,14 +127,14 @@ out_unlock:
 	 * target_core_fabric_configfs.c:target_fabric_port_release
 	 */
 	se_cmd->se_dev = rcu_dereference_raw(se_lun->lun_se_dev);
-	this_cpu_inc(se_cmd->se_dev->stats->total_cmds);
+	atomic_long_inc(&se_cmd->se_dev->num_cmds);
 
 	if (se_cmd->data_direction == DMA_TO_DEVICE)
-		this_cpu_add(se_cmd->se_dev->stats->write_bytes,
-			     se_cmd->data_length);
+		atomic_long_add(se_cmd->data_length,
+				&se_cmd->se_dev->write_bytes);
 	else if (se_cmd->data_direction == DMA_FROM_DEVICE)
-		this_cpu_add(se_cmd->se_dev->stats->read_bytes,
-			     se_cmd->data_length);
+		atomic_long_add(se_cmd->data_length,
+				&se_cmd->se_dev->read_bytes);
 
 	return ret;
 }
@@ -217,7 +218,7 @@ struct se_dev_entry *core_get_se_deve_from_rtpi(
 				tpg->se_tpg_tfo->fabric_name);
 			continue;
 		}
-		if (lun->lun_tpg->tpg_rtpi != rtpi)
+		if (lun->lun_rtpi != rtpi)
 			continue;
 
 		kref_get(&deve->pr_kref);
@@ -322,18 +323,11 @@ int core_enable_device_list_for_node(
 	struct se_portal_group *tpg)
 {
 	struct se_dev_entry *orig, *new;
-	int ret = 0;
 
 	new = kzalloc(sizeof(*new), GFP_KERNEL);
 	if (!new) {
 		pr_err("Unable to allocate se_dev_entry memory\n");
 		return -ENOMEM;
-	}
-
-	new->stats = alloc_percpu(struct se_dev_entry_io_stats);
-	if (!new->stats) {
-		ret = -ENOMEM;
-		goto free_deve;
 	}
 
 	spin_lock_init(&new->ua_lock);
@@ -358,8 +352,8 @@ int core_enable_device_list_for_node(
 			       " for dynamic -> explicit NodeACL conversion:"
 				" %s\n", nacl->initiatorname);
 			mutex_unlock(&nacl->lun_entry_mutex);
-			ret = -EINVAL;
-			goto free_stats;
+			kfree(new);
+			return -EINVAL;
 		}
 		if (orig->se_lun_acl != NULL) {
 			pr_warn_ratelimited("Detected existing explicit"
@@ -367,8 +361,8 @@ int core_enable_device_list_for_node(
 				" mapped_lun: %llu, failing\n",
 				 nacl->initiatorname, mapped_lun);
 			mutex_unlock(&nacl->lun_entry_mutex);
-			ret = -EINVAL;
-			goto free_stats;
+			kfree(new);
+			return -EINVAL;
 		}
 
 		new->se_lun = lun;
@@ -401,20 +395,6 @@ int core_enable_device_list_for_node(
 
 	target_luns_data_has_changed(nacl, new, true);
 	return 0;
-
-free_stats:
-	free_percpu(new->stats);
-free_deve:
-	kfree(new);
-	return ret;
-}
-
-static void target_free_dev_entry(struct rcu_head *head)
-{
-	struct se_dev_entry *deve = container_of(head, struct se_dev_entry,
-						 rcu_head);
-	free_percpu(deve->stats);
-	kfree(deve);
 }
 
 void core_disable_device_list_for_node(
@@ -464,7 +444,7 @@ void core_disable_device_list_for_node(
 	kref_put(&orig->pr_kref, target_pr_kref_release);
 	wait_for_completion(&orig->pr_comp);
 
-	call_rcu(&orig->rcu_head, target_free_dev_entry);
+	kfree_rcu(orig, rcu_head);
 
 	core_scsi3_free_pr_reg_from_nacl(dev, nacl);
 	target_luns_data_has_changed(nacl, NULL, false);
@@ -492,6 +472,47 @@ void core_clear_lun_from_tpg(struct se_lun *lun, struct se_portal_group *tpg)
 		mutex_unlock(&nacl->lun_entry_mutex);
 	}
 	mutex_unlock(&tpg->acl_node_mutex);
+}
+
+int core_alloc_rtpi(struct se_lun *lun, struct se_device *dev)
+{
+	struct se_lun *tmp;
+
+	spin_lock(&dev->se_port_lock);
+	if (dev->export_count == 0x0000ffff) {
+		pr_warn("Reached dev->dev_port_count =="
+				" 0x0000ffff\n");
+		spin_unlock(&dev->se_port_lock);
+		return -ENOSPC;
+	}
+again:
+	/*
+	 * Allocate the next RELATIVE TARGET PORT IDENTIFIER for this struct se_device
+	 * Here is the table from spc4r17 section 7.7.3.8.
+	 *
+	 *    Table 473 -- RELATIVE TARGET PORT IDENTIFIER field
+	 *
+	 * Code      Description
+	 * 0h        Reserved
+	 * 1h        Relative port 1, historically known as port A
+	 * 2h        Relative port 2, historically known as port B
+	 * 3h to FFFFh    Relative port 3 through 65 535
+	 */
+	lun->lun_rtpi = dev->dev_rpti_counter++;
+	if (!lun->lun_rtpi)
+		goto again;
+
+	list_for_each_entry(tmp, &dev->dev_sep_list, lun_dev_link) {
+		/*
+		 * Make sure RELATIVE TARGET PORT IDENTIFIER is unique
+		 * for 16-bit wrap..
+		 */
+		if (lun->lun_rtpi == tmp->lun_rtpi)
+			goto again;
+	}
+	spin_unlock(&dev->se_port_lock);
+
+	return 0;
 }
 
 static void se_release_vpd_for_dev(struct se_device *dev)
@@ -700,18 +721,6 @@ static void scsi_dump_inquiry(struct se_device *dev)
 	pr_debug("  Type:   %s ", scsi_device_type(device_type));
 }
 
-static void target_non_ordered_release(struct percpu_ref *ref)
-{
-	struct se_device *dev = container_of(ref, struct se_device,
-					     non_ordered);
-	unsigned long flags;
-
-	spin_lock_irqsave(&dev->delayed_cmd_lock, flags);
-	if (!list_empty(&dev->delayed_cmd_list))
-		schedule_work(&dev->delayed_cmd_work);
-	spin_unlock_irqrestore(&dev->delayed_cmd_lock, flags);
-}
-
 struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 {
 	struct se_device *dev;
@@ -722,13 +731,11 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	if (!dev)
 		return NULL;
 
-	dev->stats = alloc_percpu(struct se_dev_io_stats);
-	if (!dev->stats)
-		goto free_device;
-
 	dev->queues = kcalloc(nr_cpu_ids, sizeof(*dev->queues), GFP_KERNEL);
-	if (!dev->queues)
-		goto free_stats;
+	if (!dev->queues) {
+		hba->backend->ops->free_device(dev);
+		return NULL;
+	}
 
 	dev->queue_cnt = nr_cpu_ids;
 	for (i = 0; i < dev->queue_cnt; i++) {
@@ -741,10 +748,6 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 		init_llist_head(&q->sq.cmd_list);
 		INIT_WORK(&q->sq.work, target_queued_submit_work);
 	}
-
-	if (percpu_ref_init(&dev->non_ordered, target_non_ordered_release,
-			    PERCPU_REF_ALLOW_REINIT, GFP_KERNEL))
-		goto free_queues;
 
 	dev->se_hba = hba;
 	dev->transport = hba->backend->ops;
@@ -797,7 +800,6 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	dev->dev_attrib.emulate_caw = DA_EMULATE_CAW;
 	dev->dev_attrib.emulate_3pc = DA_EMULATE_3PC;
 	dev->dev_attrib.emulate_pr = DA_EMULATE_PR;
-	dev->dev_attrib.emulate_rsoc = DA_EMULATE_RSOC;
 	dev->dev_attrib.pi_prot_type = TARGET_DIF_TYPE0_PROT;
 	dev->dev_attrib.enforce_pr_isids = DA_ENFORCE_PR_ISIDS;
 	dev->dev_attrib.force_pr_aptpl = DA_FORCE_PR_APTPL;
@@ -812,7 +814,6 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	dev->dev_attrib.unmap_zeroes_data =
 				DA_UNMAP_ZEROES_DATA_DEFAULT;
 	dev->dev_attrib.max_write_same_len = DA_MAX_WRITE_SAME_LEN;
-	dev->dev_attrib.submit_type = TARGET_FABRIC_DEFAULT_SUBMIT;
 
 	xcopy_lun = &dev->xcopy_lun;
 	rcu_assign_pointer(xcopy_lun->lun_se_dev, dev);
@@ -823,21 +824,13 @@ struct se_device *target_alloc_device(struct se_hba *hba, const char *name)
 	xcopy_lun->lun_tpg = &xcopy_pt_tpg;
 
 	/* Preload the default INQUIRY const values */
-	strscpy(dev->t10_wwn.vendor, "LIO-ORG", sizeof(dev->t10_wwn.vendor));
-	strscpy(dev->t10_wwn.model, dev->transport->inquiry_prod,
+	strlcpy(dev->t10_wwn.vendor, "LIO-ORG", sizeof(dev->t10_wwn.vendor));
+	strlcpy(dev->t10_wwn.model, dev->transport->inquiry_prod,
 		sizeof(dev->t10_wwn.model));
-	strscpy(dev->t10_wwn.revision, dev->transport->inquiry_rev,
+	strlcpy(dev->t10_wwn.revision, dev->transport->inquiry_rev,
 		sizeof(dev->t10_wwn.revision));
 
 	return dev;
-
-free_queues:
-	kfree(dev->queues);
-free_stats:
-	free_percpu(dev->stats);
-free_device:
-	hba->backend->ops->free_device(dev);
-	return NULL;
 }
 
 /*
@@ -1027,9 +1020,6 @@ void target_free_device(struct se_device *dev)
 
 	WARN_ON(!list_empty(&dev->dev_sep_list));
 
-	percpu_ref_exit(&dev->non_ordered);
-	cancel_work_sync(&dev->delayed_cmd_work);
-
 	if (target_dev_configured(dev)) {
 		dev->transport->destroy_device(dev);
 
@@ -1051,7 +1041,6 @@ void target_free_device(struct se_device *dev)
 		dev->transport->free_prot(dev);
 
 	kfree(dev->queues);
-	free_percpu(dev->stats);
 	dev->transport->free_device(dev);
 }
 
@@ -1129,8 +1118,8 @@ passthrough_parse_cdb(struct se_cmd *cmd,
 	if (!dev->dev_attrib.emulate_pr &&
 	    ((cdb[0] == PERSISTENT_RESERVE_IN) ||
 	     (cdb[0] == PERSISTENT_RESERVE_OUT) ||
-	     (cdb[0] == RELEASE_6 || cdb[0] == RELEASE_10) ||
-	     (cdb[0] == RESERVE_6 || cdb[0] == RESERVE_10))) {
+	     (cdb[0] == RELEASE || cdb[0] == RELEASE_10) ||
+	     (cdb[0] == RESERVE || cdb[0] == RESERVE_10))) {
 		return TCM_UNSUPPORTED_SCSI_OPCODE;
 	}
 
@@ -1152,7 +1141,7 @@ passthrough_parse_cdb(struct se_cmd *cmd,
 			return target_cmd_size_check(cmd, size);
 		}
 
-		if (cdb[0] == RELEASE_6 || cdb[0] == RELEASE_10) {
+		if (cdb[0] == RELEASE || cdb[0] == RELEASE_10) {
 			cmd->execute_cmd = target_scsi2_reservation_release;
 			if (cdb[0] == RELEASE_10)
 				size = get_unaligned_be16(&cdb[7]);
@@ -1160,7 +1149,7 @@ passthrough_parse_cdb(struct se_cmd *cmd,
 				size = cmd->data_length;
 			return target_cmd_size_check(cmd, size);
 		}
-		if (cdb[0] == RESERVE_6 || cdb[0] == RESERVE_10) {
+		if (cdb[0] == RESERVE || cdb[0] == RESERVE_10) {
 			cmd->execute_cmd = target_scsi2_reservation_reserve;
 			if (cdb[0] == RESERVE_10)
 				size = get_unaligned_be16(&cdb[7]);

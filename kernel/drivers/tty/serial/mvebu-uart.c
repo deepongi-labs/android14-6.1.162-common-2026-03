@@ -187,9 +187,9 @@ static unsigned int mvebu_uart_tx_empty(struct uart_port *port)
 	unsigned long flags;
 	unsigned int st;
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 	st = readl(port->membase + UART_STAT);
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 
 	return (st & STAT_TX_EMP) ? TIOCSER_TEMT : 0;
 }
@@ -219,10 +219,13 @@ static void mvebu_uart_stop_tx(struct uart_port *port)
 static void mvebu_uart_start_tx(struct uart_port *port)
 {
 	unsigned int ctl;
-	unsigned char c;
+	struct circ_buf *xmit = &port->state->xmit;
 
-	if (IS_EXTENDED(port) && uart_fifo_get(port, &c))
-		writel(c, port->membase + UART_TSH(port));
+	if (IS_EXTENDED(port) && !uart_circ_empty(xmit)) {
+		writel(xmit->buf[xmit->tail], port->membase + UART_TSH(port));
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+	}
 
 	ctl = readl(port->membase + UART_INTR(port));
 	ctl |= CTRL_TX_RDY_INT(port);
@@ -247,14 +250,14 @@ static void mvebu_uart_break_ctl(struct uart_port *port, int brk)
 	unsigned int ctl;
 	unsigned long flags;
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 	ctl = readl(port->membase + UART_CTRL(port));
 	if (brk == -1)
 		ctl |= CTRL_SND_BRK_SEQ;
 	else
 		ctl &= ~CTRL_SND_BRK_SEQ;
 	writel(ctl, port->membase + UART_CTRL(port));
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static void mvebu_uart_rx_chars(struct uart_port *port, unsigned int status)
@@ -332,12 +335,40 @@ ignore_char:
 
 static void mvebu_uart_tx_chars(struct uart_port *port, unsigned int status)
 {
-	u8 ch;
+	struct circ_buf *xmit = &port->state->xmit;
+	unsigned int count;
+	unsigned int st;
 
-	uart_port_tx_limited(port, ch, port->fifosize,
-		!(readl(port->membase + UART_STAT) & STAT_TX_FIFO_FUL),
-		writel(ch, port->membase + UART_TSH(port)),
-		({}));
+	if (port->x_char) {
+		writel(port->x_char, port->membase + UART_TSH(port));
+		port->icount.tx++;
+		port->x_char = 0;
+		return;
+	}
+
+	if (uart_circ_empty(xmit) || uart_tx_stopped(port)) {
+		mvebu_uart_stop_tx(port);
+		return;
+	}
+
+	for (count = 0; count < port->fifosize; count++) {
+		writel(xmit->buf[xmit->tail], port->membase + UART_TSH(port));
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+
+		if (uart_circ_empty(xmit))
+			break;
+
+		st = readl(port->membase + UART_STAT);
+		if (st & STAT_TX_FIFO_FUL)
+			break;
+	}
+
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
+		uart_write_wakeup(port);
+
+	if (uart_circ_empty(xmit))
+		mvebu_uart_stop_tx(port);
 }
 
 static irqreturn_t mvebu_uart_isr(int irq, void *dev_id)
@@ -538,7 +569,7 @@ static void mvebu_uart_set_termios(struct uart_port *port,
 	unsigned long flags;
 	unsigned int baud, min_baud, max_baud;
 
-	uart_port_lock_irqsave(port, &flags);
+	spin_lock_irqsave(&port->lock, flags);
 
 	port->read_status_mask = STAT_RX_RDY(port) | STAT_OVR_ERR |
 		STAT_TX_RDY(port) | STAT_TX_FIFO_FUL;
@@ -587,7 +618,7 @@ static void mvebu_uart_set_termios(struct uart_port *port,
 		uart_update_timeout(port, termios->c_cflag, baud);
 	}
 
-	uart_port_unlock_irqrestore(port, flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static const char *mvebu_uart_type(struct uart_port *port)
@@ -733,9 +764,9 @@ static void mvebu_uart_console_write(struct console *co, const char *s,
 	int locked = 1;
 
 	if (oops_in_progress)
-		locked = uart_port_trylock_irqsave(port, &flags);
+		locked = spin_trylock_irqsave(&port->lock, flags);
 	else
-		uart_port_lock_irqsave(port, &flags);
+		spin_lock_irqsave(&port->lock, flags);
 
 	ier = readl(port->membase + UART_CTRL(port)) & CTRL_BRK_INT;
 	intr = readl(port->membase + UART_INTR(port)) &
@@ -756,7 +787,7 @@ static void mvebu_uart_console_write(struct console *co, const char *s,
 	}
 
 	if (locked)
-		uart_port_unlock_irqrestore(port, flags);
+		spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static int mvebu_uart_console_setup(struct console *co, char *options)
@@ -874,12 +905,17 @@ static int uart_num_counter;
 
 static int mvebu_uart_probe(struct platform_device *pdev)
 {
+	struct resource *reg = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	const struct of_device_id *match = of_match_device(mvebu_uart_of_match,
 							   &pdev->dev);
 	struct uart_port *port;
 	struct mvebu_uart *mvuart;
-	struct resource *reg;
 	int id, irq;
+
+	if (!reg) {
+		dev_err(&pdev->dev, "no registers defined\n");
+		return -EINVAL;
+	}
 
 	/* Assume that all UART ports have a DT alias or none has */
 	id = of_alias_get_id(pdev->dev.of_node, "serial");
@@ -915,11 +951,11 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 	 */
 	port->irq        = 0;
 	port->irqflags   = 0;
+	port->mapbase    = reg->start;
 
-	port->membase = devm_platform_get_and_ioremap_resource(pdev, 0, &reg);
+	port->membase = devm_ioremap_resource(&pdev->dev, reg);
 	if (IS_ERR(port->membase))
 		return PTR_ERR(port->membase);
-	port->mapbase    = reg->start;
 
 	mvuart = devm_kzalloc(&pdev->dev, sizeof(struct mvebu_uart),
 			      GFP_KERNEL);
@@ -1264,16 +1300,14 @@ static unsigned long mvebu_uart_clock_recalc_rate(struct clk_hw *hw,
 	return parent_rate / uart_clock_base->div;
 }
 
-static int mvebu_uart_clock_determine_rate(struct clk_hw *hw,
-					   struct clk_rate_request *req)
+static long mvebu_uart_clock_round_rate(struct clk_hw *hw, unsigned long rate,
+					unsigned long *parent_rate)
 {
 	struct mvebu_uart_clock *uart_clock = to_uart_clock(hw);
 	struct mvebu_uart_clock_base *uart_clock_base =
 						to_uart_clock_base(uart_clock);
 
-	req->rate = req->best_parent_rate / uart_clock_base->div;
-
-	return 0;
+	return *parent_rate / uart_clock_base->div;
 }
 
 static int mvebu_uart_clock_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -1295,7 +1329,7 @@ static const struct clk_ops mvebu_uart_clock_ops = {
 	.is_enabled = mvebu_uart_clock_is_enabled,
 	.save_context = mvebu_uart_clock_save_context,
 	.restore_context = mvebu_uart_clock_restore_context,
-	.determine_rate = mvebu_uart_clock_determine_rate,
+	.round_rate = mvebu_uart_clock_round_rate,
 	.set_rate = mvebu_uart_clock_set_rate,
 	.recalc_rate = mvebu_uart_clock_recalc_rate,
 };

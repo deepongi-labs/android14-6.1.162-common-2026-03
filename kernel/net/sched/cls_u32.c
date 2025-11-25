@@ -39,7 +39,6 @@
 #include <net/act_api.h>
 #include <net/pkt_cls.h>
 #include <linux/idr.h>
-#include <net/tc_wrapper.h>
 
 struct tc_u_knode {
 	struct tc_u_knode __rcu	*next;
@@ -111,9 +110,8 @@ static inline unsigned int u32_hash_fold(__be32 key,
 	return h;
 }
 
-TC_INDIRECT_SCOPE int u32_classify(struct sk_buff *skb,
-				   const struct tcf_proto *tp,
-				   struct tcf_result *res)
+static int u32_classify(struct sk_buff *skb, const struct tcf_proto *tp,
+			struct tcf_result *res)
 {
 	struct {
 		struct tc_u_knode *knode;
@@ -951,8 +949,6 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 		if (!tc_in_hw(new->flags))
 			new->flags |= TCA_CLS_FLAGS_NOT_IN_HW;
 
-		tcf_proto_update_usesw(tp, new->flags);
-
 		u32_replace_knode(tp, tp_c, new);
 		tcf_unbind_filter(tp, &n->res);
 		tcf_exts_get_net(&n->exts);
@@ -1165,8 +1161,6 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 
 		if (!tc_in_hw(n->flags))
 			n->flags |= TCA_CLS_FLAGS_NOT_IN_HW;
-
-		tcf_proto_update_usesw(tp, n->flags);
 
 		ins = &ht->ht[TC_U32_HASH(handle)];
 		for (pins = rtnl_dereference(*ins); pins;
@@ -1467,7 +1461,6 @@ static struct tcf_proto_ops cls_u32_ops __read_mostly = {
 	.bind_class	=	u32_bind_class,
 	.owner		=	THIS_MODULE,
 };
-MODULE_ALIAS_NET_CLS("u32");
 
 static int __init init_u32(void)
 {
@@ -1504,5 +1497,4 @@ static void __exit exit_u32(void)
 
 module_init(init_u32)
 module_exit(exit_u32)
-MODULE_DESCRIPTION("Universal 32bit based TC Classifier");
 MODULE_LICENSE("GPL");

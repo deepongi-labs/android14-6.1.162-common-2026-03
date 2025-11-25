@@ -21,6 +21,7 @@
 #include <linux/export.h>
 #include <linux/io.h>
 #include <linux/set_memory.h>
+#include <asm/mem_encrypt.h>
 #include <asm/mshyperv.h>
 
 #include "hyperv_vmbus.h"
@@ -34,8 +35,8 @@ struct vmbus_connection vmbus_connection = {
 
 	.ready_for_suspend_event = COMPLETION_INITIALIZER(
 				  vmbus_connection.ready_for_suspend_event),
-	.all_offers_delivered_event = COMPLETION_INITIALIZER(
-				  vmbus_connection.all_offers_delivered_event),
+	.ready_for_resume_event	= COMPLETION_INITIALIZER(
+				  vmbus_connection.ready_for_resume_event),
 };
 EXPORT_SYMBOL_GPL(vmbus_connection);
 
@@ -98,7 +99,6 @@ int vmbus_negotiate_version(struct vmbus_channel_msginfo *msginfo, u32 version)
 	 */
 	if (version >= VERSION_WIN10_V5) {
 		msg->msg_sint = VMBUS_MESSAGE_SINT;
-		msg->msg_vtl = ms_hyperv.vtl;
 		vmbus_connection.msg_conn_id = VMBUS_MESSAGE_CONNECTION_ID_4;
 	} else {
 		msg->interrupt_page = virt_to_phys(vmbus_connection.int_page);
@@ -509,20 +509,10 @@ void vmbus_set_event(struct vmbus_channel *channel)
 
 	++channel->sig_events;
 
-	if (ms_hyperv.paravisor_present) {
-		if (hv_isolation_type_snp())
-			hv_ghcb_hypercall(HVCALL_SIGNAL_EVENT, &channel->sig_event,
-					  NULL, sizeof(channel->sig_event));
-		else if (hv_isolation_type_tdx())
-			hv_tdx_hypercall(HVCALL_SIGNAL_EVENT | HV_HYPERCALL_FAST_BIT,
-					 channel->sig_event, 0);
-		else
-			WARN_ON_ONCE(1);
-	} else {
-		u64 control = HVCALL_SIGNAL_EVENT;
-
-		control |= hv_nested ? HV_HYPERCALL_NESTED : 0;
-		hv_do_fast_hypercall8(control, channel->sig_event);
-	}
+	if (hv_isolation_type_snp())
+		hv_ghcb_hypercall(HVCALL_SIGNAL_EVENT, &channel->sig_event,
+				NULL, sizeof(channel->sig_event));
+	else
+		hv_do_fast_hypercall8(HVCALL_SIGNAL_EVENT, channel->sig_event);
 }
 EXPORT_SYMBOL_GPL(vmbus_set_event);

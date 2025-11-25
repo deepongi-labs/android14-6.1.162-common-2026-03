@@ -12,8 +12,9 @@
     |       arm64: |  ok  |
     |        csky: |  ok  |
     |     hexagon: | TODO |
-    |   loongarch: |  ok  |
-    |        m68k: |  ok  |
+    |        ia64: | TODO |
+    |       loong: |  ok  |
+    |        m68k: | TODO |
     |  microblaze: | TODO |
     |        mips: |  ok  |
     |       nios2: | TODO |

@@ -59,6 +59,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
 
@@ -570,7 +571,7 @@ static int sun4i_can_err(struct net_device *dev, u8 isrc, u8 status)
 		else
 			state = CAN_STATE_ERROR_ACTIVE;
 	}
-	if (likely(skb) && state != CAN_STATE_BUS_OFF) {
+	if (skb && state != CAN_STATE_BUS_OFF) {
 		cf->can_id |= CAN_ERR_CNT;
 		cf->data[6] = txerr;
 		cf->data[7] = rxerr;
@@ -768,7 +769,6 @@ static const struct net_device_ops sun4ican_netdev_ops = {
 	.ndo_open = sun4ican_open,
 	.ndo_stop = sun4ican_close,
 	.ndo_start_xmit = sun4ican_start_xmit,
-	.ndo_change_mtu = can_change_mtu,
 };
 
 static const struct ethtool_ops sun4ican_ethtool_ops = {
@@ -810,12 +810,14 @@ static const struct of_device_id sun4ican_of_match[] = {
 
 MODULE_DEVICE_TABLE(of, sun4ican_of_match);
 
-static void sun4ican_remove(struct platform_device *pdev)
+static int sun4ican_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 
 	unregister_netdev(dev);
 	free_candev(dev);
+
+	return 0;
 }
 
 static int sun4ican_probe(struct platform_device *pdev)

@@ -64,14 +64,7 @@ struct dpu_vsync_source_cfg {
 	u32 pp_count;
 	u32 frame_rate;
 	u32 ppnumber[PINGPONG_MAX];
-	enum dpu_vsync_source vsync_source;
-};
-
-enum dpu_dp_phy_sel {
-	DPU_DP_PHY_NONE,
-	DPU_DP_PHY_0,
-	DPU_DP_PHY_1,
-	DPU_DP_PHY_2,
+	u32 vsync_source;
 };
 
 /**
@@ -133,13 +126,6 @@ struct dpu_hw_mdp_ops {
 			struct dpu_danger_safe_status *status);
 
 	/**
-	 * dp_phy_intf_sel - configure intf to phy mapping
-	 * @mdp: mdp top context driver
-	 * @phys: list of phys the DP interfaces should be connected to. 0 disables the INTF.
-	 */
-	void (*dp_phy_intf_sel)(struct dpu_hw_mdp *mdp, enum dpu_dp_phy_sel phys[2]);
-
-	/**
 	 * intf_audio_select - select the external interface for audio
 	 * @mdp: mdp top context driver
 	 */
@@ -151,15 +137,23 @@ struct dpu_hw_mdp {
 	struct dpu_hw_blk_reg_map hw;
 
 	/* top */
+	enum dpu_mdp idx;
 	const struct dpu_mdp_cfg *caps;
 
 	/* ops */
 	struct dpu_hw_mdp_ops ops;
 };
 
-struct dpu_hw_mdp *dpu_hw_mdptop_init(struct drm_device *dev,
-				      const struct dpu_mdp_cfg *cfg,
-				      void __iomem *addr,
-				      const struct dpu_mdss_version *mdss_rev);
+/**
+ * dpu_hw_mdptop_init - initializes the top driver for the passed idx
+ * @idx:  Interface index for which driver object is required
+ * @addr: Mapped register io address of MDP
+ * @m:    Pointer to mdss catalog data
+ */
+struct dpu_hw_mdp *dpu_hw_mdptop_init(enum dpu_mdp idx,
+		void __iomem *addr,
+		const struct dpu_mdss_cfg *m);
+
+void dpu_hw_mdp_destroy(struct dpu_hw_mdp *mdp);
 
 #endif /*_DPU_HW_TOP_H */

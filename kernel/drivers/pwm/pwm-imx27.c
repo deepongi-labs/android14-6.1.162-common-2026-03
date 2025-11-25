@@ -80,13 +80,11 @@
 /* PWMPR register value of 0xffff has the same effect as 0xfffe */
 #define MX3_PWMPR_MAX			0xfffe
 
-static const char * const pwm_imx27_clks[] = {"ipg", "per"};
-#define PWM_IMX27_PER			1
-
 struct pwm_imx27_chip {
-	struct clk_bulk_data clks[ARRAY_SIZE(pwm_imx27_clks)];
-	int clks_cnt;
+	struct clk	*clk_ipg;
+	struct clk	*clk_per;
 	void __iomem	*mmio_base;
+	struct pwm_chip	chip;
 
 	/*
 	 * The driver cannot read the current duty cycle from the hardware if
@@ -96,9 +94,29 @@ struct pwm_imx27_chip {
 	unsigned int duty_cycle;
 };
 
-static inline struct pwm_imx27_chip *to_pwm_imx27_chip(struct pwm_chip *chip)
+#define to_pwm_imx27_chip(chip)	container_of(chip, struct pwm_imx27_chip, chip)
+
+static int pwm_imx27_clk_prepare_enable(struct pwm_imx27_chip *imx)
 {
-	return pwmchip_get_drvdata(chip);
+	int ret;
+
+	ret = clk_prepare_enable(imx->clk_ipg);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(imx->clk_per);
+	if (ret) {
+		clk_disable_unprepare(imx->clk_ipg);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void pwm_imx27_clk_disable_unprepare(struct pwm_imx27_chip *imx)
+{
+	clk_disable_unprepare(imx->clk_per);
+	clk_disable_unprepare(imx->clk_ipg);
 }
 
 static int pwm_imx27_get_state(struct pwm_chip *chip,
@@ -109,9 +127,9 @@ static int pwm_imx27_get_state(struct pwm_chip *chip,
 	u64 tmp;
 	int ret;
 
-	ret = clk_bulk_prepare_enable(imx->clks_cnt, imx->clks);
+	ret = pwm_imx27_clk_prepare_enable(imx);
 	if (ret < 0)
-		return ret;
+		return 0;
 
 	val = readl(imx->mmio_base + MX3_PWMCR);
 
@@ -128,11 +146,11 @@ static int pwm_imx27_get_state(struct pwm_chip *chip,
 		state->polarity = PWM_POLARITY_INVERSED;
 		break;
 	default:
-		dev_warn(pwmchip_parent(chip), "can't set polarity, output disconnected");
+		dev_warn(chip->dev, "can't set polarity, output disconnected");
 	}
 
 	prescaler = MX3_PWMCR_PRESCALER_GET(val);
-	pwm_clk = clk_get_rate(imx->clks[PWM_IMX27_PER].clk);
+	pwm_clk = clk_get_rate(imx->clk_per);
 	val = readl(imx->mmio_base + MX3_PWMPR);
 	period = val >= MX3_PWMPR_MAX ? MX3_PWMPR_MAX : val;
 
@@ -152,7 +170,7 @@ static int pwm_imx27_get_state(struct pwm_chip *chip,
 	tmp = NSEC_PER_SEC * (u64)(val) * prescaler;
 	state->duty_cycle = DIV_ROUND_UP_ULL(tmp, pwm_clk);
 
-	clk_bulk_disable_unprepare(imx->clks_cnt, imx->clks);
+	pwm_imx27_clk_disable_unprepare(imx);
 
 	return 0;
 }
@@ -160,7 +178,7 @@ static int pwm_imx27_get_state(struct pwm_chip *chip,
 static void pwm_imx27_sw_reset(struct pwm_chip *chip)
 {
 	struct pwm_imx27_chip *imx = to_pwm_imx27_chip(chip);
-	struct device *dev = pwmchip_parent(chip);
+	struct device *dev = chip->dev;
 	int wait_count = 0;
 	u32 cr;
 
@@ -179,7 +197,7 @@ static void pwm_imx27_wait_fifo_slot(struct pwm_chip *chip,
 				     struct pwm_device *pwm)
 {
 	struct pwm_imx27_chip *imx = to_pwm_imx27_chip(chip);
-	struct device *dev = pwmchip_parent(chip);
+	struct device *dev = chip->dev;
 	unsigned int period_ms;
 	int fifoav;
 	u32 sr;
@@ -187,8 +205,8 @@ static void pwm_imx27_wait_fifo_slot(struct pwm_chip *chip,
 	sr = readl(imx->mmio_base + MX3_PWMSR);
 	fifoav = FIELD_GET(MX3_PWMSR_FIFOAV, sr);
 	if (fifoav == MX3_PWMSR_FIFOAV_4WORDS) {
-		period_ms = DIV_ROUND_UP_ULL(pwm->state.period,
-					     NSEC_PER_MSEC);
+		period_ms = DIV_ROUND_UP_ULL(pwm_get_period(pwm),
+					 NSEC_PER_MSEC);
 		msleep(period_ms);
 
 		sr = readl(imx->mmio_base + MX3_PWMSR);
@@ -202,6 +220,7 @@ static int pwm_imx27_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 {
 	unsigned long period_cycles, duty_cycles, prescale, period_us, tmp;
 	struct pwm_imx27_chip *imx = to_pwm_imx27_chip(chip);
+	struct pwm_state cstate;
 	unsigned long long c;
 	unsigned long long clkrate;
 	unsigned long flags;
@@ -209,7 +228,9 @@ static int pwm_imx27_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	int ret;
 	u32 cr;
 
-	clkrate = clk_get_rate(imx->clks[PWM_IMX27_PER].clk);
+	pwm_get_state(pwm, &cstate);
+
+	clkrate = clk_get_rate(imx->clk_per);
 	c = clkrate * state->period;
 
 	do_div(c, NSEC_PER_SEC);
@@ -236,10 +257,10 @@ static int pwm_imx27_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	 * Wait for a free FIFO slot if the PWM is already enabled, and flush
 	 * the FIFO if the PWM was disabled and is about to be enabled.
 	 */
-	if (pwm->state.enabled) {
+	if (cstate.enabled) {
 		pwm_imx27_wait_fifo_slot(chip, pwm);
 	} else {
-		ret = clk_bulk_prepare_enable(imx->clks_cnt, imx->clks);
+		ret = pwm_imx27_clk_prepare_enable(imx);
 		if (ret)
 			return ret;
 
@@ -361,7 +382,7 @@ static int pwm_imx27_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	writel(cr, imx->mmio_base + MX3_PWMCR);
 
 	if (!state->enabled)
-		clk_bulk_disable_unprepare(imx->clks_cnt, imx->clks);
+		pwm_imx27_clk_disable_unprepare(imx);
 
 	return 0;
 }
@@ -369,6 +390,7 @@ static int pwm_imx27_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 static const struct pwm_ops pwm_imx27_ops = {
 	.apply = pwm_imx27_apply,
 	.get_state = pwm_imx27_get_state,
+	.owner = THIS_MODULE,
 };
 
 static const struct of_device_id pwm_imx27_dt_ids[] = {
@@ -379,43 +401,42 @@ MODULE_DEVICE_TABLE(of, pwm_imx27_dt_ids);
 
 static int pwm_imx27_probe(struct platform_device *pdev)
 {
-	struct pwm_chip *chip;
 	struct pwm_imx27_chip *imx;
 	int ret;
 	u32 pwmcr;
-	int i;
 
-	chip = devm_pwmchip_alloc(&pdev->dev, 1, sizeof(*imx));
-	if (IS_ERR(chip))
-		return PTR_ERR(chip);
-	imx = to_pwm_imx27_chip(chip);
+	imx = devm_kzalloc(&pdev->dev, sizeof(*imx), GFP_KERNEL);
+	if (imx == NULL)
+		return -ENOMEM;
 
-	imx->clks_cnt = ARRAY_SIZE(pwm_imx27_clks);
-	for (i = 0; i < imx->clks_cnt; ++i)
-		imx->clks[i].id = pwm_imx27_clks[i];
+	imx->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
+	if (IS_ERR(imx->clk_ipg))
+		return dev_err_probe(&pdev->dev, PTR_ERR(imx->clk_ipg),
+				     "getting ipg clock failed\n");
 
-	ret = devm_clk_bulk_get(&pdev->dev, imx->clks_cnt, imx->clks);
+	imx->clk_per = devm_clk_get(&pdev->dev, "per");
+	if (IS_ERR(imx->clk_per))
+		return dev_err_probe(&pdev->dev, PTR_ERR(imx->clk_per),
+				     "failed to get peripheral clock\n");
 
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret,
-				     "getting clocks failed\n");
-
-	chip->ops = &pwm_imx27_ops;
+	imx->chip.ops = &pwm_imx27_ops;
+	imx->chip.dev = &pdev->dev;
+	imx->chip.npwm = 1;
 
 	imx->mmio_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(imx->mmio_base))
 		return PTR_ERR(imx->mmio_base);
 
-	ret = clk_bulk_prepare_enable(imx->clks_cnt, imx->clks);
+	ret = pwm_imx27_clk_prepare_enable(imx);
 	if (ret)
 		return ret;
 
 	/* keep clks on if pwm is running */
 	pwmcr = readl(imx->mmio_base + MX3_PWMCR);
 	if (!(pwmcr & MX3_PWMCR_EN))
-		clk_bulk_disable_unprepare(imx->clks_cnt, imx->clks);
+		pwm_imx27_clk_disable_unprepare(imx);
 
-	return devm_pwmchip_add(&pdev->dev, chip);
+	return devm_pwmchip_add(&pdev->dev, &imx->chip);
 }
 
 static struct platform_driver imx_pwm_driver = {
@@ -427,6 +448,5 @@ static struct platform_driver imx_pwm_driver = {
 };
 module_platform_driver(imx_pwm_driver);
 
-MODULE_DESCRIPTION("i.MX27 and later i.MX SoCs Pulse Width Modulator driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");

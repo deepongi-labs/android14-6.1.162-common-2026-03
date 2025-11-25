@@ -136,7 +136,8 @@ static const struct v4l2_subdev_ops cs5345_ops = {
 
 /* ----------------------------------------------------------------------- */
 
-static int cs5345_probe(struct i2c_client *client)
+static int cs5345_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct cs5345_state *state;
 	struct v4l2_subdev *sd;
@@ -189,7 +190,7 @@ static void cs5345_remove(struct i2c_client *client)
 /* ----------------------------------------------------------------------- */
 
 static const struct i2c_device_id cs5345_id[] = {
-	{ "cs5345" },
+	{ "cs5345", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, cs5345_id);

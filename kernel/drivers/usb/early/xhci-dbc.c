@@ -499,7 +499,8 @@ static int xdbc_bulk_transfer(void *data, int size, bool read)
 		addr = xdbc.in_dma;
 		xdbc.flags |= XDBC_FLAGS_IN_PROCESS;
 	} else {
-		memcpy_and_pad(xdbc.out_buf, XDBC_MAX_PACKET, data, size, 0);
+		memset(xdbc.out_buf, 0, XDBC_MAX_PACKET);
+		memcpy(xdbc.out_buf, data, size);
 		addr = xdbc.out_dma;
 		xdbc.flags |= XDBC_FLAGS_OUT_PROCESS;
 	}
@@ -681,10 +682,6 @@ int __init early_xdbc_setup_hardware(void)
 
 		xdbc.table_base = NULL;
 		xdbc.out_buf = NULL;
-
-		early_iounmap(xdbc.xhci_base, xdbc.xhci_length);
-		xdbc.xhci_base = NULL;
-		xdbc.xhci_length = 0;
 	}
 
 	return ret;
@@ -884,7 +881,7 @@ static void early_xdbc_write(struct console *con, const char *str, u32 n)
 
 	if (!xdbc.xdbc_reg)
 		return;
-
+	memset(buf, 0, XDBC_MAX_PACKET);
 	while (n > 0) {
 		for (chunk = 0; chunk < XDBC_MAX_PACKET && n > 0; str++, chunk++, n--) {
 
@@ -931,7 +928,7 @@ void __init early_xdbc_register_console(void)
 
 static void xdbc_unregister_console(void)
 {
-	if (console_is_registered(&early_xdbc_console))
+	if (early_xdbc_console.flags & CON_ENABLED)
 		unregister_console(&early_xdbc_console);
 }
 

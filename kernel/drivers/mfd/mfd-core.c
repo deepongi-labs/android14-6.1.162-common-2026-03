@@ -29,9 +29,35 @@ struct mfd_of_node_entry {
 	struct device_node *np;
 };
 
-static const struct device_type mfd_dev_type = {
+static struct device_type mfd_dev_type = {
 	.name	= "mfd_device",
 };
+
+int mfd_cell_enable(struct platform_device *pdev)
+{
+	const struct mfd_cell *cell = mfd_get_cell(pdev);
+
+	if (!cell->enable) {
+		dev_dbg(&pdev->dev, "No .enable() call-back registered\n");
+		return 0;
+	}
+
+	return cell->enable(pdev);
+}
+EXPORT_SYMBOL(mfd_cell_enable);
+
+int mfd_cell_disable(struct platform_device *pdev)
+{
+	const struct mfd_cell *cell = mfd_get_cell(pdev);
+
+	if (!cell->disable) {
+		dev_dbg(&pdev->dev, "No .disable() call-back registered\n");
+		return 0;
+	}
+
+	return cell->disable(pdev);
+}
+EXPORT_SYMBOL(mfd_cell_disable);
 
 #if IS_ENABLED(CONFIG_ACPI)
 struct match_ids_walk_data {
@@ -87,7 +113,7 @@ static void mfd_acpi_add_device(const struct mfd_cell *cell,
 		}
 	}
 
-	device_set_node(&pdev->dev, acpi_fwnode_handle(adev ?: parent));
+	ACPI_COMPANION_SET(&pdev->dev, adev ?: parent);
 }
 #else
 static inline void mfd_acpi_add_device(const struct mfd_cell *cell,
@@ -102,6 +128,7 @@ static int mfd_match_of_node_to_dev(struct platform_device *pdev,
 {
 #if IS_ENABLED(CONFIG_OF)
 	struct mfd_of_node_entry *of_entry;
+	const __be32 *reg;
 	u64 of_node_addr;
 
 	/* Skip if OF node has previously been allocated to a device */
@@ -114,9 +141,12 @@ static int mfd_match_of_node_to_dev(struct platform_device *pdev,
 		goto allocate_of_node;
 
 	/* We only care about each node's first defined address */
-	if (of_property_read_reg(np, 0, &of_node_addr, NULL))
+	reg = of_get_address(np, 0, NULL, NULL);
+	if (!reg)
 		/* OF node does not contatin a 'reg' property to match to */
 		return -EAGAIN;
+
+	of_node_addr = of_read_number(reg, of_n_addr_cells(np));
 
 	if (cell->of_reg != of_node_addr)
 		/* No match */
@@ -131,8 +161,8 @@ allocate_of_node:
 	of_entry->np = np;
 	list_add_tail(&of_entry->list, &mfd_of_node_list);
 
-	of_node_get(np);
-	device_set_node(&pdev->dev, of_fwnode_handle(np));
+	pdev->dev.of_node = np;
+	pdev->dev.fwnode = &np->fwnode;
 #endif
 	return 0;
 }
@@ -437,6 +467,5 @@ int devm_mfd_add_devices(struct device *dev, int id,
 }
 EXPORT_SYMBOL(devm_mfd_add_devices);
 
-MODULE_DESCRIPTION("Core MFD support");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ian Molton, Dmitry Baryshkov");

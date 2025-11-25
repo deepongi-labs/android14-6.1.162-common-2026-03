@@ -25,7 +25,6 @@ struct vmem_altmap {
 	unsigned long free;
 	unsigned long align;
 	unsigned long alloc;
-	bool inaccessible;
 };
 
 /*
@@ -109,7 +108,7 @@ struct dev_pagemap_ops {
  * @altmap: pre-allocated/reserved memory for vmemmap allocations
  * @ref: reference count that pins the devm_memremap_pages() mapping
  * @done: completion for @ref
- * @type: memory type: see MEMORY_* above in memremap.h
+ * @type: memory type: see MEMORY_* in memory_hotplug.h
  * @flags: PGMAP_* flags to specify defailed behavior
  * @vmemmap_shift: structural definition of how the vmemmap page metadata
  *      is populated, specifically the metadata page order.
@@ -136,7 +135,7 @@ struct dev_pagemap {
 	int nr_range;
 	union {
 		struct range range;
-		DECLARE_FLEX_ARRAY(struct range, ranges);
+		struct range ranges[0];
 	};
 };
 
@@ -157,52 +156,34 @@ static inline unsigned long pgmap_vmemmap_nr(struct dev_pagemap *pgmap)
 	return 1 << pgmap->vmemmap_shift;
 }
 
-static inline bool folio_is_device_private(const struct folio *folio)
-{
-	return IS_ENABLED(CONFIG_DEVICE_PRIVATE) &&
-		folio_is_zone_device(folio) &&
-		folio->pgmap->type == MEMORY_DEVICE_PRIVATE;
-}
-
 static inline bool is_device_private_page(const struct page *page)
 {
 	return IS_ENABLED(CONFIG_DEVICE_PRIVATE) &&
-		folio_is_device_private(page_folio(page));
+		is_zone_device_page(page) &&
+		page->pgmap->type == MEMORY_DEVICE_PRIVATE;
 }
 
-static inline bool folio_is_pci_p2pdma(const struct folio *folio)
+static inline bool folio_is_device_private(const struct folio *folio)
 {
-	return IS_ENABLED(CONFIG_PCI_P2PDMA) &&
-		folio_is_zone_device(folio) &&
-		folio->pgmap->type == MEMORY_DEVICE_PCI_P2PDMA;
+	return is_device_private_page(&folio->page);
 }
 
 static inline bool is_pci_p2pdma_page(const struct page *page)
 {
 	return IS_ENABLED(CONFIG_PCI_P2PDMA) &&
-		folio_is_pci_p2pdma(page_folio(page));
-}
-
-static inline bool folio_is_device_coherent(const struct folio *folio)
-{
-	return folio_is_zone_device(folio) &&
-		folio->pgmap->type == MEMORY_DEVICE_COHERENT;
+		is_zone_device_page(page) &&
+		page->pgmap->type == MEMORY_DEVICE_PCI_P2PDMA;
 }
 
 static inline bool is_device_coherent_page(const struct page *page)
 {
-	return folio_is_device_coherent(page_folio(page));
+	return is_zone_device_page(page) &&
+		page->pgmap->type == MEMORY_DEVICE_COHERENT;
 }
 
-static inline bool folio_is_fsdax(const struct folio *folio)
+static inline bool folio_is_device_coherent(const struct folio *folio)
 {
-	return folio_is_zone_device(folio) &&
-		folio->pgmap->type == MEMORY_DEVICE_FS_DAX;
-}
-
-static inline bool is_fsdax_page(const struct page *page)
-{
-	return folio_is_fsdax(page_folio(page));
+	return is_device_coherent_page(&folio->page);
 }
 
 #ifdef CONFIG_ZONE_DEVICE
@@ -211,9 +192,12 @@ void *memremap_pages(struct dev_pagemap *pgmap, int nid);
 void memunmap_pages(struct dev_pagemap *pgmap);
 void *devm_memremap_pages(struct device *dev, struct dev_pagemap *pgmap);
 void devm_memunmap_pages(struct device *dev, struct dev_pagemap *pgmap);
-struct dev_pagemap *get_dev_pagemap(unsigned long pfn);
+struct dev_pagemap *get_dev_pagemap(unsigned long pfn,
+		struct dev_pagemap *pgmap);
 bool pgmap_pfn_valid(struct dev_pagemap *pgmap, unsigned long pfn);
 
+unsigned long vmem_altmap_offset(struct vmem_altmap *altmap);
+void vmem_altmap_free(struct vmem_altmap *altmap, unsigned long nr_pfns);
 unsigned long memremap_compat_align(void);
 #else
 static inline void *devm_memremap_pages(struct device *dev,
@@ -233,7 +217,8 @@ static inline void devm_memunmap_pages(struct device *dev,
 {
 }
 
-static inline struct dev_pagemap *get_dev_pagemap(unsigned long pfn)
+static inline struct dev_pagemap *get_dev_pagemap(unsigned long pfn,
+		struct dev_pagemap *pgmap)
 {
 	return NULL;
 }
@@ -241,6 +226,16 @@ static inline struct dev_pagemap *get_dev_pagemap(unsigned long pfn)
 static inline bool pgmap_pfn_valid(struct dev_pagemap *pgmap, unsigned long pfn)
 {
 	return false;
+}
+
+static inline unsigned long vmem_altmap_offset(struct vmem_altmap *altmap)
+{
+	return 0;
+}
+
+static inline void vmem_altmap_free(struct vmem_altmap *altmap,
+		unsigned long nr_pfns)
+{
 }
 
 /* when memremap_pages() is disabled all archs can remap a single page */

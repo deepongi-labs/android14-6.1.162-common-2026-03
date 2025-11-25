@@ -76,7 +76,7 @@ static void warn_bad_vsyscall(const char *level, struct pt_regs *regs,
 	if (!show_unhandled_signals)
 		return;
 
-	printk_ratelimited("%s%s[%d] %s ip:%lx cs:%x sp:%lx ax:%lx si:%lx di:%lx\n",
+	printk_ratelimited("%s%s[%d] %s ip:%lx cs:%lx sp:%lx ax:%lx si:%lx di:%lx\n",
 			   level, current->comm, task_pid_nr(current),
 			   message, regs->ip, regs->cs,
 			   regs->sp, regs->ax, regs->si, regs->di);
@@ -124,12 +124,7 @@ bool emulate_vsyscall(unsigned long error_code,
 	if ((error_code & (X86_PF_WRITE | X86_PF_USER)) != X86_PF_USER)
 		return false;
 
-	/*
-	 * Assume that faults at regs->ip are because of an
-	 * instruction fetch. Return early and avoid
-	 * emulation for faults during data accesses:
-	 */
-	if (address != regs->ip) {
+	if (!(error_code & X86_PF_INSTR)) {
 		/* Failed vsyscall read */
 		if (vsyscall_mode == EMULATE)
 			return false;
@@ -142,17 +137,11 @@ bool emulate_vsyscall(unsigned long error_code,
 	}
 
 	/*
-	 * X86_PF_INSTR is only set when NX is supported.  When
-	 * available, use it to double-check that the emulation code
-	 * is only being used for instruction fetches:
-	 */
-	if (cpu_feature_enabled(X86_FEATURE_NX))
-		WARN_ON_ONCE(!(error_code & X86_PF_INSTR));
-
-	/*
 	 * No point in checking CS -- the only way to get here is a user mode
 	 * trap to a high address, which means that we're in 64-bit user code.
 	 */
+
+	WARN_ON_ONCE(address != regs->ip);
 
 	if (vsyscall_mode == NONE) {
 		warn_bad_vsyscall(KERN_INFO, regs,
@@ -304,7 +293,7 @@ static struct vm_area_struct gate_vma __ro_after_init = {
 struct vm_area_struct *get_gate_vma(struct mm_struct *mm)
 {
 #ifdef CONFIG_COMPAT
-	if (!mm || !test_bit(MM_CONTEXT_HAS_VSYSCALL, &mm->context.flags))
+	if (!mm || !(mm->context.flags & MM_CONTEXT_HAS_VSYSCALL))
 		return NULL;
 #endif
 	if (vsyscall_mode == NONE)
@@ -352,7 +341,9 @@ void __init set_vsyscall_pgtable_user_bits(pgd_t *root)
 	pgd = pgd_offset_pgd(root, VSYSCALL_ADDR);
 	set_pgd(pgd, __pgd(pgd_val(*pgd) | _PAGE_USER));
 	p4d = p4d_offset(pgd, VSYSCALL_ADDR);
+#if CONFIG_PGTABLE_LEVELS >= 5
 	set_p4d(p4d, __p4d(p4d_val(*p4d) | _PAGE_USER));
+#endif
 	pud = pud_offset(p4d, VSYSCALL_ADDR);
 	set_pud(pud, __pud(pud_val(*pud) | _PAGE_USER));
 	pmd = pmd_offset(pud, VSYSCALL_ADDR);

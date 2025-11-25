@@ -11,15 +11,15 @@
 
 static __init int eisa_bus_probe(void)
 {
-	u32 *p;
+	void __iomem *p;
 
 	if ((xen_pv_domain() && !xen_initial_domain()) || cc_platform_has(CC_ATTR_GUEST_SEV_SNP))
 		return 0;
 
-	p = memremap(0x0FFFD9, 4, MEMREMAP_WB);
-	if (p && *p == 'E' + ('I' << 8) + ('S' << 16) + ('A' << 24))
+	p = ioremap(0x0FFFD9, 4);
+	if (p && readl(p) == 'E' + ('I' << 8) + ('S' << 16) + ('A' << 24))
 		EISA_bus = 1;
-	memunmap(p);
+	iounmap(p);
 	return 0;
 }
 subsys_initcall(eisa_bus_probe);

@@ -130,5 +130,4 @@ static void __exit test_uuid_exit(void)
 module_exit(test_uuid_exit);
 
 MODULE_AUTHOR("Andy Shevchenko <andriy.shevchenko@linux.intel.com>");
-MODULE_DESCRIPTION("Test cases for lib/uuid.c module");
 MODULE_LICENSE("Dual BSD/GPL");

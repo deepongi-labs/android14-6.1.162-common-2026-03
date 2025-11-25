@@ -14,22 +14,23 @@
 #include <linux/pagemap.h>
 #include <linux/console.h>
 #include <linux/platform_device.h>
+#include <linux/screen_info.h>
 
 #include "sm750.h"
 #include "sm750_accel.h"
-static inline void write_dpr(struct lynx_accel *accel, int offset, u32 reg_value)
+static inline void write_dpr(struct lynx_accel *accel, int offset, u32 regValue)
 {
-	writel(reg_value, accel->dpr_base + offset);
+	writel(regValue, accel->dprBase + offset);
 }
 
 static inline u32 read_dpr(struct lynx_accel *accel, int offset)
 {
-	return readl(accel->dpr_base + offset);
+	return readl(accel->dprBase + offset);
 }
 
 static inline void write_dpPort(struct lynx_accel *accel, u32 data)
 {
-	writel(data, accel->dp_port_base);
+	writel(data, accel->dpPortBase);
 }
 
 void sm750_hw_de_init(struct lynx_accel *accel)

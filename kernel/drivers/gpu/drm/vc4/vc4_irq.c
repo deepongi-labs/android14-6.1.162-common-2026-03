@@ -57,6 +57,8 @@
 			 V3D_INT_FLDONE | \
 			 V3D_INT_FRDONE)
 
+DECLARE_WAIT_QUEUE_HEAD(render_wait);
+
 static void
 vc4_overflow_mem_work(struct work_struct *work)
 {
@@ -76,7 +78,7 @@ vc4_overflow_mem_work(struct work_struct *work)
 
 	bin_bo_slot = vc4_v3d_get_bin_slot(vc4);
 	if (bin_bo_slot < 0) {
-		drm_err(&vc4->base, "Couldn't allocate binner overflow mem\n");
+		DRM_ERROR("Couldn't allocate binner overflow mem\n");
 		goto complete;
 	}
 
@@ -263,7 +265,7 @@ vc4_irq_enable(struct drm_device *dev)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 
-	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	if (!vc4->v3d)
@@ -280,7 +282,7 @@ vc4_irq_disable(struct drm_device *dev)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 
-	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	if (!vc4->v3d)
@@ -303,7 +305,7 @@ int vc4_irq_install(struct drm_device *dev, int irq)
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	if (irq == IRQ_NOTCONNECTED)
@@ -324,7 +326,7 @@ void vc4_irq_uninstall(struct drm_device *dev)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 
-	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	vc4_irq_disable(dev);
@@ -337,7 +339,7 @@ void vc4_irq_reset(struct drm_device *dev)
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	unsigned long irqflags;
 
-	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	/* Acknowledge any stale IRQs. */

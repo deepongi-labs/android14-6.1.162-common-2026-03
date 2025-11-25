@@ -982,6 +982,7 @@ static int mt9t112_set_fmt(struct v4l2_subdev *sd,
 
 	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE)
 		return mt9t112_s_fmt(sd, mf);
+	sd_state->pads->try_fmt = *mf;
 
 	return 0;
 }
@@ -1059,7 +1060,8 @@ done:
 	return ret;
 }
 
-static int mt9t112_probe(struct i2c_client *client)
+static int mt9t112_probe(struct i2c_client *client,
+			 const struct i2c_device_id *did)
 {
 	struct mt9t112_priv *priv;
 	int ret;
@@ -1078,12 +1080,13 @@ static int mt9t112_probe(struct i2c_client *client)
 
 	v4l2_i2c_subdev_init(&priv->subdev, client, &mt9t112_subdev_ops);
 
-	priv->clk = devm_v4l2_sensor_clk_get(&client->dev, "extclk");
-	if (PTR_ERR(priv->clk) == -ENOENT)
+	priv->clk = devm_clk_get(&client->dev, "extclk");
+	if (PTR_ERR(priv->clk) == -ENOENT) {
 		priv->clk = NULL;
-	else if (IS_ERR(priv->clk))
-		return dev_err_probe(&client->dev, PTR_ERR(priv->clk),
-				     "Unable to get clock \"extclk\"\n");
+	} else if (IS_ERR(priv->clk)) {
+		dev_err(&client->dev, "Unable to get clock \"extclk\"\n");
+		return PTR_ERR(priv->clk);
+	}
 
 	priv->standby_gpio = devm_gpiod_get_optional(&client->dev, "standby",
 						     GPIOD_OUT_HIGH);
@@ -1108,7 +1111,7 @@ static void mt9t112_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id mt9t112_id[] = {
-	{ "mt9t112" },
+	{ "mt9t112", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, mt9t112_id);

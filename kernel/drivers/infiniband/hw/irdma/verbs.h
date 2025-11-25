@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
+/* SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB */
 /* Copyright (c) 2015 - 2021 Intel Corporation */
 #ifndef IRDMA_VERBS_H
 #define IRDMA_VERBS_H
@@ -8,7 +8,6 @@
 
 #define IRDMA_PKEY_TBL_SZ		1
 #define IRDMA_DEFAULT_PKEY		0xFFFF
-#define IRDMA_SHADOW_PGCNT		1
 
 struct irdma_ucontext {
 	struct ib_ucontext ibucontext;
@@ -18,8 +17,6 @@ struct irdma_ucontext {
 	spinlock_t cq_reg_mem_list_lock; /* protect CQ memory list */
 	struct list_head qp_reg_mem_list;
 	spinlock_t qp_reg_mem_list_lock; /* protect QP memory list */
-	struct list_head srq_reg_mem_list;
-	spinlock_t srq_reg_mem_list_lock; /* protect SRQ memory list */
 	int abi_ver;
 	u8 legacy_mode : 1;
 	u8 use_raw_attrs : 1;
@@ -68,16 +65,10 @@ struct irdma_cq_mr {
 	bool split;
 };
 
-struct irdma_srq_mr {
-	struct irdma_hmc_pble srq_pbl;
-	dma_addr_t shadow;
-};
-
 struct irdma_qp_mr {
 	struct irdma_hmc_pble sq_pbl;
 	struct irdma_hmc_pble rq_pbl;
 	dma_addr_t shadow;
-	dma_addr_t rq_pa;
 	struct page *sq_page;
 };
 
@@ -94,7 +85,6 @@ struct irdma_pbl {
 	union {
 		struct irdma_qp_mr qp_mr;
 		struct irdma_cq_mr cq_mr;
-		struct irdma_srq_mr srq_mr;
 	};
 
 	bool pbl_allocated:1;
@@ -110,8 +100,6 @@ struct irdma_mr {
 		struct ib_mw ibmw;
 	};
 	struct ib_umem *region;
-	int access;
-	u8 is_hwreg;
 	u16 type;
 	u32 page_cnt;
 	u64 page_size;
@@ -122,33 +110,22 @@ struct irdma_mr {
 	struct irdma_pbl iwpbl;
 };
 
-struct irdma_srq {
-	struct ib_srq ibsrq;
-	struct irdma_sc_srq sc_srq __aligned(64);
-	struct irdma_dma_mem kmem;
-	u64 *srq_wrid_mem;
-	refcount_t refcnt;
-	spinlock_t lock; /* for poll srq */
-	struct irdma_pbl *iwpbl;
-	struct irdma_sge *sg_list;
-	u16 srq_head;
-	u32 srq_num;
-	u32 max_wr;
-	bool user_mode:1;
-};
-
 struct irdma_cq {
 	struct ib_cq ibcq;
 	struct irdma_sc_cq sc_cq;
-	u32 cq_num;
+	u16 cq_head;
+	u16 cq_size;
+	u16 cq_num;
 	bool user_mode;
 	atomic_t armed;
 	enum irdma_cmpl_notify last_notify;
+	u32 polled_cmpls;
+	u32 cq_mem_size;
 	struct irdma_dma_mem kmem;
 	struct irdma_dma_mem kmem_shadow;
-	struct completion free_cq;
-	refcount_t refcnt;
 	spinlock_t lock; /* for poll cq */
+	struct irdma_pbl *iwpbl;
+	struct irdma_pbl *iwpbl_shadow;
 	struct list_head resize_list;
 	struct irdma_cq_poll_info cur_cqe;
 	struct list_head cmpl_generated;
@@ -278,30 +255,11 @@ static inline void set_ib_wc_op_sq(struct irdma_cq_poll_info *cq_poll_info,
 	case IRDMA_OP_TYPE_FAST_REG_NSMR:
 		entry->opcode = IB_WC_REG_MR;
 		break;
-	case IRDMA_OP_TYPE_ATOMIC_COMPARE_AND_SWAP:
-		entry->opcode = IB_WC_COMP_SWAP;
-		break;
-	case IRDMA_OP_TYPE_ATOMIC_FETCH_AND_ADD:
-		entry->opcode = IB_WC_FETCH_ADD;
-		break;
 	case IRDMA_OP_TYPE_INV_STAG:
 		entry->opcode = IB_WC_LOCAL_INV;
 		break;
 	default:
 		entry->status = IB_WC_GENERAL_ERR;
-	}
-}
-
-static inline void set_ib_wc_op_rq_gen_3(struct irdma_cq_poll_info *info,
-					 struct ib_wc *entry)
-{
-	switch (info->op_type) {
-	case IRDMA_OP_TYPE_RDMA_WRITE:
-	case IRDMA_OP_TYPE_RDMA_WRITE_SOL:
-		entry->opcode = IB_WC_RECV_RDMA_WITH_IMM;
-		break;
-	default:
-		entry->opcode = IB_WC_RECV;
 	}
 }
 

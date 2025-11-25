@@ -3,8 +3,9 @@
 #
 # headers_check.pl execute a number of trivial consistency checks
 #
-# Usage: headers_check.pl dir [files...]
+# Usage: headers_check.pl dir arch [files...]
 # dir:   dir to look for included files
+# arch:  architecture
 # files: list of files to check
 #
 # The script reads the supplied files line by line and:
@@ -22,7 +23,7 @@ use warnings;
 use strict;
 use File::Basename;
 
-my ($dir, @files) = @ARGV;
+my ($dir, $arch, @files) = @ARGV;
 
 my $ret = 0;
 my $line;
@@ -54,6 +55,10 @@ sub check_include
 		my $found;
 		$found = stat($dir . "/" . $inc);
 		if (!$found) {
+			$inc =~ s#asm/#asm-$arch/#;
+			$found = stat($dir . "/" . $inc);
+		}
+		if (!$found) {
 			printf STDERR "$filename:$lineno: included file '$inc' is not exported\n";
 			$ret = 1;
 		}
@@ -74,7 +79,6 @@ sub check_declarations
 		printf STDERR "$filename:$lineno: " .
 			      "userspace cannot reference function or " .
 			      "variable defined in the kernel\n";
-		$ret = 1;
 	}
 }
 
@@ -99,8 +103,9 @@ sub check_asm_types
 	if ($line =~ m/^\s*#\s*include\s+<asm\/types.h>/) {
 		$linux_asm_types = 1;
 		printf STDERR "$filename:$lineno: " .
-		"include of <linux/types.h> is preferred over <asm/types.h>\n";
-		$ret = 1;
+		"include of <linux/types.h> is preferred over <asm/types.h>\n"
+		# Warn until headers are all fixed
+		#$ret = 1;
 	}
 }
 
@@ -155,13 +160,12 @@ sub check_sizetypes
 	if (my $included = ($line =~ /^\s*#\s*include\s+[<"](\S+)[>"]/)[0]) {
 		check_include_typesh($included);
 	}
-	# strip single-line comments, as types may be referenced within them
-	$line =~ s@/\*.*?\*/@@;
 	if ($line =~ m/__[us](8|16|32|64)\b/) {
 		printf STDERR "$filename:$lineno: " .
 		              "found __[us]{8,16,32,64} type " .
 		              "without #include <linux/types.h>\n";
 		$linux_types = 2;
-		$ret = 1;
+		# Warn until headers are all fixed
+		#$ret = 1;
 	}
 }

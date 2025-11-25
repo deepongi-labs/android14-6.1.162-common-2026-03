@@ -6,13 +6,14 @@
  *  Copyright (C) 2015  Intel Corporation
  */
 
+#ifndef __GENKSYMS__	// ANDROID CRC kabi preservation hack due to commit 76dd7893bd10
 #include <linux/efi.h>
+#endif
 #include <linux/module.h>
 #include <linux/firmware.h>
 #include <linux/dmi.h>
 #include <linux/of.h>
-#include <linux/string.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -25,7 +26,6 @@
 #define BDADDR_BCM20702A1 (&(bdaddr_t) {{0x00, 0x00, 0xa0, 0x02, 0x70, 0x20}})
 #define BDADDR_BCM2076B1 (&(bdaddr_t) {{0x79, 0x56, 0x00, 0xa0, 0x76, 0x20}})
 #define BDADDR_BCM43430A0 (&(bdaddr_t) {{0xac, 0x1f, 0x12, 0xa0, 0x43, 0x43}})
-#define BDADDR_BCM43430A1 (&(bdaddr_t) {{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}})
 #define BDADDR_BCM4324B3 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb3, 0x24, 0x43}})
 #define BDADDR_BCM4330B1 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb1, 0x30, 0x43}})
 #define BDADDR_BCM4334B0 (&(bdaddr_t) {{0x00, 0x00, 0x00, 0xb0, 0x34, 0x43}})
@@ -117,9 +117,6 @@ int btbcm_check_bdaddr(struct hci_dev *hdev)
 	 *
 	 * The address 43:43:A0:12:1F:AC indicates a BCM43430A0 controller
 	 * with no configured address.
-	 *
-	 * The address AA:AA:AA:AA:AA:AA indicates a BCM43430A1 controller
-	 * with no configured address.
 	 */
 	if (!bacmp(&bda->bdaddr, BDADDR_BCM20702A0) ||
 	    !bacmp(&bda->bdaddr, BDADDR_BCM20702A1) ||
@@ -129,13 +126,12 @@ int btbcm_check_bdaddr(struct hci_dev *hdev)
 	    !bacmp(&bda->bdaddr, BDADDR_BCM4334B0) ||
 	    !bacmp(&bda->bdaddr, BDADDR_BCM4345C5) ||
 	    !bacmp(&bda->bdaddr, BDADDR_BCM43430A0) ||
-	    !bacmp(&bda->bdaddr, BDADDR_BCM43430A1) ||
 	    !bacmp(&bda->bdaddr, BDADDR_BCM43341B)) {
 		/* Try falling back to BDADDR EFI variable */
 		if (btbcm_set_bdaddr_from_efi(hdev) != 0) {
 			bt_dev_info(hdev, "BCM: Using default device address (%pMR)",
 				    &bda->bdaddr);
-			hci_set_quirk(hdev, HCI_QUIRK_INVALID_BDADDR);
+			set_bit(HCI_QUIRK_INVALID_BDADDR, &hdev->quirks);
 		}
 	}
 
@@ -467,7 +463,7 @@ static int btbcm_print_controller_features(struct hci_dev *hdev)
 
 	/* Read DMI and disable broken Read LE Min/Max Tx Power */
 	if (dmi_first_match(disable_broken_read_transmit_power))
-		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_READ_TRANSMIT_POWER);
+		set_bit(HCI_QUIRK_BROKEN_READ_TRANSMIT_POWER, &hdev->quirks);
 
 	return 0;
 }
@@ -541,10 +537,13 @@ static const struct bcm_subver_table bcm_usb_subver_table[] = {
 static const char *btbcm_get_board_name(struct device *dev)
 {
 #ifdef CONFIG_OF
-	struct device_node *root __free(device_node) = of_find_node_by_path("/");
+	struct device_node *root;
 	char *board_type;
 	const char *tmp;
+	int len;
+	int i;
 
+	root = of_find_node_by_path("/");
 	if (!root)
 		return NULL;
 
@@ -552,11 +551,14 @@ static const char *btbcm_get_board_name(struct device *dev)
 		return NULL;
 
 	/* get rid of any '/' in the compatible string */
-	board_type = devm_kstrdup(dev, tmp, GFP_KERNEL);
-	if (!board_type)
-		return NULL;
-
-	strreplace(board_type, '/', '-');
+	len = strlen(tmp) + 1;
+	board_type = devm_kzalloc(dev, len, GFP_KERNEL);
+	strscpy(board_type, tmp, len);
+	for (i = 0; i < len; i++) {
+		if (board_type[i] == '/')
+			board_type[i] = '-';
+	}
+	of_node_put(root);
 
 	return board_type;
 #else
@@ -706,7 +708,7 @@ int btbcm_finalize(struct hci_dev *hdev, bool *fw_load_done, bool use_autobaud_m
 
 	btbcm_check_bdaddr(hdev);
 
-	hci_set_quirk(hdev, HCI_QUIRK_STRICT_DUPLICATE_FILTER);
+	set_bit(HCI_QUIRK_STRICT_DUPLICATE_FILTER, &hdev->quirks);
 
 	return 0;
 }
@@ -769,7 +771,7 @@ int btbcm_setup_apple(struct hci_dev *hdev)
 		kfree_skb(skb);
 	}
 
-	hci_set_quirk(hdev, HCI_QUIRK_STRICT_DUPLICATE_FILTER);
+	set_bit(HCI_QUIRK_STRICT_DUPLICATE_FILTER, &hdev->quirks);
 
 	return 0;
 }

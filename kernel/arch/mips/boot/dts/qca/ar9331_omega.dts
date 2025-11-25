@@ -22,7 +22,7 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-system {
+		system {
 			label = "onion:amber:system";
 			gpios = <&gpio 27 GPIO_ACTIVE_LOW>;
 			default-state = "off";
@@ -73,8 +73,4 @@
 		spi-max-frequency = <104000000>;
 		reg = <0>;
 	};
-};
-
-&wifi {
-	status = "okay";
 };

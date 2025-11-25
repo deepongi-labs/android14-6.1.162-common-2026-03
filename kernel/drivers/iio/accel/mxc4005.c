@@ -9,9 +9,8 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/iio/iio.h>
-#include <linux/mod_devicetable.h>
+#include <linux/acpi.h>
 #include <linux/regmap.h>
-#include <linux/types.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/trigger.h>
 #include <linux/iio/buffer.h>
@@ -19,6 +18,8 @@
 #include <linux/iio/trigger_consumer.h>
 
 #define MXC4005_DRV_NAME		"mxc4005"
+#define MXC4005_IRQ_NAME		"mxc4005_event"
+#define MXC4005_REGMAP_NAME		"mxc4005_regmap"
 
 #define MXC4005_REG_XOUT_UPPER		0x03
 #define MXC4005_REG_XOUT_LOWER		0x04
@@ -64,11 +65,10 @@ struct mxc4005_data {
 	struct mutex mutex;
 	struct regmap *regmap;
 	struct iio_trigger *dready_trig;
-	struct iio_mount_matrix orientation;
 	/* Ensure timestamp is naturally aligned */
 	struct {
 		__be16 chans[3];
-		aligned_s64 timestamp;
+		s64 timestamp __aligned(8);
 	} scan;
 	bool trigger_enabled;
 	unsigned int control;
@@ -136,7 +136,7 @@ static bool mxc4005_is_writeable_reg(struct device *dev, unsigned int reg)
 }
 
 static const struct regmap_config mxc4005_regmap_config = {
-	.name = "mxc4005_regmap",
+	.name = MXC4005_REGMAP_NAME,
 
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -272,20 +272,6 @@ static int mxc4005_write_raw(struct iio_dev *indio_dev,
 	}
 }
 
-static const struct iio_mount_matrix *
-mxc4005_get_mount_matrix(const struct iio_dev *indio_dev,
-			   const struct iio_chan_spec *chan)
-{
-	struct mxc4005_data *data = iio_priv(indio_dev);
-
-	return &data->orientation;
-}
-
-static const struct iio_chan_spec_ext_info mxc4005_ext_info[] = {
-	IIO_MOUNT_MATRIX(IIO_SHARED_BY_TYPE, mxc4005_get_mount_matrix),
-	{ }
-};
-
 static const struct iio_info mxc4005_info = {
 	.read_raw	= mxc4005_read_raw,
 	.write_raw	= mxc4005_write_raw,
@@ -312,7 +298,6 @@ static const unsigned long mxc4005_scan_masks[] = {
 		.shift = 4,					\
 		.endianness = IIO_BE,				\
 	},							\
-	.ext_info = mxc4005_ext_info,				\
 }
 
 static const struct iio_chan_spec mxc4005_channels[] = {
@@ -333,8 +318,8 @@ static irqreturn_t mxc4005_trigger_handler(int irq, void *private)
 	if (ret < 0)
 		goto err;
 
-	iio_push_to_buffers_with_ts(indio_dev, &data->scan, sizeof(data->scan),
-				    pf->timestamp);
+	iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+					   pf->timestamp);
 
 err:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -425,7 +410,8 @@ static int mxc4005_chip_init(struct mxc4005_data *data)
 	return 0;
 }
 
-static int mxc4005_probe(struct i2c_client *client)
+static int mxc4005_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct mxc4005_data *data;
 	struct iio_dev *indio_dev;
@@ -454,12 +440,6 @@ static int mxc4005_probe(struct i2c_client *client)
 	}
 
 	mutex_init(&data->mutex);
-
-	if (!iio_read_acpi_mount_matrix(&client->dev, &data->orientation, "ROTM")) {
-		ret = iio_read_mount_matrix(&client->dev, &data->orientation);
-		if (ret)
-			return ret;
-	}
 
 	indio_dev->channels = mxc4005_channels;
 	indio_dev->num_channels = ARRAY_SIZE(mxc4005_channels);
@@ -491,7 +471,7 @@ static int mxc4005_probe(struct i2c_client *client)
 						NULL,
 						IRQF_TRIGGER_FALLING |
 						IRQF_ONESHOT,
-						"mxc4005_event",
+						MXC4005_IRQ_NAME,
 						data->dready_trig);
 		if (ret) {
 			dev_err(&client->dev,
@@ -570,29 +550,28 @@ static DEFINE_SIMPLE_DEV_PM_OPS(mxc4005_pm_ops, mxc4005_suspend, mxc4005_resume)
 static const struct acpi_device_id mxc4005_acpi_match[] = {
 	{"MXC4005",	0},
 	{"MXC6655",	0},
-	{"MDA6655",	0},
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(acpi, mxc4005_acpi_match);
 
 static const struct of_device_id mxc4005_of_match[] = {
 	{ .compatible = "memsic,mxc4005", },
 	{ .compatible = "memsic,mxc6655", },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, mxc4005_of_match);
 
 static const struct i2c_device_id mxc4005_id[] = {
-	{ "mxc4005" },
-	{ "mxc6655" },
-	{ }
+	{"mxc4005",	0},
+	{"mxc6655",	0},
+	{ },
 };
 MODULE_DEVICE_TABLE(i2c, mxc4005_id);
 
 static struct i2c_driver mxc4005_driver = {
 	.driver = {
 		.name = MXC4005_DRV_NAME,
-		.acpi_match_table = mxc4005_acpi_match,
+		.acpi_match_table = ACPI_PTR(mxc4005_acpi_match),
 		.of_match_table = mxc4005_of_match,
 		.pm = pm_sleep_ptr(&mxc4005_pm_ops),
 	},

@@ -24,9 +24,10 @@
 
 #ifdef CONFIG_KASAN
 void kasan_init(void);
+extern int kasan_um_is_ready;
 
-#if defined(CONFIG_STATIC_LINK) && defined(CONFIG_KASAN_INLINE)
-#error UML does not work in KASAN_INLINE mode with STATIC_LINK enabled!
+#ifdef CONFIG_STATIC_LINK
+#define kasan_arch_is_ready() (kasan_um_is_ready)
 #endif
 #else
 static inline void kasan_init(void) { }

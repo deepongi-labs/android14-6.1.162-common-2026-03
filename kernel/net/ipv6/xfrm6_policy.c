@@ -77,7 +77,7 @@ static int xfrm6_get_saddr(xfrm_address_t *saddr,
 static int xfrm6_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
 			  const struct flowi *fl)
 {
-	struct rt6_info *rt = dst_rt6_info(xdst->route);
+	struct rt6_info *rt = (struct rt6_info *)xdst->route;
 
 	xdst->u.dst.dev = dev;
 	netdev_hold(dev, &xdst->u.dst.dev_tracker, GFP_ATOMIC);
@@ -96,6 +96,7 @@ static int xfrm6_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
 	xdst->u.rt6.rt6i_gateway = rt->rt6i_gateway;
 	xdst->u.rt6.rt6i_dst = rt->rt6i_dst;
 	xdst->u.rt6.rt6i_src = rt->rt6i_src;
+	INIT_LIST_HEAD(&xdst->u.rt6.rt6i_uncached);
 	rt6_uncached_list_add(&xdst->u.rt6);
 
 	return 0;
@@ -125,15 +126,20 @@ static void xfrm6_dst_destroy(struct dst_entry *dst)
 	struct xfrm_dst *xdst = (struct xfrm_dst *)dst;
 
 	dst_destroy_metrics_generic(dst);
-	rt6_uncached_list_del(&xdst->u.rt6);
+	if (xdst->u.rt6.rt6i_uncached_list)
+		rt6_uncached_list_del(&xdst->u.rt6);
 	if (likely(xdst->u.rt6.rt6i_idev))
 		in6_dev_put(xdst->u.rt6.rt6i_idev);
 	xfrm_dst_destroy(xdst);
 }
 
-static void xfrm6_dst_ifdown(struct dst_entry *dst, struct net_device *dev)
+static void xfrm6_dst_ifdown(struct dst_entry *dst, struct net_device *dev,
+			     int unregister)
 {
 	struct xfrm_dst *xdst;
+
+	if (!unregister)
+		return;
 
 	xdst = (struct xfrm_dst *)dst;
 	if (xdst->u.rt6.rt6i_idev->dev == dev) {
@@ -191,6 +197,7 @@ static struct ctl_table xfrm6_policy_table[] = {
 		.mode		= 0644,
 		.proc_handler   = proc_dointvec,
 	},
+	{ }
 };
 
 static int __net_init xfrm6_net_sysctl_init(struct net *net)
@@ -207,8 +214,7 @@ static int __net_init xfrm6_net_sysctl_init(struct net *net)
 		table[0].data = &net->xfrm.xfrm6_dst_ops.gc_thresh;
 	}
 
-	hdr = register_net_sysctl_sz(net, "net/ipv6", table,
-				     ARRAY_SIZE(xfrm6_policy_table));
+	hdr = register_net_sysctl(net, "net/ipv6", table);
 	if (!hdr)
 		goto err_reg;
 
@@ -224,7 +230,7 @@ err_alloc:
 
 static void __net_exit xfrm6_net_sysctl_exit(struct net *net)
 {
-	const struct ctl_table *table;
+	struct ctl_table *table;
 
 	if (!net->ipv6.sysctl.xfrm6_hdr)
 		return;
@@ -291,14 +297,8 @@ int __init xfrm6_init(void)
 	ret = register_pernet_subsys(&xfrm6_net_ops);
 	if (ret)
 		goto out_protocol;
-
-	ret = xfrm_nat_keepalive_init(AF_INET6);
-	if (ret)
-		goto out_nat_keepalive;
 out:
 	return ret;
-out_nat_keepalive:
-	unregister_pernet_subsys(&xfrm6_net_ops);
 out_protocol:
 	xfrm6_protocol_fini();
 out_state:
@@ -310,7 +310,6 @@ out_policy:
 
 void xfrm6_fini(void)
 {
-	xfrm_nat_keepalive_fini(AF_INET6);
 	unregister_pernet_subsys(&xfrm6_net_ops);
 	xfrm6_protocol_fini();
 	xfrm6_policy_fini();

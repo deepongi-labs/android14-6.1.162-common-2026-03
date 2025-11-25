@@ -13,7 +13,6 @@
 #include <ctype.h>
 #include <endian.h>
 #include <errno.h>
-#include <limits.h>
 #include <linux/err.h>
 #include <linux/btf.h>
 #include <linux/kernel.h>
@@ -67,7 +66,6 @@ struct btf_dump_data {
 	bool compact;
 	bool skip_names;
 	bool emit_zeroes;
-	bool emit_strings;
 	__u8 indent_lvl;	/* base indent level */
 	char indent_str[BTF_DATA_INDENT_STR_LEN];
 	/* below are used during iteration */
@@ -119,14 +117,14 @@ struct btf_dump {
 	struct btf_dump_data *typed_dump;
 };
 
-static size_t str_hash_fn(long key, void *ctx)
+static size_t str_hash_fn(const void *key, void *ctx)
 {
-	return str_hash((void *)key);
+	return str_hash(key);
 }
 
-static bool str_equal_fn(long a, long b, void *ctx)
+static bool str_equal_fn(const void *a, const void *b, void *ctx)
 {
-	return strcmp((void *)a, (void *)b) == 0;
+	return strcmp(a, b) == 0;
 }
 
 static const char *btf_name_of(const struct btf_dump *d, __u32 name_off)
@@ -230,7 +228,7 @@ static void btf_dump_free_names(struct hashmap *map)
 		return;
 
 	hashmap__for_each_entry(map, cur, bkt)
-		free((void *)cur->pkey);
+		free((void *)cur->key);
 
 	hashmap__free(map);
 }
@@ -308,7 +306,7 @@ int btf_dump__dump_type(struct btf_dump *d, __u32 id)
  * definition, in which case they have to be declared inline as part of field
  * type declaration; or as a top-level anonymous enum, typically used for
  * declaring global constants. It's impossible to distinguish between two
- * without knowing whether given enum type was referenced from other type:
+ * without knowning whether given enum type was referenced from other type:
  * top-level anonymous enum won't be referenced by anything, while embedded
  * one will.
  */
@@ -871,8 +869,8 @@ static void btf_dump_emit_bit_padding(const struct btf_dump *d,
 	} pads[] = {
 		{"long", d->ptr_sz * 8}, {"int", 32}, {"short", 16}, {"char", 8}
 	};
-	int new_off = 0, pad_bits = 0, bits, i;
-	const char *pad_type = NULL;
+	int new_off, pad_bits, bits, i;
+	const char *pad_type;
 
 	if (cur_off >= next_off)
 		return; /* no gap */
@@ -1137,43 +1135,6 @@ static void btf_dump_emit_enum_def(struct btf_dump *d, __u32 id,
 	else
 		btf_dump_emit_enum64_val(d, t, lvl, vlen);
 	btf_dump_printf(d, "\n%s}", pfx(lvl));
-
-	/* special case enums with special sizes */
-	if (t->size == 1) {
-		/* one-byte enums can be forced with mode(byte) attribute */
-		btf_dump_printf(d, " __attribute__((mode(byte)))");
-	} else if (t->size == 8 && d->ptr_sz == 8) {
-		/* enum can be 8-byte sized if one of the enumerator values
-		 * doesn't fit in 32-bit integer, or by adding mode(word)
-		 * attribute (but probably only on 64-bit architectures); do
-		 * our best here to try to satisfy the contract without adding
-		 * unnecessary attributes
-		 */
-		bool needs_word_mode;
-
-		if (btf_is_enum(t)) {
-			/* enum can't represent 64-bit values, so we need word mode */
-			needs_word_mode = true;
-		} else {
-			/* enum64 needs mode(word) if none of its values has
-			 * non-zero upper 32-bits (which means that all values
-			 * fit in 32-bit integers and won't cause compiler to
-			 * bump enum to be 64-bit naturally
-			 */
-			int i;
-
-			needs_word_mode = true;
-			for (i = 0; i < vlen; i++) {
-				if (btf_enum64(t)[i].val_hi32 != 0) {
-					needs_word_mode = false;
-					break;
-				}
-			}
-		}
-		if (needs_word_mode)
-			btf_dump_printf(d, " __attribute__((mode(word)))");
-	}
-
 }
 
 static void btf_dump_emit_fwd_def(struct btf_dump *d, __u32 id,
@@ -1308,7 +1269,7 @@ static void btf_dump_emit_type_decl(struct btf_dump *d, __u32 id,
 			 * chain, restore stack, emit warning, and try to
 			 * proceed nevertheless
 			 */
-			pr_warn("not enough memory for decl stack: %s\n", errstr(err));
+			pr_warn("not enough memory for decl stack:%d", err);
 			d->decl_stack_cnt = stack_start;
 			return;
 		}
@@ -1497,10 +1458,7 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 		case BTF_KIND_TYPE_TAG:
 			btf_dump_emit_mods(d, decls);
 			name = btf_name_of(d, t->name_off);
-			if (btf_kflag(t))
-				btf_dump_printf(d, " __attribute__((%s))", name);
-			else
-				btf_dump_printf(d, " __attribute__((btf_type_tag(\"%s\")))", name);
+			btf_dump_printf(d, " __attribute__((btf_type_tag(\"%s\")))", name);
 			break;
 		case BTF_KIND_ARRAY: {
 			const struct btf_array *a = btf_array(t);
@@ -1649,10 +1607,11 @@ static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
 	if (!new_name)
 		return 1;
 
-	(void)hashmap__find(name_map, orig_name, &dup_cnt);
+	hashmap__find(name_map, orig_name, (void **)&dup_cnt);
 	dup_cnt++;
 
-	err = hashmap__set(name_map, new_name, dup_cnt, &old_name, NULL);
+	err = hashmap__set(name_map, new_name, (void *)dup_cnt,
+			   (const void **)&old_name, NULL);
 	if (err)
 		free(new_name);
 
@@ -1938,7 +1897,6 @@ static int btf_dump_int_data(struct btf_dump *d,
 			if (d->typed_dump->is_array_terminated)
 				break;
 			if (*(char *)data == '\0') {
-				btf_dump_type_values(d, "'\\0'");
 				d->typed_dump->is_array_terminated = true;
 				break;
 			}
@@ -2031,52 +1989,6 @@ static int btf_dump_var_data(struct btf_dump *d,
 	return btf_dump_dump_type_data(d, NULL, t, type_id, data, 0, 0);
 }
 
-static int btf_dump_string_data(struct btf_dump *d,
-				const struct btf_type *t,
-				__u32 id,
-				const void *data)
-{
-	const struct btf_array *array = btf_array(t);
-	const char *chars = data;
-	__u32 i;
-
-	/* Make sure it is a NUL-terminated string. */
-	for (i = 0; i < array->nelems; i++) {
-		if ((void *)(chars + i) >= d->typed_dump->data_end)
-			return -E2BIG;
-		if (chars[i] == '\0')
-			break;
-	}
-	if (i == array->nelems) {
-		/* The caller will print this as a regular array. */
-		return -EINVAL;
-	}
-
-	btf_dump_data_pfx(d);
-	btf_dump_printf(d, "\"");
-
-	for (i = 0; i < array->nelems; i++) {
-		char c = chars[i];
-
-		if (c == '\0') {
-			/*
-			 * When printing character arrays as strings, NUL bytes
-			 * are always treated as string terminators; they are
-			 * never printed.
-			 */
-			break;
-		}
-		if (isprint(c))
-			btf_dump_printf(d, "%c", c);
-		else
-			btf_dump_printf(d, "\\x%02x", (__u8)c);
-	}
-
-	btf_dump_printf(d, "\"");
-
-	return 0;
-}
-
 static int btf_dump_array_data(struct btf_dump *d,
 			       const struct btf_type *t,
 			       __u32 id,
@@ -2087,7 +1999,6 @@ static int btf_dump_array_data(struct btf_dump *d,
 	__u32 i, elem_type_id;
 	__s64 elem_size;
 	bool is_array_member;
-	bool is_array_terminated;
 
 	elem_type_id = array->type;
 	elem_type = skip_mods_and_typedefs(d->btf, elem_type_id, NULL);
@@ -2104,13 +2015,8 @@ static int btf_dump_array_data(struct btf_dump *d,
 		 * char arrays, so if size is 1 and element is
 		 * printable as a char, we'll do that.
 		 */
-		if (elem_size == 1) {
-			if (d->typed_dump->emit_strings &&
-			    btf_dump_string_data(d, t, id, data) == 0) {
-				return 0;
-			}
+		if (elem_size == 1)
 			d->typed_dump->is_array_char = true;
-		}
 	}
 
 	/* note that we increment depth before calling btf_dump_print() below;
@@ -2128,15 +2034,12 @@ static int btf_dump_array_data(struct btf_dump *d,
 	 */
 	is_array_member = d->typed_dump->is_array_member;
 	d->typed_dump->is_array_member = true;
-	is_array_terminated = d->typed_dump->is_array_terminated;
-	d->typed_dump->is_array_terminated = false;
 	for (i = 0; i < array->nelems; i++, data += elem_size) {
 		if (d->typed_dump->is_array_terminated)
 			break;
 		btf_dump_dump_type_data(d, NULL, elem_type, elem_type_id, data, 0, 0);
 	}
 	d->typed_dump->is_array_member = is_array_member;
-	d->typed_dump->is_array_terminated = is_array_terminated;
 	d->typed_dump->depth--;
 	btf_dump_data_pfx(d);
 	btf_dump_type_values(d, "]");
@@ -2598,7 +2501,6 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 	d->typed_dump->compact = OPTS_GET(opts, compact, false);
 	d->typed_dump->skip_names = OPTS_GET(opts, skip_names, false);
 	d->typed_dump->emit_zeroes = OPTS_GET(opts, emit_zeroes, false);
-	d->typed_dump->emit_strings = OPTS_GET(opts, emit_strings, false);
 
 	ret = btf_dump_dump_type_data(d, NULL, t, id, data, 0, 0);
 

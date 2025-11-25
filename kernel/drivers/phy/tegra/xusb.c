@@ -8,7 +8,7 @@
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/phy/tegra/xusb.h>
 #include <linux/platform_device.h>
@@ -22,7 +22,7 @@
 #include "xusb.h"
 
 static struct phy *tegra_xusb_pad_of_xlate(struct device *dev,
-					   const struct of_phandle_args *args)
+					   struct of_phandle_args *args)
 {
 	struct tegra_xusb_pad *pad = dev_get_drvdata(dev);
 	struct phy *phy = NULL;
@@ -70,12 +70,6 @@ static const struct of_device_id tegra_xusb_padctl_of_match[] = {
 	{
 		.compatible = "nvidia,tegra194-xusb-padctl",
 		.data = &tegra194_xusb_padctl_soc,
-	},
-#endif
-#if defined(CONFIG_ARCH_TEGRA_234_SOC)
-	{
-		.compatible = "nvidia,tegra234-xusb-padctl",
-		.data = &tegra234_xusb_padctl_soc,
 	},
 #endif
 	{ }
@@ -543,7 +537,7 @@ static int tegra_xusb_port_init(struct tegra_xusb_port *port,
 
 	device_initialize(&port->dev);
 	port->dev.type = &tegra_xusb_port_type;
-	device_set_node(&port->dev, of_fwnode_handle(of_node_get(np)));
+	port->dev.of_node = of_node_get(np);
 	port->dev.parent = padctl->dev;
 
 	err = dev_set_name(&port->dev, "%s-%u", name, index);
@@ -699,8 +693,6 @@ static int tegra_xusb_setup_usb_role_switch(struct tegra_xusb_port *port)
 		return -ENOMEM;
 
 	lane = tegra_xusb_find_lane(port->padctl, "usb2", port->index);
-	if (IS_ERR(lane))
-		return PTR_ERR(lane);
 
 	/*
 	 * Assign phy dev to usb-phy dev. Host/device drivers can use phy
@@ -722,22 +714,6 @@ static int tegra_xusb_setup_usb_role_switch(struct tegra_xusb_port *port)
 	of_platform_populate(port->dev.of_node, NULL, NULL, &port->dev);
 
 	return err;
-}
-
-static void tegra_xusb_parse_usb_role_default_mode(struct tegra_xusb_port *port)
-{
-	enum usb_role role = USB_ROLE_NONE;
-	enum usb_dr_mode mode = usb_get_role_switch_default_mode(&port->dev);
-
-	if (mode == USB_DR_MODE_HOST)
-		role = USB_ROLE_HOST;
-	else if (mode == USB_DR_MODE_PERIPHERAL)
-		role = USB_ROLE_DEVICE;
-
-	if (role != USB_ROLE_NONE) {
-		usb_role_switch_set_role(port->usb_role_sw, role);
-		dev_dbg(&port->dev, "usb role default mode is %s", modes[mode]);
-	}
 }
 
 static int tegra_xusb_usb2_port_parse_dt(struct tegra_xusb_usb2_port *usb2)
@@ -769,7 +745,6 @@ static int tegra_xusb_usb2_port_parse_dt(struct tegra_xusb_usb2_port *usb2)
 			err = tegra_xusb_setup_usb_role_switch(port);
 			if (err < 0)
 				return err;
-			tegra_xusb_parse_usb_role_default_mode(port);
 		} else {
 			dev_err(&port->dev, "usb-role-switch not found for %s mode",
 				modes[usb2->mode]);
@@ -985,7 +960,8 @@ static int tegra_xusb_usb3_port_parse_dt(struct tegra_xusb_usb3_port *usb3)
 			return -EINVAL;
 	}
 
-	return 0;
+	usb3->supply = regulator_get(&port->dev, "vbus");
+	return PTR_ERR_OR_ZERO(usb3->supply);
 }
 
 static int tegra_xusb_add_usb3_port(struct tegra_xusb_padctl *padctl,
@@ -1040,6 +1016,13 @@ void tegra_xusb_usb3_port_release(struct tegra_xusb_port *port)
 	struct tegra_xusb_usb3_port *usb3 = to_usb3_port(port);
 
 	kfree(usb3);
+}
+
+void tegra_xusb_usb3_port_remove(struct tegra_xusb_port *port)
+{
+	struct tegra_xusb_usb3_port *usb3 = to_usb3_port(port);
+
+	regulator_put(usb3->supply);
 }
 
 static void __tegra_xusb_remove_ports(struct tegra_xusb_padctl *padctl)
@@ -1275,7 +1258,7 @@ remove:
 	return err;
 }
 
-static void tegra_xusb_padctl_remove(struct platform_device *pdev)
+static int tegra_xusb_padctl_remove(struct platform_device *pdev)
 {
 	struct tegra_xusb_padctl *padctl = platform_get_drvdata(pdev);
 	int err;
@@ -1293,6 +1276,8 @@ static void tegra_xusb_padctl_remove(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to assert reset: %d\n", err);
 
 	padctl->soc->ops->remove(padctl);
+
+	return 0;
 }
 
 static __maybe_unused int tegra_xusb_padctl_suspend_noirq(struct device *dev)

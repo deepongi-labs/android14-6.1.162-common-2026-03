@@ -35,7 +35,7 @@ static int hci_extcap_hardware_id(struct i3c_hci *hci, void __iomem *base)
 	switch (hci->vendor_mipi_id) {
 	case MIPI_VENDOR_NXP:
 		hci->quirks |= HCI_QUIRK_RAW_CCC;
-		dev_dbg(&hci->master.dev, "raw CCC quirks set");
+		DBG("raw CCC quirks set");
 		break;
 	}
 
@@ -77,8 +77,7 @@ static int hci_extcap_xfer_modes(struct i3c_hci *hci, void __iomem *base)
 	for (index = 0; index < entries; index++) {
 		u32 mode_entry = readl(base);
 
-		dev_dbg(&hci->master.dev, "mode %d: 0x%08x",
-			index, mode_entry);
+		DBG("mode %d: 0x%08x", index, mode_entry);
 		/* TODO: will be needed when I3C core does more than SDR */
 		base += 4;
 	}
@@ -98,8 +97,7 @@ static int hci_extcap_xfer_rates(struct i3c_hci *hci, void __iomem *base)
 	dev_info(&hci->master.dev, "available data rates:\n");
 	for (index = 0; index < entries; index++) {
 		rate_entry = readl(base);
-		dev_dbg(&hci->master.dev, "entry %d: 0x%08x",
-			index, rate_entry);
+		DBG("entry %d: 0x%08x", index, rate_entry);
 		rate = FIELD_GET(XFERRATE_ACTUAL_RATE_KHZ, rate_entry);
 		rate_id = FIELD_GET(XFERRATE_RATE_ID, rate_entry);
 		mode_id = FIELD_GET(XFERRATE_MODE_ID, rate_entry);
@@ -270,8 +268,7 @@ int i3c_hci_parse_ext_caps(struct i3c_hci *hci)
 		cap_header = readl(curr_cap);
 		cap_id = FIELD_GET(CAP_HEADER_ID, cap_header);
 		cap_length = FIELD_GET(CAP_HEADER_LENGTH, cap_header);
-		dev_dbg(&hci->master.dev, "id=0x%02x length=%d",
-			cap_id, cap_length);
+		DBG("id=0x%02x length=%d", cap_id, cap_length);
 		if (!cap_length)
 			break;
 		if (curr_cap + cap_length * 4 >= end) {

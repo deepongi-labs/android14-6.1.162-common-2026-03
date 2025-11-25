@@ -36,26 +36,20 @@ void mte_free_tag_storage(char *storage);
 
 /* track which pages have valid allocation tags */
 #define PG_mte_tagged	PG_arch_2
-/* simple lock to avoid multiple threads tagging the same page */
-#define PG_mte_lock	PG_arch_3
 
 static inline void set_page_mte_tagged(struct page *page)
 {
-	VM_WARN_ON_ONCE(folio_test_hugetlb(page_folio(page)));
-
 	/*
 	 * Ensure that the tags written prior to this function are visible
 	 * before the page flags update.
 	 */
 	smp_wmb();
-	set_bit(PG_mte_tagged, &page->flags.f);
+	set_bit(PG_mte_tagged, &page->flags);
 }
 
 static inline bool page_mte_tagged(struct page *page)
 {
-	bool ret = test_bit(PG_mte_tagged, &page->flags.f);
-
-	VM_WARN_ON_ONCE(folio_test_hugetlb(page_folio(page)));
+	bool ret = test_bit(PG_mte_tagged, &page->flags);
 
 	/*
 	 * If the page is tagged, ensure ordering with a likely subsequent
@@ -66,37 +60,8 @@ static inline bool page_mte_tagged(struct page *page)
 	return ret;
 }
 
-/*
- * Lock the page for tagging and return 'true' if the page can be tagged,
- * 'false' if already tagged. PG_mte_tagged is never cleared and therefore the
- * locking only happens once for page initialisation.
- *
- * The page MTE lock state:
- *
- *   Locked:	PG_mte_lock && !PG_mte_tagged
- *   Unlocked:	!PG_mte_lock || PG_mte_tagged
- *
- * Acquire semantics only if the page is tagged (returning 'false').
- */
-static inline bool try_page_mte_tagging(struct page *page)
-{
-	VM_WARN_ON_ONCE(folio_test_hugetlb(page_folio(page)));
-
-	if (!test_and_set_bit(PG_mte_lock, &page->flags.f))
-		return true;
-
-	/*
-	 * The tags are either being initialised or may have been initialised
-	 * already. Check if the PG_mte_tagged flag has been set or wait
-	 * otherwise.
-	 */
-	smp_cond_load_acquire(&page->flags.f, VAL & (1UL << PG_mte_tagged));
-
-	return false;
-}
-
 void mte_zero_clear_page_tags(void *addr);
-void mte_sync_tags(pte_t pte, unsigned int nr_pages);
+void mte_sync_tags(pte_t pte);
 void mte_copy_page_tags(void *kto, const void *kfrom);
 void mte_thread_init_user(void);
 void mte_thread_switch(struct task_struct *next);
@@ -121,14 +86,10 @@ static inline bool page_mte_tagged(struct page *page)
 {
 	return false;
 }
-static inline bool try_page_mte_tagging(struct page *page)
-{
-	return false;
-}
 static inline void mte_zero_clear_page_tags(void *addr)
 {
 }
-static inline void mte_sync_tags(pte_t pte, unsigned int nr_pages)
+static inline void mte_sync_tags(pte_t pte)
 {
 }
 static inline void mte_copy_page_tags(void *kto, const void *kfrom)
@@ -162,67 +123,6 @@ static inline int mte_ptrace_copy_tags(struct task_struct *child,
 }
 
 #endif /* CONFIG_ARM64_MTE */
-
-#if defined(CONFIG_HUGETLB_PAGE) && defined(CONFIG_ARM64_MTE)
-static inline void folio_set_hugetlb_mte_tagged(struct folio *folio)
-{
-	VM_WARN_ON_ONCE(!folio_test_hugetlb(folio));
-
-	/*
-	 * Ensure that the tags written prior to this function are visible
-	 * before the folio flags update.
-	 */
-	smp_wmb();
-	set_bit(PG_mte_tagged, &folio->flags.f);
-
-}
-
-static inline bool folio_test_hugetlb_mte_tagged(struct folio *folio)
-{
-	bool ret = test_bit(PG_mte_tagged, &folio->flags.f);
-
-	VM_WARN_ON_ONCE(!folio_test_hugetlb(folio));
-
-	/*
-	 * If the folio is tagged, ensure ordering with a likely subsequent
-	 * read of the tags.
-	 */
-	if (ret)
-		smp_rmb();
-	return ret;
-}
-
-static inline bool folio_try_hugetlb_mte_tagging(struct folio *folio)
-{
-	VM_WARN_ON_ONCE(!folio_test_hugetlb(folio));
-
-	if (!test_and_set_bit(PG_mte_lock, &folio->flags.f))
-		return true;
-
-	/*
-	 * The tags are either being initialised or may have been initialised
-	 * already. Check if the PG_mte_tagged flag has been set or wait
-	 * otherwise.
-	 */
-	smp_cond_load_acquire(&folio->flags.f, VAL & (1UL << PG_mte_tagged));
-
-	return false;
-}
-#else
-static inline void folio_set_hugetlb_mte_tagged(struct folio *folio)
-{
-}
-
-static inline bool folio_test_hugetlb_mte_tagged(struct folio *folio)
-{
-	return false;
-}
-
-static inline bool folio_try_hugetlb_mte_tagging(struct folio *folio)
-{
-	return false;
-}
-#endif
 
 static inline void mte_disable_tco_entry(struct task_struct *task)
 {

@@ -10,28 +10,25 @@ Video4Linux (V4L) driver-specific documentation
 	:maxdepth: 2
 
 	bttv
-	c3-isp
 	cafe_ccic
+	cpia2
 	cx88
+	davinci-vpbe
 	fimc
 	imx
 	imx7
 	ipu3
-	ipu6-isys
 	ivtv
-	mgb4
+	meye
 	omap3isp
+	omap4_camera
 	philips
 	qcom_camss
-	raspberrypi-pisp-be
 	rcar-fdp1
 	rkisp1
-	raspberrypi-rp1-cfe
 	saa7134
 	si470x
 	si4713
 	si476x
-	starfive_camss
 	vimc
-	visl
 	vivid

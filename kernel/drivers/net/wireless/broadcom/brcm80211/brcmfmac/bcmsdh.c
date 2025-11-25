@@ -455,11 +455,6 @@ static int brcmf_sdiod_sglist_rw(struct brcmf_sdio_dev *sdiodev,
 			if (sg_data_sz > max_req_sz - req_sz)
 				sg_data_sz = max_req_sz - req_sz;
 
-			if (!sgl) {
-				/* out of (pre-allocated) scatterlist entries */
-				ret = -ENOMEM;
-				goto exit;
-			}
 			sg_set_buf(sgl, pkt_data, sg_data_sz);
 			sg_cnt++;
 
@@ -952,8 +947,8 @@ int brcmf_sdiod_probe(struct brcmf_sdio_dev *sdiodev)
 
 	/* try to attach to the target device */
 	sdiodev->bus = brcmf_sdio_probe(sdiodev);
-	if (IS_ERR(sdiodev->bus)) {
-		ret = PTR_ERR(sdiodev->bus);
+	if (!sdiodev->bus) {
+		ret = -ENODEV;
 		goto out;
 	}
 	brcmf_sdiod_host_fixup(sdiodev->func2->card->host);
@@ -964,44 +959,33 @@ out:
 	return ret;
 }
 
-#define BRCMF_SDIO_DEVICE(dev_id, fw_vend) \
-	{ \
-		SDIO_DEVICE(SDIO_VENDOR_ID_BROADCOM, dev_id), \
-		.driver_data = BRCMF_FWVENDOR_ ## fw_vend \
-	}
-
-#define CYW_SDIO_DEVICE(dev_id, fw_vend) \
-	{ \
-		SDIO_DEVICE(SDIO_VENDOR_ID_CYPRESS, dev_id), \
-		.driver_data = BRCMF_FWVENDOR_ ## fw_vend \
-	}
+#define BRCMF_SDIO_DEVICE(dev_id)	\
+	{SDIO_DEVICE(SDIO_VENDOR_ID_BROADCOM, dev_id)}
 
 /* devices we support, null terminated */
 static const struct sdio_device_id brcmf_sdmmc_ids[] = {
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43143, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43241, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4329, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4330, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4334, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43340, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43341, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43362, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43364, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4335_4339, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4339, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43430, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43439, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4345, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43455, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4354, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4356, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4359, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43751, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43752, WCC),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_4373, CYW),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_43012, CYW),
-	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_89359, CYW),
-	CYW_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_43439, CYW),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43143),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43241),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4329),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4330),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4334),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43340),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43341),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43362),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43364),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4335_4339),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4339),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43430),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4345),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_43455),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4354),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4356),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_4359),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_4373),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_43012),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_43439),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_43752),
+	BRCMF_SDIO_DEVICE(SDIO_DEVICE_ID_BROADCOM_CYPRESS_89359),
 	{ /* end: all zeroes */ }
 };
 MODULE_DEVICE_TABLE(sdio, brcmf_sdmmc_ids);
@@ -1045,11 +1029,6 @@ static int brcmf_ops_sdio_probe(struct sdio_func *func,
 	struct brcmf_sdio_dev *sdiodev;
 	struct brcmf_bus *bus_if;
 
-	if (!id) {
-		dev_err(&func->dev, "Error no sdio_device_id passed for %x:%x\n", func->vendor, func->device);
-		return -ENODEV;
-	}
-
 	brcmf_dbg(SDIO, "Enter\n");
 	brcmf_dbg(SDIO, "Class=%x\n", func->class);
 	brcmf_dbg(SDIO, "sdio vendor ID: 0x%04x\n", func->vendor);
@@ -1067,10 +1046,10 @@ static int brcmf_ops_sdio_probe(struct sdio_func *func,
 	if (func->num != 2)
 		return -ENODEV;
 
-	bus_if = kzalloc(sizeof(*bus_if), GFP_KERNEL);
+	bus_if = kzalloc(sizeof(struct brcmf_bus), GFP_KERNEL);
 	if (!bus_if)
 		return -ENOMEM;
-	sdiodev = kzalloc(sizeof(*sdiodev), GFP_KERNEL);
+	sdiodev = kzalloc(sizeof(struct brcmf_sdio_dev), GFP_KERNEL);
 	if (!sdiodev) {
 		kfree(bus_if);
 		return -ENOMEM;
@@ -1085,7 +1064,6 @@ static int brcmf_ops_sdio_probe(struct sdio_func *func,
 	sdiodev->bus_if = bus_if;
 	bus_if->bus_priv.sdio = sdiodev;
 	bus_if->proto_type = BRCMF_PROTO_BCDC;
-	bus_if->fwvid = id->driver_data;
 	dev_set_drvdata(&func->dev, bus_if);
 	dev_set_drvdata(&sdiodev->func1->dev, bus_if);
 	sdiodev->dev = &sdiodev->func1->dev;
@@ -1250,6 +1228,7 @@ static struct sdio_driver brcmf_sdmmc_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = brcmf_sdmmc_ids,
 	.drv = {
+		.owner = THIS_MODULE,
 		.pm = pm_sleep_ptr(&brcmf_sdio_pm_ops),
 		.coredump = brcmf_dev_coredump,
 	},

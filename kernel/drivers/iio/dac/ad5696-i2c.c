@@ -58,16 +58,20 @@ static int ad5686_i2c_write(struct ad5686_state *st,
 	return (ret != 3) ? -EIO : 0;
 }
 
-static int ad5686_i2c_probe(struct i2c_client *i2c)
+static int ad5686_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	return ad5686_probe(&i2c->dev, id->driver_data, id->name,
 			    ad5686_i2c_write, ad5686_i2c_read);
 }
 
+static void ad5686_i2c_remove(struct i2c_client *i2c)
+{
+	ad5686_remove(&i2c->dev);
+}
+
 static const struct i2c_device_id ad5686_i2c_id[] = {
 	{"ad5311r", ID_AD5311R},
-	{"ad5337r", ID_AD5337R},
 	{"ad5338r", ID_AD5338R},
 	{"ad5671r", ID_AD5671R},
 	{"ad5673r", ID_AD5673R},
@@ -82,13 +86,12 @@ static const struct i2c_device_id ad5686_i2c_id[] = {
 	{"ad5695r", ID_AD5695R},
 	{"ad5696", ID_AD5696},
 	{"ad5696r", ID_AD5696R},
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, ad5686_i2c_id);
 
 static const struct of_device_id ad5686_of_match[] = {
 	{ .compatible = "adi,ad5311r" },
-	{ .compatible = "adi,ad5337r" },
 	{ .compatible = "adi,ad5338r" },
 	{ .compatible = "adi,ad5671r" },
 	{ .compatible = "adi,ad5675r" },
@@ -101,7 +104,7 @@ static const struct of_device_id ad5686_of_match[] = {
 	{ .compatible = "adi,ad5695r" },
 	{ .compatible = "adi,ad5696" },
 	{ .compatible = "adi,ad5696r" },
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(of, ad5686_of_match);
 
@@ -111,6 +114,7 @@ static struct i2c_driver ad5686_i2c_driver = {
 		.of_match_table = ad5686_of_match,
 	},
 	.probe = ad5686_i2c_probe,
+	.remove = ad5686_i2c_remove,
 	.id_table = ad5686_i2c_id,
 };
 
@@ -119,4 +123,4 @@ module_i2c_driver(ad5686_i2c_driver);
 MODULE_AUTHOR("Stefan Popa <stefan.popa@analog.com>");
 MODULE_DESCRIPTION("Analog Devices AD5686 and similar multi-channel DACs");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_AD5686");
+MODULE_IMPORT_NS(IIO_AD5686);

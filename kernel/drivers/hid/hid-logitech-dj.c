@@ -13,7 +13,7 @@
 #include <linux/kfifo.h>
 #include <linux/delay.h>
 #include <linux/usb.h> /* For to_usb_interface for kvm extra intf check */
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include "hid-ids.h"
 
 #define DJ_MAX_PAIRED_DEVICES			7
@@ -554,7 +554,7 @@ static const u8 hid_reportid_size_map[NUMBER_OF_HID_REPORTS] = {
 
 #define LOGITECH_DJ_INTERFACE_NUMBER 0x02
 
-static const struct hid_ll_driver logi_dj_ll_driver;
+static struct hid_ll_driver logi_dj_ll_driver;
 
 static int logi_dj_recv_query_paired_devices(struct dj_receiver_dev *djrcv_dev);
 static void delayedwork_callback(struct work_struct *work);
@@ -1509,7 +1509,7 @@ static bool logi_dj_ll_may_wakeup(struct hid_device *hid)
 	return hid_hw_may_wakeup(djrcv_dev->hidpp);
 }
 
-static const struct hid_ll_driver logi_dj_ll_driver = {
+static struct hid_ll_driver logi_dj_ll_driver = {
 	.parse = logi_dj_ll_parse,
 	.start = logi_dj_ll_start,
 	.stop = logi_dj_ll_stop,
@@ -1983,10 +1983,6 @@ static const struct hid_device_id logi_dj_receivers[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_NANO_RECEIVER_LIGHTSPEED_1_1),
 	 .driver_data = recvr_type_gaming_hidpp},
-	{ /* Logitech lightspeed receiver (0xc543) */
-	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
-		USB_DEVICE_ID_LOGITECH_NANO_RECEIVER_LIGHTSPEED_1_2),
-	 .driver_data = recvr_type_gaming_hidpp},
 
 	{ /* Logitech 27 MHz HID++ 1.0 receiver (0xc513) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_MX3000_RECEIVER),
@@ -2051,7 +2047,6 @@ static struct hid_driver logi_djreceiver_driver = {
 
 module_hid_driver(logi_djreceiver_driver);
 
-MODULE_DESCRIPTION("HID driver for Logitech receivers");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Logitech");
 MODULE_AUTHOR("Nestor Lopez Casado");

@@ -11,7 +11,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/in.h>
-#include <linux/in6.h>
 #include <linux/module.h>
 #include <linux/net.h>
 #include <linux/ipv6.h>
@@ -21,6 +20,7 @@
 #include <linux/un.h>
 #include <linux/uaccess.h>
 #include <linux/inet.h>
+#include <linux/idr.h>
 #include <linux/file.h>
 #include <linux/parser.h>
 #include <linux/slab.h>
@@ -96,6 +96,7 @@ struct p9_poll_wait {
  * @unsent_req_list: accounting for requests that haven't been sent
  * @rreq: read request
  * @wreq: write request
+ * @req: current request being processed (if any)
  * @tmp_buf: temporary buffer to read in header
  * @rc: temporary fcall for reading current frame
  * @wpos: write position for current frame
@@ -192,13 +193,12 @@ static void p9_conn_cancel(struct p9_conn *m, int err)
 
 	spin_lock(&m->req_lock);
 
-	if (READ_ONCE(m->err)) {
+	if (m->err) {
 		spin_unlock(&m->req_lock);
 		return;
 	}
 
-	WRITE_ONCE(m->err, err);
-	ASSERT_EXCLUSIVE_WRITER(m->err);
+	m->err = err;
 
 	list_for_each_entry_safe(req, rtmp, &m->req_list, req_list) {
 		list_move(&req->req_list, &cancel_list);
@@ -285,7 +285,7 @@ static void p9_read_work(struct work_struct *work)
 
 	m = container_of(work, struct p9_conn, rq);
 
-	if (READ_ONCE(m->err) < 0)
+	if (m->err < 0)
 		return;
 
 	p9_debug(P9_DEBUG_TRANS, "start mux %p pos %zd\n", m, m->rc.offset);
@@ -452,7 +452,7 @@ static void p9_write_work(struct work_struct *work)
 
 	m = container_of(work, struct p9_conn, wq);
 
-	if (READ_ONCE(m->err) < 0) {
+	if (m->err < 0) {
 		clear_bit(Wworksched, &m->wsched);
 		return;
 	}
@@ -624,7 +624,7 @@ static void p9_poll_mux(struct p9_conn *m)
 	__poll_t n;
 	int err = -ECONNRESET;
 
-	if (READ_ONCE(m->err) < 0)
+	if (m->err < 0)
 		return;
 
 	n = p9_fd_poll(m->client, NULL, &err);
@@ -666,26 +666,27 @@ static void p9_poll_mux(struct p9_conn *m)
 
 static int p9_fd_request(struct p9_client *client, struct p9_req_t *req)
 {
-	int err;
+	__poll_t n;
 	struct p9_trans_fd *ts = client->trans;
 	struct p9_conn *m = &ts->conn;
 
 	p9_debug(P9_DEBUG_TRANS, "mux %p task %p tcall %p id %d\n",
 		 m, current, &req->tc, req->tc.id);
+	if (m->err < 0)
+		return m->err;
 
 	spin_lock(&m->req_lock);
-
-	err = READ_ONCE(m->err);
-	if (err < 0) {
-		spin_unlock(&m->req_lock);
-		return err;
-	}
-
 	WRITE_ONCE(req->status, REQ_STATUS_UNSENT);
 	list_add_tail(&req->req_list, &m->unsent_req_list);
 	spin_unlock(&m->req_lock);
 
-	p9_poll_mux(m);
+	if (test_and_clear_bit(Wpending, &m->wsched))
+		n = EPOLLOUT;
+	else
+		n = p9_fd_poll(m->client, NULL, NULL);
+
+	if (n & EPOLLOUT && !test_and_set_bit(Wworksched, &m->wsched))
+		schedule_work(&m->wq);
 
 	return 0;
 }
@@ -719,10 +720,10 @@ static int p9_fd_cancelled(struct p9_client *client, struct p9_req_t *req)
 	p9_debug(P9_DEBUG_TRANS, "client %p req %p\n", client, req);
 
 	spin_lock(&m->req_lock);
-	/* Ignore cancelled request if status changed since the request was
-	 * processed in p9_client_flush()
-	*/
-	if (req->status != REQ_STATUS_SENT) {
+	/* Ignore cancelled request if message has been received
+	 * before lock.
+	 */
+	if (req->status == REQ_STATUS_RCVD) {
 		spin_unlock(&m->req_lock);
 		return 0;
 	}
@@ -874,7 +875,6 @@ static int p9_socket_open(struct p9_client *client, struct socket *csocket)
 	}
 
 	csocket->sk->sk_allocation = GFP_NOIO;
-	csocket->sk->sk_use_task_frag = false;
 	file = sock_alloc_file(csocket, 0, NULL);
 	if (IS_ERR(file)) {
 		pr_err("%s (%d): failed to map fd\n",
@@ -951,55 +951,64 @@ static void p9_fd_close(struct p9_client *client)
 	kfree(ts);
 }
 
+/*
+ * stolen from NFS - maybe should be made a generic function?
+ */
+static inline int valid_ipaddr4(const char *buf)
+{
+	int rc, count, in[4];
+
+	rc = sscanf(buf, "%d.%d.%d.%d", &in[0], &in[1], &in[2], &in[3]);
+	if (rc != 4)
+		return -EINVAL;
+	for (count = 0; count < 4; count++) {
+		if (in[count] > 255)
+			return -EINVAL;
+	}
+	return 0;
+}
+
 static int p9_bind_privport(struct socket *sock)
 {
-	struct sockaddr_storage stor = { 0 };
+	struct sockaddr_in cl;
 	int port, err = -EINVAL;
 
-	stor.ss_family = sock->ops->family;
-	if (stor.ss_family == AF_INET)
-		((struct sockaddr_in *)&stor)->sin_addr.s_addr = htonl(INADDR_ANY);
-	else
-		((struct sockaddr_in6 *)&stor)->sin6_addr = in6addr_any;
+	memset(&cl, 0, sizeof(cl));
+	cl.sin_family = AF_INET;
+	cl.sin_addr.s_addr = htonl(INADDR_ANY);
 	for (port = p9_ipport_resv_max; port >= p9_ipport_resv_min; port--) {
-		if (stor.ss_family == AF_INET)
-			((struct sockaddr_in *)&stor)->sin_port = htons((ushort)port);
-		else
-			((struct sockaddr_in6 *)&stor)->sin6_port = htons((ushort)port);
-		err = kernel_bind(sock, (struct sockaddr *)&stor, sizeof(stor));
+		cl.sin_port = htons((ushort)port);
+		err = kernel_bind(sock, (struct sockaddr *)&cl, sizeof(cl));
 		if (err != -EADDRINUSE)
 			break;
 	}
 	return err;
 }
 
+
 static int
 p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
 {
 	int err;
-	char port_str[6];
 	struct socket *csocket;
-	struct sockaddr_storage stor = { 0 };
+	struct sockaddr_in sin_server;
 	struct p9_fd_opts opts;
 
 	err = parse_opts(args, &opts);
 	if (err < 0)
 		return err;
 
-	if (!addr)
+	if (addr == NULL || valid_ipaddr4(addr) < 0)
 		return -EINVAL;
-
-	sprintf(port_str, "%u", opts.port);
-	err = inet_pton_with_scope(current->nsproxy->net_ns, AF_UNSPEC, addr,
-				   port_str, &stor);
-	if (err < 0)
-		return err;
 
 	csocket = NULL;
 
 	client->trans_opts.tcp.port = opts.port;
 	client->trans_opts.tcp.privport = opts.privport;
-	err = __sock_create(current->nsproxy->net_ns, stor.ss_family,
+	sin_server.sin_family = AF_INET;
+	sin_server.sin_addr.s_addr = in_aton(addr);
+	sin_server.sin_port = htons(opts.port);
+	err = __sock_create(current->nsproxy->net_ns, PF_INET,
 			    SOCK_STREAM, IPPROTO_TCP, &csocket, 1);
 	if (err) {
 		pr_err("%s (%d): problem creating socket\n",
@@ -1017,9 +1026,9 @@ p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
 		}
 	}
 
-	err = READ_ONCE(csocket->ops)->connect(csocket,
-					       (struct sockaddr *)&stor,
-					       sizeof(stor), 0);
+	err = csocket->ops->connect(csocket,
+				    (struct sockaddr *)&sin_server,
+				    sizeof(struct sockaddr_in), 0);
 	if (err < 0) {
 		pr_err("%s (%d): problem connecting socket to %s\n",
 		       __func__, task_pid_nr(current), addr);
@@ -1058,7 +1067,7 @@ p9_fd_create_unix(struct p9_client *client, const char *addr, char *args)
 
 		return err;
 	}
-	err = READ_ONCE(csocket->ops)->connect(csocket, (struct sockaddr *)&sun_server,
+	err = csocket->ops->connect(csocket, (struct sockaddr *)&sun_server,
 			sizeof(struct sockaddr_un) - 1, 0);
 	if (err < 0) {
 		pr_err("%s (%d): problem connecting socket: %s: %d\n",

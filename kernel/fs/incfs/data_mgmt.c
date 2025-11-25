@@ -207,7 +207,7 @@ struct dentry *incfs_lookup_dentry(struct dentry *parent, const char *name)
 
 	inode = d_inode(parent);
 	inode_lock_nested(inode, I_MUTEX_PARENT);
-	result = lookup_noperm(&QSTR(name), parent);
+	result = lookup_one_len(name, parent, strlen(name));
 	inode_unlock(inode);
 
 	if (IS_ERR(result))
@@ -712,7 +712,6 @@ static int validate_hash_tree(struct backing_file_context *bfc, struct file *f,
 			hash_block_offset[lvl] / INCFS_DATA_FILE_BLOCK_SIZE;
 		struct page *page = find_get_page_flags(
 			f->f_inode->i_mapping, hash_page, FGP_ACCESSED);
-		struct folio *folio;
 
 		if (page && PageChecked(page)) {
 			u8 *addr = kmap_atomic(page);
@@ -760,16 +759,16 @@ static int validate_hash_tree(struct backing_file_context *bfc, struct file *f,
 		memcpy(stored_digest, buf + hash_offset_in_block[lvl],
 		       digest_size);
 
-		folio = filemap_grab_folio(f->f_inode->i_mapping, hash_page);
-		if (!IS_ERR(folio)) {
-			u8 *addr = kmap_local_folio(folio, 0);
+		page = grab_cache_page(f->f_inode->i_mapping, hash_page);
+		if (page) {
+			u8 *addr = kmap_atomic(page);
 
 			memcpy(addr, buf, INCFS_DATA_FILE_BLOCK_SIZE);
-			kunmap_local(addr);
-			folio_set_checked(folio);
-			folio_mark_uptodate(folio);
-			folio_unlock(folio);
-			folio_put(folio);
+			kunmap_atomic(addr);
+			SetPageChecked(page);
+			SetPageUptodate(page);
+			unlock_page(page);
+			put_page(page);
 		}
 	}
 

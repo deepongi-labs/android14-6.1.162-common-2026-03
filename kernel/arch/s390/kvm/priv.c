@@ -13,7 +13,7 @@
 #include <linux/errno.h>
 #include <linux/mm_types.h>
 #include <linux/pgtable.h>
-#include <linux/io.h>
+
 #include <asm/asm-offsets.h>
 #include <asm/facility.h>
 #include <asm/current.h>
@@ -22,6 +22,7 @@
 #include <asm/sysinfo.h>
 #include <asm/page-states.h>
 #include <asm/gmap.h>
+#include <asm/io.h>
 #include <asm/ptrace.h>
 #include <asm/sclp.h>
 #include <asm/ap.h>
@@ -57,7 +58,7 @@ static int handle_gs(struct kvm_vcpu *vcpu)
 	if (test_kvm_facility(vcpu->kvm, 133)) {
 		VCPU_EVENT(vcpu, 3, "%s", "ENABLE: GS (lazy)");
 		preempt_disable();
-		local_ctl_set_bit(2, CR2_GUARDED_STORAGE_BIT);
+		__ctl_set_bit(2, 4);
 		current->thread.gs_cb = (struct gs_cb *)&vcpu->run->s.regs.gscb;
 		restore_gs_cb(current->thread.gs_cb);
 		preempt_enable();
@@ -149,7 +150,7 @@ static int handle_set_prefix(struct kvm_vcpu *vcpu)
 	 * first page, since address is 8k aligned and memory pieces are always
 	 * at least 1MB aligned and have at least a size of 1MB.
 	 */
-	if (!kvm_is_gpa_in_memslot(vcpu->kvm, address))
+	if (kvm_is_error_gpa(vcpu->kvm, address))
 		return kvm_s390_inject_program_int(vcpu, PGM_ADDRESSING);
 
 	kvm_s390_set_prefix(vcpu, address);
@@ -464,7 +465,7 @@ static int handle_test_block(struct kvm_vcpu *vcpu)
 		return kvm_s390_inject_prog_irq(vcpu, &vcpu->arch.pgm);
 	addr = kvm_s390_real_to_abs(vcpu, addr);
 
-	if (!kvm_is_gpa_in_memslot(vcpu->kvm, addr))
+	if (kvm_is_error_gpa(vcpu->kvm, addr))
 		return kvm_s390_inject_program_int(vcpu, PGM_ADDRESSING);
 	/*
 	 * We don't expect errors on modern systems, and do not care
@@ -605,14 +606,6 @@ static int handle_io_inst(struct kvm_vcpu *vcpu)
 	}
 }
 
-#if IS_ENABLED(CONFIG_VFIO_AP)
-bool kvm_s390_is_gpa_in_memslot(struct kvm *kvm, gpa_t gpa)
-{
-	return kvm_is_gpa_in_memslot(kvm, gpa);
-}
-EXPORT_SYMBOL_FOR_MODULES(kvm_s390_is_gpa_in_memslot, "vfio_ap");
-#endif
-
 /*
  * handle_pqap: Handling pqap interception
  * @vcpu: the vcpu having issue the pqap instruction
@@ -684,12 +677,8 @@ static int handle_pqap(struct kvm_vcpu *vcpu)
 	if (vcpu->kvm->arch.crypto.pqap_hook) {
 		pqap_hook = *vcpu->kvm->arch.crypto.pqap_hook;
 		ret = pqap_hook(vcpu);
-		if (!ret) {
-			if (vcpu->run->s.regs.gprs[1] & 0x00ff0000)
-				kvm_s390_set_psw_cc(vcpu, 3);
-			else
-				kvm_s390_set_psw_cc(vcpu, 0);
-		}
+		if (!ret && vcpu->run->s.regs.gprs[1] & 0x00ff0000)
+			kvm_s390_set_psw_cc(vcpu, 3);
 		up_read(&vcpu->kvm->arch.crypto.pqap_hook_rwsem);
 		return ret;
 	}
@@ -965,7 +954,8 @@ static int handle_stsi(struct kvm_vcpu *vcpu)
 		return -EREMOTE;
 	}
 	if (kvm_s390_pv_cpu_is_protected(vcpu)) {
-		memcpy(sida_addr(vcpu->arch.sie_block), (void *)mem, PAGE_SIZE);
+		memcpy((void *)sida_origin(vcpu->arch.sie_block), (void *)mem,
+		       PAGE_SIZE);
 		rc = 0;
 	} else {
 		rc = write_guest(vcpu, operand2, ar, (void *)mem, PAGE_SIZE);
@@ -1256,8 +1246,6 @@ static inline int __do_essa(struct kvm_vcpu *vcpu, const int orc)
 
 static int handle_essa(struct kvm_vcpu *vcpu)
 {
-	lockdep_assert_held(&vcpu->kvm->srcu);
-
 	/* entries expected to be 1FF */
 	int entries = (vcpu->arch.sie_block->cbrlo & ~PAGE_MASK) >> 3;
 	unsigned long *cbrlo;
@@ -1307,8 +1295,12 @@ static int handle_essa(struct kvm_vcpu *vcpu)
 		/* Retry the ESSA instruction */
 		kvm_s390_retry_instr(vcpu);
 	} else {
+		int srcu_idx;
+
 		mmap_read_lock(vcpu->kvm->mm);
+		srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
 		i = __do_essa(vcpu, orc);
+		srcu_read_unlock(&vcpu->kvm->srcu, srcu_idx);
 		mmap_read_unlock(vcpu->kvm->mm);
 		if (i < 0)
 			return i;

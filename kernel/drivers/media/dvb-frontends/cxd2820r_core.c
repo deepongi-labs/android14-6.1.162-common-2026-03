@@ -433,7 +433,7 @@ static int cxd2820r_gpio_direction_output(struct gpio_chip *chip, unsigned nr,
 	return cxd2820r_gpio(&priv->fe, gpio);
 }
 
-static int cxd2820r_gpio_set(struct gpio_chip *chip, unsigned int nr, int val)
+static void cxd2820r_gpio_set(struct gpio_chip *chip, unsigned nr, int val)
 {
 	struct cxd2820r_priv *priv = gpiochip_get_data(chip);
 	struct i2c_client *client = priv->client[0];
@@ -446,7 +446,7 @@ static int cxd2820r_gpio_set(struct gpio_chip *chip, unsigned int nr, int val)
 
 	(void) cxd2820r_gpio(&priv->fe, gpio);
 
-	return 0;
+	return;
 }
 
 static int cxd2820r_gpio_get(struct gpio_chip *chip, unsigned nr)
@@ -547,7 +547,8 @@ static struct dvb_frontend *cxd2820r_get_dvb_frontend(struct i2c_client *client)
 	return &priv->fe;
 }
 
-static int cxd2820r_probe(struct i2c_client *client)
+static int cxd2820r_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct cxd2820r_platform_data *pdata = client->dev.platform_data;
 	struct cxd2820r_priv *priv;
@@ -628,7 +629,7 @@ static int cxd2820r_probe(struct i2c_client *client)
 
 	/*
 	 * Chip has two I2C addresses for different register banks. We register
-	 * one dummy I2C client in order to get own I2C client for each
+	 * one dummy I2C client in in order to get own I2C client for each
 	 * register bank.
 	 */
 	priv->client[1] = i2c_new_dummy_device(client->adapter, client->addr | (1 << 1));
@@ -723,7 +724,7 @@ static void cxd2820r_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id cxd2820r_id_table[] = {
-	{ "cxd2820r" },
+	{"cxd2820r", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, cxd2820r_id_table);

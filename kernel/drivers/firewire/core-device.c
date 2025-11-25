@@ -12,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/firewire.h>
 #include <linux/firewire-constants.h>
+#include <linux/idr.h>
 #include <linux/jiffies.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
@@ -30,8 +31,6 @@
 
 #include "core.h"
 
-#define ROOT_DIR_OFFSET	5
-
 void fw_csr_iterator_init(struct fw_csr_iterator *ci, const u32 *p)
 {
 	ci->p = p + 1;
@@ -47,22 +46,6 @@ int fw_csr_iterator_next(struct fw_csr_iterator *ci, int *key, int *value)
 	return ci->p++ < ci->end;
 }
 EXPORT_SYMBOL(fw_csr_iterator_next);
-
-static const u32 *search_directory(const u32 *directory, int search_key)
-{
-	struct fw_csr_iterator ci;
-	int key, value;
-
-	search_key |= CSR_DIRECTORY;
-
-	fw_csr_iterator_init(&ci, directory);
-	while (fw_csr_iterator_next(&ci, &key, &value)) {
-		if (key == search_key)
-			return ci.p - 1 + value;
-	}
-
-	return NULL;
-}
 
 static const u32 *search_leaf(const u32 *directory, int search_key)
 {
@@ -149,27 +132,10 @@ static void get_ids(const u32 *directory, int *id)
 	}
 }
 
-static void get_modalias_ids(const struct fw_unit *unit, int *id)
+static void get_modalias_ids(struct fw_unit *unit, int *id)
 {
-	const u32 *root_directory = &fw_parent_device(unit)->config_rom[ROOT_DIR_OFFSET];
-	const u32 *directories[] = {NULL, NULL, NULL};
-	const u32 *vendor_directory;
-	int i;
-
-	directories[0] = root_directory;
-
-	// Legacy layout of configuration ROM described in Annex 1 of 'Configuration ROM for AV/C
-	// Devices 1.0 (December 12, 2000, 1394 Trading Association, TA Document 1999027)'.
-	vendor_directory = search_directory(root_directory, CSR_VENDOR);
-	if (!vendor_directory) {
-		directories[1] = unit->directory;
-	} else {
-		directories[1] = vendor_directory;
-		directories[2] = unit->directory;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(directories) && !!directories[i]; ++i)
-		get_ids(directories[i], id);
+	get_ids(&fw_parent_device(unit)->config_rom[5], id);
+	get_ids(unit->directory, id);
 }
 
 static bool match_ids(const struct ieee1394_device_id *id_table, int *id)
@@ -189,10 +155,10 @@ static bool match_ids(const struct ieee1394_device_id *id_table, int *id)
 }
 
 static const struct ieee1394_device_id *unit_match(struct device *dev,
-						   const struct device_driver *drv)
+						   struct device_driver *drv)
 {
 	const struct ieee1394_device_id *id_table =
-			container_of_const(drv, struct fw_driver, driver)->id_table;
+			container_of(drv, struct fw_driver, driver)->id_table;
 	int id[] = {0, 0, 0, 0};
 
 	get_modalias_ids(fw_unit(dev), id);
@@ -204,9 +170,9 @@ static const struct ieee1394_device_id *unit_match(struct device *dev,
 	return NULL;
 }
 
-static bool is_fw_unit(const struct device *dev);
+static bool is_fw_unit(struct device *dev);
 
-static int fw_unit_match(struct device *dev, const struct device_driver *drv)
+static int fw_unit_match(struct device *dev, struct device_driver *drv)
 {
 	/* We only allow binding to fw_units. */
 	return is_fw_unit(dev) && unit_match(dev, drv) != NULL;
@@ -228,7 +194,7 @@ static void fw_unit_remove(struct device *dev)
 	driver->remove(fw_unit(dev));
 }
 
-static int get_modalias(const struct fw_unit *unit, char *buffer, size_t buffer_size)
+static int get_modalias(struct fw_unit *unit, char *buffer, size_t buffer_size)
 {
 	int id[] = {0, 0, 0, 0};
 
@@ -239,9 +205,9 @@ static int get_modalias(const struct fw_unit *unit, char *buffer, size_t buffer_
 			id[0], id[1], id[2], id[3]);
 }
 
-static int fw_unit_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int fw_unit_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct fw_unit *unit = fw_unit(dev);
+	struct fw_unit *unit = fw_unit(dev);
 	char modalias[64];
 
 	get_modalias(unit, modalias, sizeof(modalias));
@@ -252,7 +218,7 @@ static int fw_unit_uevent(const struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
-const struct bus_type fw_bus_type = {
+struct bus_type fw_bus_type = {
 	.name = "firewire",
 	.match = fw_unit_match,
 	.probe = fw_unit_probe,
@@ -284,43 +250,27 @@ static ssize_t show_immediate(struct device *dev,
 	struct config_rom_attribute *attr =
 		container_of(dattr, struct config_rom_attribute, attr);
 	struct fw_csr_iterator ci;
-	const u32 *directories[] = {NULL, NULL};
-	int i, value = -1;
+	const u32 *dir;
+	int key, value, ret = -ENOENT;
 
-	guard(rwsem_read)(&fw_device_rwsem);
+	down_read(&fw_device_rwsem);
 
-	if (is_fw_unit(dev)) {
-		directories[0] = fw_unit(dev)->directory;
-	} else {
-		const u32 *root_directory = fw_device(dev)->config_rom + ROOT_DIR_OFFSET;
-		const u32 *vendor_directory = search_directory(root_directory, CSR_VENDOR);
+	if (is_fw_unit(dev))
+		dir = fw_unit(dev)->directory;
+	else
+		dir = fw_device(dev)->config_rom + 5;
 
-		if (!vendor_directory) {
-			directories[0] = root_directory;
-		} else {
-			// Legacy layout of configuration ROM described in Annex 1 of
-			// 'Configuration ROM for AV/C Devices 1.0 (December 12, 2000, 1394 Trading
-			// Association, TA Document 1999027)'.
-			directories[0] = vendor_directory;
-			directories[1] = root_directory;
+	fw_csr_iterator_init(&ci, dir);
+	while (fw_csr_iterator_next(&ci, &key, &value))
+		if (attr->key == key) {
+			ret = snprintf(buf, buf ? PAGE_SIZE : 0,
+				       "0x%06x\n", value);
+			break;
 		}
-	}
 
-	for (i = 0; i < ARRAY_SIZE(directories) && !!directories[i]; ++i) {
-		int key, val;
+	up_read(&fw_device_rwsem);
 
-		fw_csr_iterator_init(&ci, directories[i]);
-		while (fw_csr_iterator_next(&ci, &key, &val)) {
-			if (attr->key == key)
-				value = val;
-		}
-	}
-
-	if (value < 0)
-		return -ENOENT;
-
-	// Note that this function is also called by init_fw_attribute_group() with NULL pointer.
-	return buf ? sysfs_emit(buf, "0x%06x\n", value) : 0;
+	return ret;
 }
 
 #define IMMEDIATE_ATTR(name, key)				\
@@ -331,31 +281,18 @@ static ssize_t show_text_leaf(struct device *dev,
 {
 	struct config_rom_attribute *attr =
 		container_of(dattr, struct config_rom_attribute, attr);
-	const u32 *directories[] = {NULL, NULL};
+	const u32 *dir;
 	size_t bufsize;
 	char dummy_buf[2];
-	int i, ret = -ENOENT;
+	int ret;
 
-	guard(rwsem_read)(&fw_device_rwsem);
+	down_read(&fw_device_rwsem);
 
-	if (is_fw_unit(dev)) {
-		directories[0] = fw_unit(dev)->directory;
-	} else {
-		const u32 *root_directory = fw_device(dev)->config_rom + ROOT_DIR_OFFSET;
-		const u32 *vendor_directory = search_directory(root_directory, CSR_VENDOR);
+	if (is_fw_unit(dev))
+		dir = fw_unit(dev)->directory;
+	else
+		dir = fw_device(dev)->config_rom + 5;
 
-		if (!vendor_directory) {
-			directories[0] = root_directory;
-		} else {
-			// Legacy layout of configuration ROM described in Annex 1 of
-			// 'Configuration ROM for AV/C Devices 1.0 (December 12, 2000, 1394
-			// Trading Association, TA Document 1999027)'.
-			directories[0] = root_directory;
-			directories[1] = vendor_directory;
-		}
-	}
-
-	// Note that this function is also called by init_fw_attribute_group() with NULL pointer.
 	if (buf) {
 		bufsize = PAGE_SIZE - 1;
 	} else {
@@ -363,30 +300,17 @@ static ssize_t show_text_leaf(struct device *dev,
 		bufsize = 1;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(directories) && !!directories[i]; ++i) {
-		int result = fw_csr_string(directories[i], attr->key, buf, bufsize);
-		// Detected.
-		if (result >= 0) {
-			ret = result;
-		} else if (i == 0 && attr->key == CSR_VENDOR) {
-			// Sony DVMC-DA1 has configuration ROM such that the descriptor leaf entry
-			// in the root directory follows to the directory entry for vendor ID
-			// instead of the immediate value for vendor ID.
-			result = fw_csr_string(directories[i], CSR_DIRECTORY | attr->key, buf,
-					       bufsize);
-			if (result >= 0)
-				ret = result;
-		}
+	ret = fw_csr_string(dir, attr->key, buf, bufsize);
+
+	if (ret >= 0) {
+		/* Strip trailing whitespace and add newline. */
+		while (ret > 0 && isspace(buf[ret - 1]))
+			ret--;
+		strcpy(buf + ret, "\n");
+		ret++;
 	}
 
-	if (ret < 0)
-		return ret;
-
-	// Strip trailing whitespace and add newline.
-	while (ret > 0 && isspace(buf[ret - 1]))
-		ret--;
-	strcpy(buf + ret, "\n");
-	ret++;
+	up_read(&fw_device_rwsem);
 
 	return ret;
 }
@@ -462,10 +386,10 @@ static ssize_t config_rom_show(struct device *dev,
 	struct fw_device *device = fw_device(dev);
 	size_t length;
 
-	guard(rwsem_read)(&fw_device_rwsem);
-
+	down_read(&fw_device_rwsem);
 	length = device->config_rom_length * 4;
 	memcpy(buf, device->config_rom, length);
+	up_read(&fw_device_rwsem);
 
 	return length;
 }
@@ -474,10 +398,13 @@ static ssize_t guid_show(struct device *dev,
 			 struct device_attribute *attr, char *buf)
 {
 	struct fw_device *device = fw_device(dev);
+	int ret;
 
-	guard(rwsem_read)(&fw_device_rwsem);
+	down_read(&fw_device_rwsem);
+	ret = sysfs_emit(buf, "0x%08x%08x\n", device->config_rom[3], device->config_rom[4]);
+	up_read(&fw_device_rwsem);
 
-	return sysfs_emit(buf, "0x%08x%08x\n", device->config_rom[3], device->config_rom[4]);
+	return ret;
 }
 
 static ssize_t is_local_show(struct device *dev,
@@ -485,7 +412,7 @@ static ssize_t is_local_show(struct device *dev,
 {
 	struct fw_device *device = fw_device(dev);
 
-	return sysfs_emit(buf, "%u\n", device->is_local);
+	return sprintf(buf, "%u\n", device->is_local);
 }
 
 static int units_sprintf(char *buf, const u32 *directory)
@@ -517,9 +444,8 @@ static ssize_t units_show(struct device *dev,
 	struct fw_csr_iterator ci;
 	int key, value, i = 0;
 
-	guard(rwsem_read)(&fw_device_rwsem);
-
-	fw_csr_iterator_init(&ci, &device->config_rom[ROOT_DIR_OFFSET]);
+	down_read(&fw_device_rwsem);
+	fw_csr_iterator_init(&ci, &device->config_rom[5]);
 	while (fw_csr_iterator_next(&ci, &key, &value)) {
 		if (key != (CSR_UNIT | CSR_DIRECTORY))
 			continue;
@@ -527,6 +453,7 @@ static ssize_t units_show(struct device *dev,
 		if (i >= PAGE_SIZE - (8 + 1 + 8 + 1))
 			break;
 	}
+	up_read(&fw_device_rwsem);
 
 	if (i)
 		buf[i - 1] = '\n';
@@ -564,8 +491,7 @@ static int read_rom(struct fw_device *device,
 	return rcode;
 }
 
-// By quadlet unit.
-#define MAX_CONFIG_ROM_SIZE	((CSR_CONFIG_ROM_END - CSR_CONFIG_ROM) / sizeof(u32))
+#define MAX_CONFIG_ROM_SIZE 256
 
 /*
  * Read the bus info block, perform a speed probe, and read all of the rest of
@@ -723,10 +649,10 @@ static int read_config_rom(struct fw_device *device, int generation)
 		goto out;
 	}
 
-	scoped_guard(rwsem_write, &fw_device_rwsem) {
-		device->config_rom = new_rom;
-		device->config_rom_length = length;
-	}
+	down_write(&fw_device_rwsem);
+	device->config_rom = new_rom;
+	device->config_rom_length = length;
+	up_write(&fw_device_rwsem);
 
 	kfree(old_rom);
 	ret = RCODE_COMPLETE;
@@ -752,7 +678,7 @@ static struct device_type fw_unit_type = {
 	.release	= fw_unit_release,
 };
 
-static bool is_fw_unit(const struct device *dev)
+static bool is_fw_unit(struct device *dev)
 {
 	return dev->type == &fw_unit_type;
 }
@@ -764,7 +690,7 @@ static void create_units(struct fw_device *device)
 	int key, value, i;
 
 	i = 0;
-	fw_csr_iterator_init(&ci, &device->config_rom[ROOT_DIR_OFFSET]);
+	fw_csr_iterator_init(&ci, &device->config_rom[5]);
 	while (fw_csr_iterator_next(&ci, &key, &value)) {
 		if (key != (CSR_UNIT | CSR_DIRECTORY))
 			continue;
@@ -807,21 +733,24 @@ static int shutdown_unit(struct device *device, void *data)
 
 /*
  * fw_device_rwsem acts as dual purpose mutex:
+ *   - serializes accesses to fw_device_idr,
  *   - serializes accesses to fw_device.config_rom/.config_rom_length and
  *     fw_unit.directory, unless those accesses happen at safe occasions
  */
 DECLARE_RWSEM(fw_device_rwsem);
 
-DEFINE_XARRAY_ALLOC(fw_device_xa);
+DEFINE_IDR(fw_device_idr);
 int fw_cdev_major;
 
 struct fw_device *fw_device_get_by_devt(dev_t devt)
 {
 	struct fw_device *device;
 
-	device = xa_load(&fw_device_xa, MINOR(devt));
+	down_read(&fw_device_rwsem);
+	device = idr_find(&fw_device_idr, MINOR(devt));
 	if (device)
 		fw_device_get(device);
+	up_read(&fw_device_rwsem);
 
 	return device;
 }
@@ -847,15 +776,18 @@ static void fw_schedule_device_work(struct fw_device *device,
  */
 
 #define MAX_RETRIES	10
-#define RETRY_DELAY	secs_to_jiffies(3)
-#define INITIAL_DELAY	msecs_to_jiffies(500)
-#define SHUTDOWN_DELAY	secs_to_jiffies(2)
+#define RETRY_DELAY	(3 * HZ)
+#define INITIAL_DELAY	(HZ / 2)
+#define SHUTDOWN_DELAY	(2 * HZ)
 
 static void fw_device_shutdown(struct work_struct *work)
 {
-	struct fw_device *device = from_work(device, work, work.work);
+	struct fw_device *device =
+		container_of(work, struct fw_device, work.work);
+	int minor = MINOR(device->device.devt);
 
-	if (time_is_after_jiffies64(device->card->reset_jiffies + SHUTDOWN_DELAY)
+	if (time_before64(get_jiffies_64(),
+			  device->card->reset_jiffies + SHUTDOWN_DELAY)
 	    && !list_empty(&device->card->link)) {
 		fw_schedule_device_work(device, SHUTDOWN_DELAY);
 		return;
@@ -870,7 +802,9 @@ static void fw_device_shutdown(struct work_struct *work)
 	device_for_each_child(&device->device, NULL, shutdown_unit);
 	device_unregister(&device->device);
 
-	xa_erase(&fw_device_xa, MINOR(device->device.devt));
+	down_write(&fw_device_rwsem);
+	idr_remove(&fw_device_idr, minor);
+	up_write(&fw_device_rwsem);
 
 	fw_device_put(device);
 }
@@ -879,14 +813,16 @@ static void fw_device_release(struct device *dev)
 {
 	struct fw_device *device = fw_device(dev);
 	struct fw_card *card = device->card;
+	unsigned long flags;
 
 	/*
 	 * Take the card lock so we don't set this to NULL while a
 	 * FW_NODE_UPDATED callback is being handled or while the
 	 * bus manager work looks at this node.
 	 */
-	scoped_guard(spinlock_irqsave, &card->lock)
-		fw_node_set_device(device->node, NULL);
+	spin_lock_irqsave(&card->lock, flags);
+	device->node->data = NULL;
+	spin_unlock_irqrestore(&card->lock, flags);
 
 	fw_node_put(device->node);
 	kfree(device->config_rom);
@@ -898,7 +834,7 @@ static struct device_type fw_device_type = {
 	.release = fw_device_release,
 };
 
-static bool is_fw_device(const struct device *dev)
+static bool is_fw_device(struct device *dev)
 {
 	return dev->type == &fw_device_type;
 }
@@ -919,10 +855,64 @@ static int update_unit(struct device *dev, void *data)
 
 static void fw_device_update(struct work_struct *work)
 {
-	struct fw_device *device = from_work(device, work, work.work);
+	struct fw_device *device =
+		container_of(work, struct fw_device, work.work);
 
 	fw_device_cdev_update(device);
 	device_for_each_child(&device->device, NULL, update_unit);
+}
+
+/*
+ * If a device was pending for deletion because its node went away but its
+ * bus info block and root directory header matches that of a newly discovered
+ * device, revive the existing fw_device.
+ * The newly allocated fw_device becomes obsolete instead.
+ */
+static int lookup_existing_device(struct device *dev, void *data)
+{
+	struct fw_device *old = fw_device(dev);
+	struct fw_device *new = data;
+	struct fw_card *card = new->card;
+	int match = 0;
+
+	if (!is_fw_device(dev))
+		return 0;
+
+	down_read(&fw_device_rwsem); /* serialize config_rom access */
+	spin_lock_irq(&card->lock);  /* serialize node access */
+
+	if (memcmp(old->config_rom, new->config_rom, 6 * 4) == 0 &&
+	    atomic_cmpxchg(&old->state,
+			   FW_DEVICE_GONE,
+			   FW_DEVICE_RUNNING) == FW_DEVICE_GONE) {
+		struct fw_node *current_node = new->node;
+		struct fw_node *obsolete_node = old->node;
+
+		new->node = obsolete_node;
+		new->node->data = new;
+		old->node = current_node;
+		old->node->data = old;
+
+		old->max_speed = new->max_speed;
+		old->node_id = current_node->node_id;
+		smp_wmb();  /* update node_id before generation */
+		old->generation = card->generation;
+		old->config_rom_retries = 0;
+		fw_notice(card, "rediscovered device %s\n", dev_name(dev));
+
+		old->workfn = fw_device_update;
+		fw_schedule_device_work(old, 0);
+
+		if (current_node == card->root_node)
+			fw_schedule_bm_work(card, 0);
+
+		match = 1;
+	}
+
+	spin_unlock_irq(&card->lock);
+	up_read(&fw_device_rwsem);
+
+	return match;
 }
 
 enum { BC_UNKNOWN = 0, BC_UNIMPLEMENTED, BC_IMPLEMENTED, };
@@ -985,28 +975,16 @@ int fw_device_set_broadcast_channel(struct device *dev, void *gen)
 	return 0;
 }
 
-static int compare_configuration_rom(struct device *dev, const void *data)
-{
-	const struct fw_device *old = fw_device(dev);
-	const u32 *config_rom = data;
-
-	if (!is_fw_device(dev))
-		return 0;
-
-	// Compare the bus information block and root_length/root_crc.
-	return !memcmp(old->config_rom, config_rom, 6 * 4);
-}
-
 static void fw_device_init(struct work_struct *work)
 {
-	struct fw_device *device = from_work(device, work, work.work);
+	struct fw_device *device =
+		container_of(work, struct fw_device, work.work);
 	struct fw_card *card = device->card;
-	struct device *found;
-	u32 minor;
-	int ret;
+	struct device *revived_dev;
+	int minor, ret;
 
 	/*
-	 * All failure paths here call fw_node_set_device(node, NULL), so that we
+	 * All failure paths here set node->data to NULL, so that we
 	 * don't try to do device_for_each_child() on a kfree()'d
 	 * device.
 	 */
@@ -1029,62 +1007,24 @@ static void fw_device_init(struct work_struct *work)
 		return;
 	}
 
-	// If a device was pending for deletion because its node went away but its bus info block
-	// and root directory header matches that of a newly discovered device, revive the
-	// existing fw_device. The newly allocated fw_device becomes obsolete instead.
-	//
-	// serialize config_rom access.
-	scoped_guard(rwsem_read, &fw_device_rwsem) {
-		found = device_find_child(card->device, device->config_rom,
-					  compare_configuration_rom);
-	}
-	if (found) {
-		struct fw_device *reused = fw_device(found);
+	revived_dev = device_find_child(card->device,
+					device, lookup_existing_device);
+	if (revived_dev) {
+		put_device(revived_dev);
+		fw_device_release(&device->device);
 
-		if (atomic_cmpxchg(&reused->state,
-				   FW_DEVICE_GONE,
-				   FW_DEVICE_RUNNING) == FW_DEVICE_GONE) {
-			// serialize node access
-			scoped_guard(spinlock_irq, &card->lock) {
-				struct fw_node *current_node = device->node;
-				struct fw_node *obsolete_node = reused->node;
-
-				device->node = obsolete_node;
-				fw_node_set_device(device->node, device);
-				reused->node = current_node;
-				fw_node_set_device(reused->node, reused);
-
-				reused->max_speed = device->max_speed;
-				reused->node_id = current_node->node_id;
-				smp_wmb();  /* update node_id before generation */
-				reused->generation = card->generation;
-				reused->config_rom_retries = 0;
-				fw_notice(card, "rediscovered device %s\n",
-					  dev_name(found));
-
-				reused->workfn = fw_device_update;
-				fw_schedule_device_work(reused, 0);
-
-				if (current_node == card->root_node)
-					fw_schedule_bm_work(card, 0);
-			}
-
-			put_device(found);
-			fw_device_release(&device->device);
-
-			return;
-		}
-
-		put_device(found);
+		return;
 	}
 
 	device_initialize(&device->device);
 
 	fw_device_get(device);
+	down_write(&fw_device_rwsem);
+	minor = idr_alloc(&fw_device_idr, device, 0, 1 << MINORBITS,
+			GFP_KERNEL);
+	up_write(&fw_device_rwsem);
 
-	// The index of allocated entry is used for minor identifier of device node.
-	ret = xa_alloc(&fw_device_xa, &minor, device, XA_LIMIT(0, MINORMASK), GFP_KERNEL);
-	if (ret < 0)
+	if (minor < 0)
 		goto error;
 
 	device->device.bus = &fw_bus_type;
@@ -1145,9 +1085,11 @@ static void fw_device_init(struct work_struct *work)
 	return;
 
  error_with_cdev:
-	xa_erase(&fw_device_xa, minor);
+	down_write(&fw_device_rwsem);
+	idr_remove(&fw_device_idr, minor);
+	up_write(&fw_device_rwsem);
  error:
-	fw_device_put(device);		// fw_device_xa's reference.
+	fw_device_put(device);		/* fw_device_idr's reference */
 
 	put_device(&device->device);	/* our reference */
 }
@@ -1180,7 +1122,8 @@ static int reread_config_rom(struct fw_device *device, int generation,
 
 static void fw_device_refresh(struct work_struct *work)
 {
-	struct fw_device *device = from_work(device, work, work.work);
+	struct fw_device *device =
+		container_of(work, struct fw_device, work.work);
 	struct fw_card *card = device->card;
 	int ret, node_id = device->node_id;
 	bool changed;
@@ -1246,7 +1189,8 @@ static void fw_device_refresh(struct work_struct *work)
 
 static void fw_device_workfn(struct work_struct *work)
 {
-	struct fw_device *device = from_work(device, to_delayed_work(work), work);
+	struct fw_device *device = container_of(to_delayed_work(work),
+						struct fw_device, work);
 	device->workfn(work);
 }
 
@@ -1291,7 +1235,7 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 		 * FW_NODE_UPDATED callbacks can update the node_id
 		 * and generation for the device.
 		 */
-		fw_node_set_device(node, device);
+		node->data = device;
 
 		/*
 		 * Many devices are slow to respond after bus resets,
@@ -1306,7 +1250,7 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 
 	case FW_NODE_INITIATED_RESET:
 	case FW_NODE_LINK_ON:
-		device = fw_node_get_device(node);
+		device = node->data;
 		if (device == NULL)
 			goto create;
 
@@ -1323,7 +1267,7 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 		break;
 
 	case FW_NODE_UPDATED:
-		device = fw_node_get_device(node);
+		device = node->data;
 		if (device == NULL)
 			break;
 
@@ -1338,7 +1282,7 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 
 	case FW_NODE_DESTROYED:
 	case FW_NODE_LINK_OFF:
-		if (!fw_node_get_device(node))
+		if (!node->data)
 			break;
 
 		/*
@@ -1353,7 +1297,7 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 		 * the device in shutdown state to have that code fail
 		 * to create the device.
 		 */
-		device = fw_node_get_device(node);
+		device = node->data;
 		if (atomic_xchg(&device->state,
 				FW_DEVICE_GONE) == FW_DEVICE_RUNNING) {
 			device->workfn = fw_device_shutdown;
@@ -1363,7 +1307,3 @@ void fw_node_event(struct fw_card *card, struct fw_node *node, int event)
 		break;
 	}
 }
-
-#ifdef CONFIG_FIREWIRE_KUNIT_DEVICE_ATTRIBUTE_TEST
-#include "device-attribute-test.c"
-#endif

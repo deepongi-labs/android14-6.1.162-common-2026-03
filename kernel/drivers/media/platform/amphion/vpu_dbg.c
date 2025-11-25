@@ -48,7 +48,6 @@ static char *vpu_stat_name[] = {
 	[VPU_BUF_STATE_READY] = "ready",
 	[VPU_BUF_STATE_SKIP] = "skip",
 	[VPU_BUF_STATE_ERROR] = "error",
-	[VPU_BUF_STATE_CHANGED] = "changed",
 };
 
 static inline const char *to_vpu_stat_name(int state)
@@ -88,7 +87,7 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 	num = scnprintf(str, sizeof(str),
 			"output (%2d, %2d): fmt = %c%c%c%c %d x %d, %d;",
 			vb2_is_streaming(vq),
-			vb2_get_num_buffers(vq),
+			vq->num_buffers,
 			inst->out_format.pixfmt,
 			inst->out_format.pixfmt >> 8,
 			inst->out_format.pixfmt >> 16,
@@ -98,9 +97,9 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 			vq->last_buffer_dequeued);
 	if (seq_write(s, str, num))
 		return 0;
-	for (i = 0; i < inst->out_format.mem_planes; i++) {
+	for (i = 0; i < inst->out_format.num_planes; i++) {
 		num = scnprintf(str, sizeof(str), " %d(%d)",
-				vpu_get_fmt_plane_size(&inst->out_format, i),
+				inst->out_format.sizeimage[i],
 				inst->out_format.bytesperline[i]);
 		if (seq_write(s, str, num))
 			return 0;
@@ -112,7 +111,7 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 	num = scnprintf(str, sizeof(str),
 			"capture(%2d, %2d): fmt = %c%c%c%c %d x %d, %d;",
 			vb2_is_streaming(vq),
-			vb2_get_num_buffers(vq),
+			vq->num_buffers,
 			inst->cap_format.pixfmt,
 			inst->cap_format.pixfmt >> 8,
 			inst->cap_format.pixfmt >> 16,
@@ -122,9 +121,9 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 			vq->last_buffer_dequeued);
 	if (seq_write(s, str, num))
 		return 0;
-	for (i = 0; i < inst->cap_format.mem_planes; i++) {
+	for (i = 0; i < inst->cap_format.num_planes; i++) {
 		num = scnprintf(str, sizeof(str), " %d(%d)",
-				vpu_get_fmt_plane_size(&inst->cap_format, i),
+				inst->cap_format.sizeimage[i],
 				inst->cap_format.bytesperline[i]);
 		if (seq_write(s, str, num))
 			return 0;
@@ -140,19 +139,12 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 		return 0;
 
 	vq = v4l2_m2m_get_src_vq(inst->fh.m2m_ctx);
-	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
-		struct vb2_buffer *vb;
-		struct vb2_v4l2_buffer *vbuf;
-
-		vb = vb2_get_buffer(vq, i);
-		if (!vb)
-			continue;
+	for (i = 0; i < vq->num_buffers; i++) {
+		struct vb2_buffer *vb = vq->bufs[i];
+		struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 
 		if (vb->state == VB2_BUF_STATE_DEQUEUED)
 			continue;
-
-		vbuf = to_vb2_v4l2_buffer(vb);
-
 		num = scnprintf(str, sizeof(str),
 				"output [%2d] state = %10s, %8s\n",
 				i, vb2_stat_name[vb->state],
@@ -162,35 +154,16 @@ static int vpu_dbg_instance(struct seq_file *s, void *data)
 	}
 
 	vq = v4l2_m2m_get_dst_vq(inst->fh.m2m_ctx);
-	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
-		struct vb2_buffer *vb;
-		struct vb2_v4l2_buffer *vbuf;
-		struct vpu_vb2_buffer *vpu_buf;
-
-		vb = vb2_get_buffer(vq, i);
-		if (!vb)
-			continue;
+	for (i = 0; i < vq->num_buffers; i++) {
+		struct vb2_buffer *vb = vq->bufs[i];
+		struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 
 		if (vb->state == VB2_BUF_STATE_DEQUEUED)
 			continue;
-
-		vbuf = to_vb2_v4l2_buffer(vb);
-		vpu_buf = to_vpu_vb2_buffer(vbuf);
-
 		num = scnprintf(str, sizeof(str),
-				"capture[%2d] state = %10s, %8s",
+				"capture[%2d] state = %10s, %8s\n",
 				i, vb2_stat_name[vb->state],
 				to_vpu_stat_name(vpu_get_buffer_state(vbuf)));
-		if (seq_write(s, str, num))
-			return 0;
-
-		if (vpu_buf->fs_id >= 0) {
-			num = scnprintf(str, sizeof(str), "; fs %d", vpu_buf->fs_id);
-			if (seq_write(s, str, num))
-				return 0;
-		}
-
-		num = scnprintf(str, sizeof(str), "\n");
 		if (seq_write(s, str, num))
 			return 0;
 	}

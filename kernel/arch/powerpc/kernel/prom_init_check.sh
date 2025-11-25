@@ -13,13 +13,8 @@
 # If you really need to reference something from prom_init.o add
 # it to the list below:
 
-has_renamed_memintrinsics()
-{
-	grep -q "^CONFIG_KASAN=y$" "${KCONFIG_CONFIG}" && \
-		! grep -q "^CONFIG_CC_HAS_KASAN_MEMINTRINSIC_PREFIX=y" "${KCONFIG_CONFIG}"
-}
-
-if has_renamed_memintrinsics
+grep "^CONFIG_KASAN=y$" ${KCONFIG_CONFIG} >/dev/null
+if [ $? -eq 0 ]
 then
 	MEM_FUNCS="__memcpy __memset"
 else
@@ -42,24 +37,25 @@ check_section()
 {
     file=$1
     section=$2
-    size=$(objdump -h -j "$section" "$file" 2>/dev/null | awk "\$2 == \"$section\" {print \$3}")
+    size=$(objdump -h -j $section $file 2>/dev/null | awk "\$2 == \"$section\" {print \$3}")
     size=${size:-0}
-    if [ "$size" -ne 0 ]; then
+    if [ $size -ne 0 ]; then
 	ERROR=1
 	echo "Error: Section $section not empty in prom_init.c" >&2
     fi
 }
 
-for UNDEF in $($NM -u "$OBJ" | awk '{print $2}')
+for UNDEF in $($NM -u $OBJ | awk '{print $2}')
 do
 	# On 64-bit nm gives us the function descriptors, which have
 	# a leading . on the name, so strip it off here.
 	UNDEF="${UNDEF#.}"
 
-	case "$KBUILD_VERBOSE" in
-	*1*)
-		echo "Checking prom_init.o symbol '$UNDEF'" ;;
-	esac
+	if [ $KBUILD_VERBOSE ]; then
+		if [ $KBUILD_VERBOSE -ne 0 ]; then
+			echo "Checking prom_init.o symbol '$UNDEF'"
+		fi
+	fi
 
 	OK=0
 	for WHITE in $WHITELIST
@@ -87,8 +83,8 @@ do
 	fi
 done
 
-check_section "$OBJ" .data
-check_section "$OBJ" .bss
-check_section "$OBJ" .init.data
+check_section $OBJ .data
+check_section $OBJ .bss
+check_section $OBJ .init.data
 
 exit $ERROR

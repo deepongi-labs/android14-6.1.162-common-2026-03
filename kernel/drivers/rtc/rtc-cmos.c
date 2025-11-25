@@ -151,6 +151,11 @@ static inline int hpet_set_periodic_freq(unsigned long freq)
 	return 0;
 }
 
+static inline int hpet_rtc_dropped_irq(void)
+{
+	return 0;
+}
+
 static inline int hpet_rtc_timer_init(void)
 {
 	return 0;
@@ -863,7 +868,7 @@ static void acpi_cmos_wake_setup(struct device *dev)
 		dev_info(dev, "RTC can wake from S4\n");
 
 	/* RTC always wakes from S1/S2/S3, and often S4/STD */
-	device_init_wakeup(dev, true);
+	device_init_wakeup(dev, 1);
 }
 
 static void cmos_check_acpi_rtc_status(struct device *dev,
@@ -914,10 +919,6 @@ static inline void cmos_check_acpi_rtc_status(struct device *dev,
 #else
 #define	INITSECTION	__init
 #endif
-
-#define SECS_PER_DAY	(24 * 60 * 60)
-#define SECS_PER_MONTH	(28 * SECS_PER_DAY)
-#define SECS_PER_YEAR	(365 * SECS_PER_DAY)
 
 static int INITSECTION
 cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
@@ -1024,13 +1025,6 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 		retval = PTR_ERR(cmos_rtc.rtc);
 		goto cleanup0;
 	}
-
-	if (cmos_rtc.mon_alrm)
-		cmos_rtc.rtc->alarm_offset_max = SECS_PER_YEAR - 1;
-	else if (cmos_rtc.day_alrm)
-		cmos_rtc.rtc->alarm_offset_max = SECS_PER_MONTH - 1;
-	else
-		cmos_rtc.rtc->alarm_offset_max = SECS_PER_DAY - 1;
 
 	rename_region(ports, dev_name(&cmos_rtc.rtc->dev));
 
@@ -1500,9 +1494,10 @@ static int __init cmos_platform_probe(struct platform_device *pdev)
 	return cmos_do_probe(&pdev->dev, resource, irq);
 }
 
-static void cmos_platform_remove(struct platform_device *pdev)
+static int cmos_platform_remove(struct platform_device *pdev)
 {
 	cmos_do_remove(&pdev->dev);
+	return 0;
 }
 
 static void cmos_platform_shutdown(struct platform_device *pdev)

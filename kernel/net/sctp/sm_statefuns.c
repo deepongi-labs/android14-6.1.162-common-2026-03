@@ -30,7 +30,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <crypto/utils.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/ip.h>
@@ -39,7 +38,6 @@
 #include <linux/inet.h>
 #include <linux/slab.h>
 #include <net/sock.h>
-#include <net/proto_memory.h>
 #include <net/inet_ecn.h>
 #include <linux/skbuff.h>
 #include <net/sctp/sctp.h>
@@ -796,7 +794,8 @@ enum sctp_disposition sctp_sf_do_5_1D_ce(struct net *net,
 	/* This is a brand-new association, so these are not yet side
 	 * effects--it is safe to run them here.
 	 */
-	peer_init = (struct sctp_init_chunk *)(chunk->subh.cookie_hdr + 1);
+	peer_init = &chunk->subh.cookie_hdr->c.peer_init[0];
+
 	if (!sctp_process_init(new_asoc, chunk,
 			       &chunk->subh.cookie_hdr->c.peer_addr,
 			       peer_init, GFP_ATOMIC))
@@ -886,8 +885,7 @@ enum sctp_disposition sctp_sf_do_5_1D_ce(struct net *net,
 	return SCTP_DISPOSITION_CONSUME;
 
 nomem_authev:
-	if (ai_ev)
-		sctp_ulpevent_free(ai_ev);
+	sctp_ulpevent_free(ai_ev);
 nomem_aiev:
 	sctp_ulpevent_free(ev);
 nomem_ev:
@@ -1339,7 +1337,7 @@ static int sctp_sf_send_restart_abort(struct net *net, union sctp_addr *ssa,
 	 * throughout the code today.
 	 */
 	errhdr = (struct sctp_errhdr *)buffer;
-	addrparm = (union sctp_addr_param *)(errhdr + 1);
+	addrparm = (union sctp_addr_param *)errhdr->variable;
 
 	/* Copy into a parm format. */
 	len = af->to_addr_param(ssa, addrparm);
@@ -1871,7 +1869,8 @@ static enum sctp_disposition sctp_sf_do_dupcook_a(
 	/* new_asoc is a brand-new association, so these are not yet
 	 * side effects--it is safe to run them here.
 	 */
-	peer_init = (struct sctp_init_chunk *)(chunk->subh.cookie_hdr + 1);
+	peer_init = &chunk->subh.cookie_hdr->c.peer_init[0];
+
 	if (!sctp_process_init(new_asoc, chunk, sctp_source(chunk), peer_init,
 			       GFP_ATOMIC))
 		goto nomem;
@@ -1991,7 +1990,7 @@ static enum sctp_disposition sctp_sf_do_dupcook_b(
 	/* new_asoc is a brand-new association, so these are not yet
 	 * side effects--it is safe to run them here.
 	 */
-	peer_init = (struct sctp_init_chunk *)(chunk->subh.cookie_hdr + 1);
+	peer_init = &chunk->subh.cookie_hdr->c.peer_init[0];
 	if (!sctp_process_init(new_asoc, chunk, sctp_source(chunk), peer_init,
 			       GFP_ATOMIC))
 		goto nomem;
@@ -4055,7 +4054,7 @@ enum sctp_disposition sctp_sf_do_asconf_ack(struct net *net,
 			   (void *)err_param, commands);
 
 	if (last_asconf) {
-		addip_hdr = last_asconf->subh.addip_hdr;
+		addip_hdr = (struct sctp_addiphdr *)last_asconf->subh.addip_hdr;
 		sent_serial = ntohl(addip_hdr->serial);
 	} else {
 		sent_serial = asoc->addip_serial - 1;
@@ -4153,7 +4152,7 @@ enum sctp_disposition sctp_sf_do_reconf(struct net *net,
 						  (void *)err_param, commands);
 
 	hdr = (struct sctp_reconf_chunk *)chunk->chunk_hdr;
-	sctp_walk_params(param, hdr) {
+	sctp_walk_params(param, hdr, params) {
 		struct sctp_chunk *reply = NULL;
 		struct sctp_ulpevent *ev = NULL;
 
@@ -4363,7 +4362,7 @@ static enum sctp_ierror sctp_sf_authenticate(
 	struct sctp_shared_key *sh_key = NULL;
 	struct sctp_authhdr *auth_hdr;
 	__u8 *save_digest, *digest;
-	const struct sctp_hmac *hmac;
+	struct sctp_hmac *hmac;
 	unsigned int sig_len;
 	__u16 key_id;
 
@@ -4404,7 +4403,7 @@ static enum sctp_ierror sctp_sf_authenticate(
 	 *  3. Compute the new digest
 	 *  4. Compare saved and new digests.
 	 */
-	digest = (u8 *)(auth_hdr + 1);
+	digest = auth_hdr->hmac;
 	skb_pull(chunk->skb, sig_len);
 
 	save_digest = kmemdup(digest, sig_len, GFP_ATOMIC);
@@ -4418,7 +4417,7 @@ static enum sctp_ierror sctp_sf_authenticate(
 				 sh_key, GFP_ATOMIC);
 
 	/* Discard the packet if the digests do not match */
-	if (crypto_memneq(save_digest, digest, sig_len)) {
+	if (memcmp(save_digest, digest, sig_len)) {
 		kfree(save_digest);
 		return SCTP_IERROR_BAD_SIG;
 	}

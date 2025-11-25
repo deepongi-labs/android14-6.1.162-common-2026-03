@@ -11,7 +11,6 @@ struct packet_mclist {
 	unsigned short		type;
 	unsigned short		alen;
 	unsigned char		addr[MAX_ADDR_LEN];
-	struct list_head	remove_list;
 };
 
 /* kbdq - kernel block descriptor queue */
@@ -20,10 +19,15 @@ struct tpacket_kbdq_core {
 	unsigned int	feature_req_word;
 	unsigned int	hdrlen;
 	unsigned char	reset_pending_on_curr_blk;
+	unsigned char   delete_blk_timer;
 	unsigned short	kactive_blk_num;
 	unsigned short	blk_sizeof_priv;
 
-	unsigned short  version;
+	/* last_kactive_blk_num:
+	 * trick to see if user-space has caught up
+	 * in order to avoid refreshing timer when every single pkt arrives.
+	 */
+	unsigned short	last_kactive_blk_num;
 
 	char		*pkblk_start;
 	char		*pkblk_end;
@@ -33,7 +37,6 @@ struct tpacket_kbdq_core {
 	uint64_t	knxt_seq_num;
 	char		*prev;
 	char		*nxt_offset;
-
 	struct sk_buff	*skb;
 
 	rwlock_t	blk_fill_in_prog_lock;
@@ -41,10 +44,12 @@ struct tpacket_kbdq_core {
 	/* Default is set to 8ms */
 #define DEFAULT_PRB_RETIRE_TOV	(8)
 
-	ktime_t		interval_ktime;
+	unsigned short  retire_blk_tov;
+	unsigned short  version;
+	unsigned long	tov_in_jiffies;
 
 	/* timer to retire an outstanding block */
-	struct hrtimer  retire_blk_timer;
+	struct timer_list retire_blk_timer;
 };
 
 struct pgv {
@@ -89,7 +94,7 @@ struct packet_fanout {
 	spinlock_t		lock;
 	refcount_t		sk_ref;
 	struct packet_type	prot_hook ____cacheline_aligned_in_smp;
-	struct sock	__rcu	*arr[] __counted_by(max_num_members);
+	struct sock	__rcu	*arr[];
 };
 
 struct packet_rollover {
@@ -112,8 +117,12 @@ struct packet_sock {
 	spinlock_t		bind_lock;
 	struct mutex		pg_vec_lock;
 	unsigned long		flags;
+	unsigned int		running;	/* bind_lock must be held */
+	unsigned int		has_vnet_hdr:1, /* writer must hold sock lock */
+				tp_loss:1,
+				tp_tx_has_off:1;
+	int			pressure;
 	int			ifindex;	/* bound device		*/
-	u8			vnet_hdr_sz;
 	__be16			num;
 	struct packet_rollover	*rollover;
 	struct packet_mclist	*mclist;
@@ -124,20 +133,19 @@ struct packet_sock {
 	unsigned int		tp_tstamp;
 	struct completion	skb_completion;
 	struct net_device __rcu	*cached_dev;
+	int			(*xmit)(struct sk_buff *skb);
 	struct packet_type	prot_hook ____cacheline_aligned_in_smp;
 	atomic_t		tp_drops ____cacheline_aligned_in_smp;
 };
 
-#define pkt_sk(ptr) container_of_const(ptr, struct packet_sock, sk)
+static inline struct packet_sock *pkt_sk(struct sock *sk)
+{
+	return (struct packet_sock *)sk;
+}
 
 enum packet_sock_flags {
 	PACKET_SOCK_ORIGDEV,
 	PACKET_SOCK_AUXDATA,
-	PACKET_SOCK_TX_HAS_OFF,
-	PACKET_SOCK_TP_LOSS,
-	PACKET_SOCK_RUNNING,
-	PACKET_SOCK_PRESSURE,
-	PACKET_SOCK_QDISC_BYPASS,
 };
 
 static inline void packet_sock_flag_set(struct packet_sock *po,

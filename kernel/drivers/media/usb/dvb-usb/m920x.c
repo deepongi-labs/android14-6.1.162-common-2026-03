@@ -17,7 +17,7 @@
 
 #include <media/tuner.h>
 #include "tuner-simple.h"
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 /* debug */
 static int dvb_usb_m920x_debug;
@@ -319,7 +319,7 @@ static u32 m920x_i2c_func(struct i2c_adapter *adapter)
 	return I2C_FUNC_I2C;
 }
 
-static const struct i2c_algorithm m920x_i2c_algo = {
+static struct i2c_algorithm m920x_i2c_algo = {
 	.master_xfer   = m920x_i2c_xfer,
 	.functionality = m920x_i2c_func,
 };
@@ -486,14 +486,14 @@ static int m920x_identify_state(struct usb_device *udev,
 static int m920x_mt352_demod_init(struct dvb_frontend *fe)
 {
 	int ret;
-	static const u8 config[] = { CONFIG, 0x3d };
-	static const u8 clock[] = { CLOCK_CTL, 0x30 };
-	static const u8 reset[] = { RESET, 0x80 };
-	static const u8 adc_ctl[] = { ADC_CTL_1, 0x40 };
-	static const u8 agc[] = { AGC_TARGET, 0x1c, 0x20 };
-	static const u8 sec_agc[] = { 0x69, 0x00, 0xff, 0xff, 0x40, 0xff, 0x00, 0x40, 0x40 };
-	static const u8 unk1[] = { 0x93, 0x1a };
-	static const u8 unk2[] = { 0xb5, 0x7a };
+	u8 config[] = { CONFIG, 0x3d };
+	u8 clock[] = { CLOCK_CTL, 0x30 };
+	u8 reset[] = { RESET, 0x80 };
+	u8 adc_ctl[] = { ADC_CTL_1, 0x40 };
+	u8 agc[] = { AGC_TARGET, 0x1c, 0x20 };
+	u8 sec_agc[] = { 0x69, 0x00, 0xff, 0xff, 0x40, 0xff, 0x00, 0x40, 0x40 };
+	u8 unk1[] = { 0x93, 0x1a };
+	u8 unk2[] = { 0xb5, 0x7a };
 
 	deb("Demod init!\n");
 
@@ -909,7 +909,7 @@ enum {
 	AZUREWAVE_TWINHAN_VP7049,
 };
 
-static const struct usb_device_id m920x_table[] = {
+static struct usb_device_id m920x_table[] = {
 	DVB_USB_DEV(MSI, MSI_MEGASKY580),
 	DVB_USB_DEV(ANUBIS_ELECTRONIC, ANUBIS_MSI_DIGI_VOX_MINI_II),
 	DVB_USB_DEV(ANUBIS_ELECTRONIC, ANUBIS_LIFEVIEW_TV_WALKER_TWIN_COLD),

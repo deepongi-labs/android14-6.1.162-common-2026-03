@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: MIT
 /*
+ * SPDX-License-Identifier: MIT
+ *
  * Copyright © 2019 Intel Corporation
  */
 
@@ -12,7 +13,7 @@
 #include "i915_driver.h"
 #include "i915_drv.h"
 
-#if IS_ENABLED(CONFIG_X86)
+#if defined(CONFIG_X86)
 #include <asm/smp.h>
 #else
 #define wbinvd_on_all_cpus() \
@@ -21,19 +22,9 @@
 
 void i915_gem_suspend(struct drm_i915_private *i915)
 {
-	struct intel_gt *gt;
-	unsigned int i;
-
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
 	intel_wakeref_auto(&i915->runtime_pm.userfault_wakeref, 0);
-	/*
-	 * On rare occasions, we've observed the fence completion triggers
-	 * free_engines asynchronously via rcu_call. Ensure those are done.
-	 * This path is only called on suspend, so it's an acceptable cost.
-	 */
-	rcu_barrier();
-
 	flush_workqueue(i915->wq);
 
 	/*
@@ -45,8 +36,7 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 	 * state. Fortunately, the kernel_context is disposable and we do
 	 * not rely on its state.
 	 */
-	for_each_gt(gt, i915, i)
-		intel_gt_suspend_prepare(gt);
+	intel_gt_suspend_prepare(to_gt(i915));
 
 	i915_gem_drain_freed_objects(i915);
 }
@@ -141,9 +131,7 @@ void i915_gem_suspend_late(struct drm_i915_private *i915)
 		&i915->mm.purge_list,
 		NULL
 	}, **phase;
-	struct intel_gt *gt;
 	unsigned long flags;
-	unsigned int i;
 	bool flush = false;
 
 	/*
@@ -166,11 +154,7 @@ void i915_gem_suspend_late(struct drm_i915_private *i915)
 	 * machine in an unusable condition.
 	 */
 
-	/* Like i915_gem_suspend, flush tasks staged from fence triggers */
-	rcu_barrier();
-
-	for_each_gt(gt, i915, i)
-		intel_gt_suspend_late(gt);
+	intel_gt_suspend_late(to_gt(i915));
 
 	spin_lock_irqsave(&i915->mm.obj_lock, flags);
 	for (phase = phases; *phase; phase++) {
@@ -228,8 +212,7 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 
 void i915_gem_resume(struct drm_i915_private *i915)
 {
-	struct intel_gt *gt;
-	int ret, i, j;
+	int ret;
 
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
@@ -241,25 +224,8 @@ void i915_gem_resume(struct drm_i915_private *i915)
 	 * guarantee that the context image is complete. So let's just reset
 	 * it and start again.
 	 */
-	for_each_gt(gt, i915, i)
-		if (intel_gt_resume(gt))
-			goto err_wedged;
+	intel_gt_resume(to_gt(i915));
 
 	ret = lmem_restore(i915, I915_TTM_BACKUP_ALLOW_GPU);
 	GEM_WARN_ON(ret);
-
-	return;
-
-err_wedged:
-	for_each_gt(gt, i915, j) {
-		if (!intel_gt_is_wedged(gt)) {
-			dev_err(i915->drm.dev,
-				"Failed to re-initialize GPU[%u], declaring it wedged!\n",
-				j);
-			intel_gt_set_wedged(gt);
-		}
-
-		if (j == i)
-			break;
-	}
 }

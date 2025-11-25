@@ -6,7 +6,7 @@
  * Copyright 2010 Michael Ellerman, IBM Corp.
  */
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 #include <linux/types.h>
 
 #include <asm/feature-fixups.h>

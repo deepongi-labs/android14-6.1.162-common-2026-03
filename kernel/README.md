@@ -8,7 +8,7 @@ additions of `EXPORT_SYMBOL_GPL()` require an in-tree modular driver that uses t
 the new driver or changes to an existing driver in the same patchset as the export.
    - When sending patches upstream, the commit message must contain a clear case for why the patch
 is needed and beneficial to the community. Enabling out-of-tree drivers or functionality is not
-a persuasive case.
+not a persuasive case.
 
 2. LESS GOOD: Develop your patches out-of-tree (from an upstream Linux point-of-view). Unless these are
    fixing an Android-specific bug, these are very unlikely to be accepted unless they have been
@@ -33,9 +33,6 @@ Additional requirements are listed below based on patch type
 - If the patch is a cherry-pick from Linux mainline with no changes at all
     - tag the patch subject with `UPSTREAM:`.
     - add upstream commit information with a `(cherry picked from commit ...)` line
-    - if applicable, prefer to cherry-pick the commit from the corresponding LTS branch.
-    - append new signature tags (e.g. `Bug:`, `Change-Id:`, etc.) at the end to keep the
-      chronological order.
     - Example:
         - if the upstream commit message is
 ```
@@ -83,11 +80,8 @@ instead of `UPSTREAM:`.
 - If the patch has been merged into an upstream maintainer tree, but has not yet
 been merged into Linux mainline
     - tag the patch subject with `FROMGIT:`
-    - add info on where the patch came from as `(cherry picked from commit <sha1> <repo> <branch>)`.
-This must be a branch on a tree which is normally merged into Linus's tree and is not rebased. For
-example, don't use `linux-next` which is rebased and never directly merged into Linus's tree, but
-you *can* use SHAs from `net` *or* `net-next`, which are merged into Linus's tree at various points
-in the release.
+    - add info on where the patch came from as `(cherry picked from commit <sha1> <repo> <branch>)`. This
+must be a stable maintainer branch (not rebased, so don't use `linux-next` for example).
     - if changes were required, use `BACKPORT: FROMGIT:`
     - Example:
         - if the commit message in the maintainer tree is
@@ -134,12 +128,6 @@ a maintainer tree)
         Signed-off-by: Joe Smith <joe.smith@foo.org>
 ```
 
-- If a patch has been submitted to the community, but rejected, do NOT use the
-  `FROMLIST:` tag to try to hide this fact.  Use the `ANDROID:` tag as
-  described below as this must be considered as an Android-specific submission,
-  not an upstream submission as the community will not accept these changes
-  as-is.
-
 ## Requirements for Android-specific patches: `ANDROID:`
 
 - If the patch is fixing a bug to Android-specific code
@@ -160,24 +148,3 @@ a maintainer tree)
     - tag the patch subject with `ANDROID:`
     - add a `Bug:` tag with the Android bug (required for android-specific features)
 
-## Requirements for revert patches:
-
-- Add a reason for the revert
-- Do not delete or modify the revert information that is generated when using
-`git revert`
-- If modifications have been made after creating the revert, include a list of
-these in the commit message
-- Example:
-```
-        Revert "ANDROID: fix android-specific bug in foobar.c"
-
-        This reverts commit a57a7913f53e34c8a8d905444b126b3316146e69.
-
-        Reason for revert: Breaks a lot of internal tests
-
-        Additional modifications: Resolved merge conflicts
-
-        Bug: 135791357
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```

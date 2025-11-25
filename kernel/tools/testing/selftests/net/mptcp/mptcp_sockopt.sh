@@ -1,11 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 
-# Double quotes to prevent globbing and word splitting is recommended in new
-# code but we accept it, especially because there were too many before having
-# address all other issues detected by shellcheck.
-#shellcheck disable=SC2086
-
 . "$(dirname "${0}")/mptcp_lib.sh"
 
 ret=0
@@ -13,43 +8,19 @@ sin=""
 sout=""
 cin=""
 cout=""
+ksft_skip=4
 timeout_poll=30
 timeout_test=$((timeout_poll * 2 + 1))
+mptcp_connect=""
+do_all_tests=1
 iptables="iptables"
 ip6tables="ip6tables"
-
-ns1=""
-ns2=""
-ns_sbox=""
-
-usage() {
-	echo "Usage: $0 [ -i ] [ -h ]"
-	echo -e "\t-i: use 'ip mptcp' instead of 'pm_nl_ctl'"
-	echo -e "\t-h: help"
-}
-
-while getopts "hi" option;do
-	case "$option" in
-	"h")
-		usage "$0"
-		exit ${KSFT_PASS}
-		;;
-	"i")
-		mptcp_lib_set_ip_mptcp
-		;;
-	"?")
-		usage "$0"
-		exit ${KSFT_FAIL}
-		;;
-	esac
-done
 
 add_mark_rules()
 {
 	local ns=$1
 	local m=$2
 
-	local t
 	for t in ${iptables} ${ip6tables}; do
 		# just to debug: check we have multiple subflows connection requests
 		ip netns exec $ns $t -A OUTPUT -p tcp --syn -m mark --mark $m -j ACCEPT
@@ -64,10 +35,21 @@ add_mark_rules()
 
 init()
 {
-	mptcp_lib_ns_init ns1 ns2 ns_sbox
+	rndh=$(printf %x $sec)-$(mktemp -u XXXXXX)
 
-	local i
-	for i in $(seq 1 4); do
+	ns1="ns1-$rndh"
+	ns2="ns2-$rndh"
+	ns_sbox="ns_sbox-$rndh"
+
+	for netns in "$ns1" "$ns2" "$ns_sbox";do
+		ip netns add $netns || exit $ksft_skip
+		ip -net $netns link set lo up
+		ip netns exec $netns sysctl -q net.mptcp.enabled=1
+		ip netns exec $netns sysctl -q net.ipv4.conf.all.rp_filter=0
+		ip netns exec $netns sysctl -q net.ipv4.conf.default.rp_filter=0
+	done
+
+	for i in `seq 1 4`; do
 		ip link add ns1eth$i netns "$ns1" type veth peer name ns2eth$i netns "$ns2"
 		ip -net "$ns1" addr add 10.0.$i.1/24 dev ns1eth$i
 		ip -net "$ns1" addr add dead:beef:$i::1/64 dev ns1eth$i nodad
@@ -80,54 +62,68 @@ init()
 		# let $ns2 reach any $ns1 address from any interface
 		ip -net "$ns2" route add default via 10.0.$i.1 dev ns2eth$i metric 10$i
 
-		mptcp_lib_pm_nl_add_endpoint "${ns1}" "10.0.${i}.1" flags signal
-		mptcp_lib_pm_nl_add_endpoint "${ns1}" "dead:beef:${i}::1" flags signal
+		ip netns exec $ns1 ./pm_nl_ctl add 10.0.$i.1 flags signal
+		ip netns exec $ns1 ./pm_nl_ctl add dead:beef:$i::1 flags signal
 
-		mptcp_lib_pm_nl_add_endpoint "${ns2}" "10.0.${i}.2" flags signal
-		mptcp_lib_pm_nl_add_endpoint "${ns2}" "dead:beef:${i}::2" flags signal
+		ip netns exec $ns2 ./pm_nl_ctl add 10.0.$i.2 flags signal
+		ip netns exec $ns2 ./pm_nl_ctl add dead:beef:$i::2 flags signal
 	done
 
-	mptcp_lib_pm_nl_set_limits "${ns1}" 8 8
-	mptcp_lib_pm_nl_set_limits "${ns2}" 8 8
+	ip netns exec $ns1 ./pm_nl_ctl limits 8 8
+	ip netns exec $ns2 ./pm_nl_ctl limits 8 8
 
 	add_mark_rules $ns1 1
 	add_mark_rules $ns2 2
 }
 
-# This function is used in the cleanup trap
-#shellcheck disable=SC2317,SC2329
 cleanup()
 {
-	mptcp_lib_ns_exit "${ns1}" "${ns2}" "${ns_sbox}"
+	for netns in "$ns1" "$ns2" "$ns_sbox"; do
+		ip netns del $netns
+	done
 	rm -f "$cin" "$cout"
 	rm -f "$sin" "$sout"
 }
 
 mptcp_lib_check_mptcp
 mptcp_lib_check_kallsyms
-mptcp_lib_check_tools ip "${iptables}" "${ip6tables}"
+
+ip -Version > /dev/null 2>&1
+if [ $? -ne 0 ];then
+	echo "SKIP: Could not run test without ip tool"
+	exit $ksft_skip
+fi
+
+# Use the legacy version if available to support old kernel versions
+if iptables-legacy -V &> /dev/null; then
+	iptables="iptables-legacy"
+	ip6tables="ip6tables-legacy"
+elif ! iptables -V &> /dev/null; then
+	echo "SKIP: Could not run all tests without iptables tool"
+	exit $ksft_skip
+elif ! ip6tables -V &> /dev/null; then
+	echo "SKIP: Could not run all tests without ip6tables tool"
+	exit $ksft_skip
+fi
 
 check_mark()
 {
 	local ns=$1
 	local af=$2
 
-	local tables=${iptables}
+	tables=${iptables}
 
 	if [ $af -eq 6 ];then
 		tables=${ip6tables}
 	fi
 
-	local counters values
 	counters=$(ip netns exec $ns $tables -v -L OUTPUT | grep DROP)
 	values=${counters%DROP*}
 
-	local v
 	for v in $values; do
 		if [ $v -ne 0 ]; then
-			mptcp_lib_pr_fail "got $tables $values in ns $ns," \
-					  "not 0 - not all expected packets marked"
-			ret=${KSFT_FAIL}
+			echo "FAIL: got $tables $values in ns $ns , not 0 - not all expected packets marked" 1>&2
+			ret=1
 			return 1
 		fi
 	done
@@ -135,33 +131,58 @@ check_mark()
 	return 0
 }
 
-print_title()
+print_file_err()
 {
-	mptcp_lib_print_title "${@}"
+	ls -l "$1" 1>&2
+	echo "Trailing bytes are: "
+	tail -c 27 "$1"
+}
+
+check_transfer()
+{
+	in=$1
+	out=$2
+	what=$3
+
+	cmp "$in" "$out" > /dev/null 2>&1
+	if [ $? -ne 0 ] ;then
+		echo "[ FAIL ] $what does not match (in, out):"
+		print_file_err "$in"
+		print_file_err "$out"
+		ret=1
+
+		return 1
+	fi
+
+	return 0
+}
+
+# $1: IP address
+is_v6()
+{
+	[ -z "${1##*:*}" ]
 }
 
 do_transfer()
 {
-	local listener_ns="$1"
-	local connector_ns="$2"
-	local cl_proto="$3"
-	local srv_proto="$4"
-	local connect_addr="$5"
+	listener_ns="$1"
+	connector_ns="$2"
+	cl_proto="$3"
+	srv_proto="$4"
+	connect_addr="$5"
 
-	local port=12001
+	port=12001
 
 	:> "$cout"
 	:> "$sout"
 
-	local mptcp_connect="./mptcp_connect -r 20"
+	mptcp_connect="./mptcp_connect -r 20"
 
-	local local_addr ip
-	if mptcp_lib_is_v6 "${connect_addr}"; then
+	local local_addr
+	if is_v6 "${connect_addr}"; then
 		local_addr="::"
-		ip=ipv6
 	else
 		local_addr="0.0.0.0"
-		ip=ipv4
 	fi
 
 	cmsg="TIMESTAMPNS"
@@ -169,16 +190,11 @@ do_transfer()
 		cmsg+=",TCPINQ"
 	fi
 
-	NSTAT_HISTORY=/tmp/${listener_ns}.nstat ip netns exec ${listener_ns} \
-		nstat -n
-	NSTAT_HISTORY=/tmp/${connector_ns}.nstat ip netns exec ${connector_ns} \
-		nstat -n
-
 	timeout ${timeout_test} \
 		ip netns exec ${listener_ns} \
 			$mptcp_connect -t ${timeout_poll} -l -M 1 -p $port -s ${srv_proto} -c "${cmsg}" \
 				${local_addr} < "$sin" > "$sout" &
-	local spid=$!
+	spid=$!
 
 	sleep 1
 
@@ -187,37 +203,25 @@ do_transfer()
 			$mptcp_connect -t ${timeout_poll} -M 2 -p $port -s ${cl_proto} -c "${cmsg}" \
 				$connect_addr < "$cin" > "$cout" &
 
-	local cpid=$!
+	cpid=$!
 
 	wait $cpid
-	local retc=$?
+	retc=$?
 	wait $spid
-	local rets=$?
+	rets=$?
 
-	NSTAT_HISTORY=/tmp/${listener_ns}.nstat ip netns exec ${listener_ns} \
-		nstat | grep Tcp > /tmp/${listener_ns}.out
-	NSTAT_HISTORY=/tmp/${connector_ns}.nstat ip netns exec ${connector_ns} \
-		nstat | grep Tcp > /tmp/${connector_ns}.out
-
-	print_title "Transfer ${ip:2}"
 	if [ ${rets} -ne 0 ] || [ ${retc} -ne 0 ]; then
-		mptcp_lib_pr_fail "client exit code $retc, server $rets"
-		mptcp_lib_pr_err_stats "${listener_ns}" "${connector_ns}" "${port}" \
-			"/tmp/${listener_ns}.out" "/tmp/${connector_ns}.out"
+		echo " client exit code $retc, server $rets" 1>&2
+		echo -e "\nnetns ${listener_ns} socket stat for ${port}:" 1>&2
+		ip netns exec ${listener_ns} ss -Menita 1>&2 -o "sport = :$port"
 
-		mptcp_lib_result_fail "transfer ${ip}"
+		echo -e "\nnetns ${connector_ns} socket stat for ${port}:" 1>&2
+		ip netns exec ${connector_ns} ss -Menita 1>&2 -o "dport = :$port"
 
-		ret=${KSFT_FAIL}
+		ret=1
 		return 1
 	fi
-	if ! mptcp_lib_check_transfer $cin $sout "file received by server"; then
-		rets=1
-	else
-		mptcp_lib_pr_ok
-	fi
-	mptcp_lib_result_code "${rets}" "transfer ${ip}"
 
-	print_title "Mark ${ip:2}"
 	if [ $local_addr = "::" ];then
 		check_mark $listener_ns 6 || retc=1
 		check_mark $connector_ns 6 || retc=1
@@ -226,24 +230,25 @@ do_transfer()
 		check_mark $connector_ns 4 || retc=1
 	fi
 
-	mptcp_lib_result_code "${retc}" "mark ${ip}"
+	check_transfer $cin $sout "file received by server"
+
+	rets=$?
 
 	if [ $retc -eq 0 ] && [ $rets -eq 0 ];then
-		mptcp_lib_pr_ok
 		return 0
 	fi
-	mptcp_lib_pr_fail
 
 	return 1
 }
 
 make_file()
 {
-	local name=$1
-	local who=$2
-	local size=$3
+	name=$1
+	who=$2
+	size=$3
 
-	mptcp_lib_make_file $name 1024 $size
+	dd if=/dev/urandom of="$name" bs=1024 count=$size 2> /dev/null
+	echo -e "\nMPTCP_TEST_FILE_END_MARKER" >> "$name"
 
 	echo "Created $name (size $size KB) containing data sent by $who"
 }
@@ -253,43 +258,34 @@ do_mptcp_sockopt_tests()
 	local lret=0
 
 	if ! mptcp_lib_kallsyms_has "mptcp_diag_fill_info$"; then
-		mptcp_lib_pr_skip "MPTCP sockopt not supported"
-		mptcp_lib_result_skip "sockopt"
+		echo "INFO: MPTCP sockopt not supported: SKIP"
 		return
 	fi
 
 	ip netns exec "$ns_sbox" ./mptcp_sockopt
 	lret=$?
 
-	print_title "SOL_MPTCP sockopt v4"
 	if [ $lret -ne 0 ]; then
-		mptcp_lib_pr_fail
-		mptcp_lib_result_fail "sockopt v4"
+		echo "FAIL: SOL_MPTCP getsockopt" 1>&2
 		ret=$lret
 		return
 	fi
-	mptcp_lib_pr_ok
-	mptcp_lib_result_pass "sockopt v4"
 
 	ip netns exec "$ns_sbox" ./mptcp_sockopt -6
 	lret=$?
 
-	print_title "SOL_MPTCP sockopt v6"
 	if [ $lret -ne 0 ]; then
-		mptcp_lib_pr_fail
-		mptcp_lib_result_fail "sockopt v6"
+		echo "FAIL: SOL_MPTCP getsockopt (ipv6)" 1>&2
 		ret=$lret
 		return
 	fi
-	mptcp_lib_pr_ok
-	mptcp_lib_result_pass "sockopt v6"
 }
 
 run_tests()
 {
-	local listener_ns="$1"
-	local connector_ns="$2"
-	local connect_addr="$3"
+	listener_ns="$1"
+	connector_ns="$2"
+	connect_addr="$3"
 	local lret=0
 
 	do_transfer ${listener_ns} ${connector_ns} MPTCP MPTCP ${connect_addr}
@@ -304,18 +300,15 @@ run_tests()
 
 do_tcpinq_test()
 {
-	print_title "TCP_INQ cmsg/ioctl $*"
-	ip netns exec "$ns_sbox" ./mptcp_inq "$@"
-	local lret=$?
+	ip netns exec "$ns1" ./mptcp_inq "$@"
+	lret=$?
 	if [ $lret -ne 0 ];then
 		ret=$lret
-		mptcp_lib_pr_fail
-		mptcp_lib_result_fail "TCP_INQ: $*"
+		echo "FAIL: mptcp_inq $@" 1>&2
 		return $lret
 	fi
 
-	mptcp_lib_pr_ok
-	mptcp_lib_result_pass "TCP_INQ: $*"
+	echo "PASS: TCP_INQ cmsg/ioctl $@"
 	return $lret
 }
 
@@ -323,13 +316,14 @@ do_tcpinq_tests()
 {
 	local lret=0
 
+	ip netns exec "$ns1" ${iptables} -F
+	ip netns exec "$ns1" ${ip6tables} -F
+
 	if ! mptcp_lib_kallsyms_has "mptcp_ioctl$"; then
-		mptcp_lib_pr_skip "TCP_INQ not supported"
-		mptcp_lib_result_skip "TCP_INQ"
+		echo "INFO: TCP_INQ not supported: SKIP"
 		return
 	fi
 
-	local args
 	for args in "-t tcp" "-r tcp"; do
 		do_tcpinq_test $args
 		lret=$?
@@ -356,13 +350,18 @@ init
 make_file "$cin" "client" 1
 make_file "$sin" "server" 1
 trap cleanup EXIT
-mptcp_lib_subtests_last_ts_reset
 
 run_tests $ns1 $ns2 10.0.1.1
 run_tests $ns1 $ns2 dead:beef:1::1
 
-do_mptcp_sockopt_tests
-do_tcpinq_tests
+if [ $ret -eq 0 ];then
+	echo "PASS: all packets had packet mark set"
+fi
 
-mptcp_lib_result_print_all_tap
+do_mptcp_sockopt_tests
+if [ $ret -eq 0 ];then
+	echo "PASS: SOL_MPTCP getsockopt has expected information"
+fi
+
+do_tcpinq_tests
 exit $ret

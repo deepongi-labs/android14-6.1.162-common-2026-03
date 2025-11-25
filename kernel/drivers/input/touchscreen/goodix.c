@@ -22,7 +22,7 @@
 #include <linux/slab.h>
 #include <linux/acpi.h>
 #include <linux/of.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include "goodix.h"
 
 #define GOODIX_GPIO_INT_NAME		"irq"
@@ -44,11 +44,9 @@
 #define GOODIX_HAVE_KEY			BIT(4)
 #define GOODIX_BUFFER_STATUS_TIMEOUT	20
 
-#define RESOLUTION_LOC			1
-#define MAX_CONTACTS_LOC		5
-#define TRIGGER_LOC			6
-
-#define GOODIX_POLL_INTERVAL_MS		17	/* 17ms = 60fps */
+#define RESOLUTION_LOC		1
+#define MAX_CONTACTS_LOC	5
+#define TRIGGER_LOC		6
 
 /* Our special handling for GPIO accesses through ACPI is x86 specific */
 #if defined CONFIG_X86 && defined CONFIG_ACPI
@@ -499,14 +497,6 @@ sync:
 	input_sync(ts->input_dev);
 }
 
-static void goodix_ts_work_i2c_poll(struct input_dev *input)
-{
-	struct goodix_ts_data *ts = input_get_drvdata(input);
-
-	goodix_process_events(ts);
-	goodix_i2c_write_u8(ts->client, GOODIX_READ_COOR_ADDR, 0);
-}
-
 /**
  * goodix_ts_irq_handler - The IRQ handler
  *
@@ -523,29 +513,13 @@ static irqreturn_t goodix_ts_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void goodix_enable_irq(struct goodix_ts_data *ts)
-{
-	if (ts->client->irq)
-		enable_irq(ts->client->irq);
-}
-
-static void goodix_disable_irq(struct goodix_ts_data *ts)
-{
-	if (ts->client->irq)
-		disable_irq(ts->client->irq);
-}
-
 static void goodix_free_irq(struct goodix_ts_data *ts)
 {
-	if (ts->client->irq)
-		devm_free_irq(&ts->client->dev, ts->client->irq, ts);
+	devm_free_irq(&ts->client->dev, ts->client->irq, ts);
 }
 
 static int goodix_request_irq(struct goodix_ts_data *ts)
 {
-	if (!ts->client->irq)
-		return 0;
-
 	return devm_request_threaded_irq(&ts->client->dev, ts->client->irq,
 					 NULL, goodix_ts_irq_handler,
 					 ts->irq_flags, ts->client->name, ts);
@@ -981,6 +955,7 @@ static int goodix_add_acpi_gpio_mappings(struct goodix_ts_data *ts)
  */
 static int goodix_get_gpio_config(struct goodix_ts_data *ts)
 {
+	int error;
 	struct device *dev;
 	struct gpio_desc *gpiod;
 	bool added_acpi_mappings = false;
@@ -996,20 +971,33 @@ static int goodix_get_gpio_config(struct goodix_ts_data *ts)
 	ts->gpiod_rst_flags = GPIOD_IN;
 
 	ts->avdd28 = devm_regulator_get(dev, "AVDD28");
-	if (IS_ERR(ts->avdd28))
-		return dev_err_probe(dev, PTR_ERR(ts->avdd28), "Failed to get AVDD28 regulator\n");
+	if (IS_ERR(ts->avdd28)) {
+		error = PTR_ERR(ts->avdd28);
+		if (error != -EPROBE_DEFER)
+			dev_err(dev,
+				"Failed to get AVDD28 regulator: %d\n", error);
+		return error;
+	}
 
 	ts->vddio = devm_regulator_get(dev, "VDDIO");
-	if (IS_ERR(ts->vddio))
-		return dev_err_probe(dev, PTR_ERR(ts->vddio), "Failed to get VDDIO regulator\n");
+	if (IS_ERR(ts->vddio)) {
+		error = PTR_ERR(ts->vddio);
+		if (error != -EPROBE_DEFER)
+			dev_err(dev,
+				"Failed to get VDDIO regulator: %d\n", error);
+		return error;
+	}
 
 retry_get_irq_gpio:
 	/* Get the interrupt GPIO pin number */
 	gpiod = devm_gpiod_get_optional(dev, GOODIX_GPIO_INT_NAME, GPIOD_IN);
-	if (IS_ERR(gpiod))
-		return dev_err_probe(dev, PTR_ERR(gpiod), "Failed to get %s GPIO\n",
-				     GOODIX_GPIO_INT_NAME);
-
+	if (IS_ERR(gpiod)) {
+		error = PTR_ERR(gpiod);
+		if (error != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get %s GPIO: %d\n",
+				GOODIX_GPIO_INT_NAME, error);
+		return error;
+	}
 	if (!gpiod && has_acpi_companion(dev) && !added_acpi_mappings) {
 		added_acpi_mappings = true;
 		if (goodix_add_acpi_gpio_mappings(ts) == 0)
@@ -1020,9 +1008,13 @@ retry_get_irq_gpio:
 
 	/* Get the reset line GPIO pin number */
 	gpiod = devm_gpiod_get_optional(dev, GOODIX_GPIO_RST_NAME, ts->gpiod_rst_flags);
-	if (IS_ERR(gpiod))
-		return dev_err_probe(dev, PTR_ERR(gpiod), "Failed to get %s GPIO\n",
-				     GOODIX_GPIO_RST_NAME);
+	if (IS_ERR(gpiod)) {
+		error = PTR_ERR(gpiod);
+		if (error != -EPROBE_DEFER)
+			dev_err(dev, "Failed to get %s GPIO: %d\n",
+				GOODIX_GPIO_RST_NAME, error);
+		return error;
+	}
 
 	ts->gpiod_rst = gpiod;
 
@@ -1245,18 +1237,6 @@ retry_read_config:
 		return error;
 	}
 
-	input_set_drvdata(ts->input_dev, ts);
-
-	if (!ts->client->irq) {
-		error = input_setup_polling(ts->input_dev, goodix_ts_work_i2c_poll);
-		if (error) {
-			dev_err(&ts->client->dev,
-				 "could not set up polling mode, %d\n", error);
-			return error;
-		}
-		input_set_poll_interval(ts->input_dev, GOODIX_POLL_INTERVAL_MS);
-	}
-
 	error = input_register_device(ts->input_dev);
 	if (error) {
 		dev_err(&ts->client->dev,
@@ -1330,7 +1310,8 @@ static void goodix_disable_regulators(void *arg)
 	regulator_disable(ts->avdd28);
 }
 
-static int goodix_ts_probe(struct i2c_client *client)
+static int goodix_ts_probe(struct i2c_client *client,
+			   const struct i2c_device_id *id)
 {
 	struct goodix_ts_data *ts;
 	const char *cfg_name;
@@ -1449,7 +1430,7 @@ static void goodix_ts_remove(struct i2c_client *client)
 		wait_for_completion(&ts->firmware_loading_complete);
 }
 
-static int goodix_suspend(struct device *dev)
+static int __maybe_unused goodix_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct goodix_ts_data *ts = i2c_get_clientdata(client);
@@ -1460,7 +1441,7 @@ static int goodix_suspend(struct device *dev)
 
 	/* We need gpio pins to suspend/resume */
 	if (ts->irq_pin_access_method == IRQ_PIN_ACCESS_NONE) {
-		goodix_disable_irq(ts);
+		disable_irq(client->irq);
 		return 0;
 	}
 
@@ -1496,7 +1477,7 @@ static int goodix_suspend(struct device *dev)
 	return 0;
 }
 
-static int goodix_resume(struct device *dev)
+static int __maybe_unused goodix_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct goodix_ts_data *ts = i2c_get_clientdata(client);
@@ -1504,7 +1485,7 @@ static int goodix_resume(struct device *dev)
 	int error;
 
 	if (ts->irq_pin_access_method == IRQ_PIN_ACCESS_NONE) {
-		goodix_enable_irq(ts);
+		enable_irq(client->irq);
 		return 0;
 	}
 
@@ -1545,10 +1526,10 @@ static int goodix_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(goodix_pm_ops, goodix_suspend, goodix_resume);
+static SIMPLE_DEV_PM_OPS(goodix_pm_ops, goodix_suspend, goodix_resume);
 
 static const struct i2c_device_id goodix_ts_id[] = {
-	{ "GDIX1001:00" },
+	{ "GDIX1001:00", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, goodix_ts_id);
@@ -1557,7 +1538,6 @@ MODULE_DEVICE_TABLE(i2c, goodix_ts_id);
 static const struct acpi_device_id goodix_acpi_match[] = {
 	{ "GDIX1001", 0 },
 	{ "GDIX1002", 0 },
-	{ "GDX9110", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, goodix_acpi_match);
@@ -1592,7 +1572,7 @@ static struct i2c_driver goodix_ts_driver = {
 		.name = "Goodix-TS",
 		.acpi_match_table = ACPI_PTR(goodix_acpi_match),
 		.of_match_table = of_match_ptr(goodix_of_match),
-		.pm = pm_sleep_ptr(&goodix_pm_ops),
+		.pm = &goodix_pm_ops,
 	},
 };
 module_i2c_driver(goodix_ts_driver);

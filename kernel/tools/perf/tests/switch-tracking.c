@@ -19,8 +19,7 @@
 #include "record.h"
 #include "tests.h"
 #include "util/mmap.h"
-#include "util/sample.h"
-#include "pmus.h"
+#include "pmu.h"
 
 static int spin_sleep(void)
 {
@@ -131,11 +130,9 @@ static int process_sample_event(struct evlist *evlist,
 	pid_t next_tid, prev_tid;
 	int cpu, err;
 
-	perf_sample__init(&sample, /*all=*/false);
 	if (evlist__parse_sample(evlist, event, &sample)) {
 		pr_debug("evlist__parse_sample failed\n");
-		err = -1;
-		goto out;
+		return -1;
 	}
 
 	evsel = evlist__id2evsel(evlist, sample.id);
@@ -147,7 +144,7 @@ static int process_sample_event(struct evlist *evlist,
 			  cpu, prev_tid, next_tid);
 		err = check_cpu(switch_tracking, cpu);
 		if (err)
-			goto out;
+			return err;
 		/*
 		 * Check for no missing sched_switch events i.e. that the
 		 * evsel->core.system_wide flag has worked.
@@ -155,8 +152,7 @@ static int process_sample_event(struct evlist *evlist,
 		if (switch_tracking->tids[cpu] != -1 &&
 		    switch_tracking->tids[cpu] != prev_tid) {
 			pr_debug("Missing sched_switch events\n");
-			err = -1;
-			goto out;
+			return -1;
 		}
 		switch_tracking->tids[cpu] = next_tid;
 	}
@@ -172,10 +168,7 @@ static int process_sample_event(struct evlist *evlist,
 			switch_tracking->cycles_after_comm_4 = 1;
 	}
 
-	err = 0;
-out:
-	perf_sample__exit(&sample);
-	return err;
+	return 0;
 }
 
 static int process_event(struct evlist *evlist, union perf_event *event,
@@ -351,13 +344,13 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 	const char *comm;
 	int err = -1;
 
-	threads = thread_map__new_by_tid(getpid());
+	threads = thread_map__new(-1, getpid(), UINT_MAX);
 	if (!threads) {
 		pr_debug("thread_map__new failed!\n");
 		goto out_err;
 	}
 
-	cpus = perf_cpu_map__new_online_cpus();
+	cpus = perf_cpu_map__new(NULL);
 	if (!cpus) {
 		pr_debug("perf_cpu_map__new failed!\n");
 		goto out_err;
@@ -381,7 +374,17 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 	cpu_clocks_evsel = evlist__last(evlist);
 
 	/* Second event */
-	err = parse_event(evlist, cycles);
+	if (perf_pmu__has_hybrid()) {
+		cycles = "cpu_core/cycles/u";
+		err = parse_event(evlist, cycles);
+		if (err) {
+			cycles = "cpu_atom/cycles/u";
+			pr_debug("Trying %s\n", cycles);
+			err = parse_event(evlist, cycles);
+		}
+	} else {
+		err = parse_event(evlist, cycles);
+	}
 	if (err) {
 		pr_debug("Failed to parse event %s\n", cycles);
 		goto out_err;
@@ -589,4 +592,4 @@ out_err:
 	goto out;
 }
 
-DEFINE_SUITE_EXCLUSIVE("Track with sched_switch", switch_tracking);
+DEFINE_SUITE("Track with sched_switch", switch_tracking);

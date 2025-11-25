@@ -20,7 +20,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/sysfs.h>
 
 /* Addresses to scan */
@@ -410,15 +410,18 @@ static int tmp421_probe_from_dt(struct i2c_client *client, struct tmp421_data *d
 {
 	struct device *dev = &client->dev;
 	const struct device_node *np = dev->of_node;
+	struct device_node *child;
 	int err;
 
-	for_each_child_of_node_scoped(np, child) {
+	for_each_child_of_node(np, child) {
 		if (strcmp(child->name, "channel"))
 			continue;
 
 		err = tmp421_probe_child_from_dt(client, child, data);
-		if (err)
+		if (err) {
+			of_node_put(child);
 			return err;
+		}
 	}
 
 	return 0;
@@ -443,7 +446,11 @@ static int tmp421_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	mutex_init(&data->update_lock);
-	data->channels = (unsigned long)i2c_get_match_data(client);
+	if (client->dev.of_node)
+		data->channels = (unsigned long)
+			of_device_get_match_data(&client->dev);
+	else
+		data->channels = i2c_match_id(tmp421_id, client)->driver_data;
 	data->client = client;
 
 	for (i = 0; i < data->channels; i++) {
@@ -480,7 +487,7 @@ static struct i2c_driver tmp421_driver = {
 		.name	= "tmp421",
 		.of_match_table = of_match_ptr(tmp421_of_match),
 	},
-	.probe = tmp421_probe,
+	.probe_new = tmp421_probe,
 	.id_table = tmp421_id,
 	.detect = tmp421_detect,
 	.address_list = normal_i2c,

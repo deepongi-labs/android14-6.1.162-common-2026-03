@@ -413,80 +413,6 @@ jobs:
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Create Boot Image
-        run: |
-          echo "📦 Creating boot image with magiskboot..."
-          
-          # Verify local magiskboot is available
-          echo "🔧 Using local magiskboot..."
-          if ! command -v magiskboot &> /dev/null; then
-            echo "❌ magiskboot not found in PATH"
-            echo "💡 Please ensure magiskboot is installed and available in PATH"
-            exit 1
-          fi
-          
-          echo "✅ magiskboot found: $(which magiskboot)"
-          echo "📋 magiskboot version: $(magiskboot --version 2>/dev/null || echo 'unknown')"
-          
-          # Download stock boot image
-          echo "📥 Downloading stock boot image..."
-          curl -LSs "https://filebin.net/7suxje8cpcay09va/boot.img" -o stock_boot.img
-          
-          if [ ! -f "stock_boot.img" ] || [ ! -s "stock_boot.img" ]; then
-            echo "❌ Failed to download stock boot image"
-            exit 1
-          fi
-          
-          echo "✅ Stock boot image downloaded ($(du -h stock_boot.img | cut -f1))"
-          
-          # Create output directory
-          mkdir -p boot_images
-          
-          # Extract kernel from AnyKernel3 directory
-          cd AnyKernel3
-          if [ -f "Image" ]; then
-            echo "🔧 Packing boot image with new kernel..."
-            cp Image ../kernel_image
-            cd ..
-            
-            # Use magiskboot to unpack, replace kernel, and repack
-            echo "🔧 Unpacking stock boot image..."
-            magiskboot unpack stock_boot.img
-            
-            # Skip ramdisk cleaning - keep original ramdisk intact
-            echo "🔧 Keeping original ramdisk..."
-            
-            # Replace kernel with Image file
-            echo "🔧 Replacing kernel..."
-            mv kernel_image kernel
-            
-            # Repack boot image
-            echo "🔧 Repacking boot image..."
-            magiskboot repack stock_boot.img
-            magiskboot cleanup
-            
-            # Move the new boot image
-            if [ -f "new-boot.img" ]; then
-              BOOT_NAME="boot-${{ env.KSU_VERSION }}-${{ env.ENABLE_SUSFS == 'true' && 'susfs' || 'nosus' }}.img"
-              mv new-boot.img "boot_images/${BOOT_NAME}"
-              
-              # Create checksums
-              cd boot_images
-              sha256sum "$BOOT_NAME" > "${BOOT_NAME}.sha256"
-              md5sum "$BOOT_NAME" > "${BOOT_NAME}.md5"
-              cd ..
-              
-              echo "✅ Boot image created: boot_images/${BOOT_NAME}"
-              echo "📊 Boot image size: $(du -h boot_images/${BOOT_NAME} | cut -f1))"
-            else
-              echo "❌ Failed to create boot image"
-              exit 1
-            fi
-          else
-            echo "❌ Kernel Image not found in AnyKernel3 directory"
-            exit 1
-          fi
-
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -495,7 +421,6 @@ jobs:
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
-            boot_images/
           retention-days: 30
 
       - name: Create Release
@@ -518,16 +443,23 @@ jobs:
             ### 📈 Recent Changes
             ${{ steps.changes.outputs.CHANGES }}
             
-            ### 📦 Installation Options
-            
-            #### Option 1: AnyKernel3 ZIP (Recommended)
+            ### 📦 Installation
             1. Flash `${{ env.KERNEL_ZIP }}` in custom recovery
             2. Reboot and enjoy!
             
-            #### Option 2: Boot Image
-            1. Flash `boot-*.img` using fastboot:
-            ```bash
-            fastboot flash boot boot-${{ env.KSU_VERSION }}-${{ env.ENABLE_SUSFS == 'true' && 'susfs' || 'nosus' }}.img
+            ### 🔐 Verification
+            **SHA256:**
             ```
+            $(cat ${{ env.KERNEL_ZIP }}.sha256)
+            ```
+            
+            **MD5:**
+            ```
+            $(cat ${{ env.KERNEL_ZIP }}.md5)
+            ```
+          files: |
+            ${{ env.KERNEL_ZIP }}
+            ${{ env.KERNEL_ZIP }}.sha256
+            ${{ env.KERNEL_ZIP }}.md5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

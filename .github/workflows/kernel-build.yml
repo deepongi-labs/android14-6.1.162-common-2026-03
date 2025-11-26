@@ -320,11 +320,51 @@ jobs:
           BUILD_TIME=$((SECONDS - START_TIME))
           echo "BUILD_TIME=${BUILD_TIME}s" >> $GITHUB_ENV
 
-      - name: Get CCACHE Stats
+      - name: Verify CCACHE and Get Stats
         id: ccache
         run: |
+          echo "🔍 Verifying CCACHE configuration and getting stats..."
+          
+          # Check if CCACHE directory exists and is accessible
+          CCACHE_DIR="/mnt/ccache/.ccache"
+          echo "📁 Checking CCACHE directory: $CCACHE_DIR"
+          if [ -d "$CCACHE_DIR" ]; then
+            echo "✅ CCACHE directory exists"
+            echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
+            echo "📊 CCACHE directory contents:"
+            ls -la "$CCACHE_DIR" | head -5
+          else
+            echo "❌ CCACHE directory does not exist: $CCACHE_DIR"
+            echo "⚠️ Creating CCACHE directory..."
+            sudo mkdir -p "$CCACHE_DIR"
+            sudo chown -R $USER:$USER "$CCACHE_DIR"
+            echo "✅ Created CCACHE directory"
+          fi
+          
+          # Check CCACHE binary and version
+          echo "🔧 Checking CCACHE binary..."
+          if command -v ccache &> /dev/null; then
+            echo "✅ CCACHE found: $(which ccache)"
+            echo "📋 CCACHE version: $(ccache --version | head -1)"
+          else
+            echo "❌ CCACHE not found in PATH"
+            exit 1
+          fi
+          
+          # Check current CCACHE configuration
+          echo "⚙️ Current CCACHE configuration:"
+          ccache -p | grep -E "(cache_dir|max_size|sloppiness|compression)" || true
+          
+          # Get CCACHE stats and hit rate
+          echo "📊 Getting CCACHE statistics..."
           HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          
+          # Show detailed stats
+          echo "📈 Detailed CCACHE stats:"
+          ccache -s
+          
+          echo "✅ CCACHE verification and stats complete"
 
       - name: Get Changes
         id: changes

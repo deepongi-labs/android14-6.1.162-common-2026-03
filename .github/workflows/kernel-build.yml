@@ -204,27 +204,23 @@ jobs:
           # Check if CCACHE directory exists and is accessible
           CCACHE_DIR="/mnt/ccache/.ccache"
           echo "📁 Checking CCACHE directory: $CCACHE_DIR"
-          if [ -d "$CCACHE_DIR" ]; then
-            echo "✅ CCACHE directory exists"
-            echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
-            echo "📊 CCACHE directory contents:"
-            ls -la "$CCACHE_DIR" | head -5
-          else
-            echo "❌ CCACHE directory does not exist: $CCACHE_DIR"
+          if [ ! -d "$CCACHE_DIR" ]; then
             echo "⚠️ Creating CCACHE directory..."
             sudo mkdir -p "$CCACHE_DIR"
             sudo chown -R $USER:$USER "$CCACHE_DIR"
             echo "✅ Created CCACHE directory"
           fi
           
-          # Configure CCACHE
+          echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
+          
+          # Configure CCACHE (without resetting)
           echo "⚙️ Configuring CCACHE..."
           ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
           ccache --set-config=sloppiness=file_macro,locale,time_macros
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
-          ccache -z
-          echo "✅ CCACHE configured and zeroed"
+          # REMOVED: ccache -z  # This was causing the problem!
+          echo "✅ CCACHE configured"
           
           # Check CCACHE binary and version
           echo "🔧 Checking CCACHE binary..."
@@ -236,20 +232,15 @@ jobs:
             exit 1
           fi
           
-          # Check current CCACHE configuration
-          echo "⚙️ Current CCACHE configuration:"
-          ccache -p | grep -E "(cache_dir|max_size|sloppiness|compression)" || true
-          
-          # Get CCACHE stats and hit rate
-          echo "📊 Getting CCACHE statistics..."
-          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
-          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          
-          # Show detailed stats
-          echo "📈 Detailed CCACHE stats:"
+          # Show current stats BEFORE build
+          echo "📈 CCACHE stats BEFORE build:"
           ccache -s
           
-          echo "✅ CCACHE setup and verification complete"
+          # Get initial hit rate for reporting
+          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          echo "INITIAL_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          
+          echo "✅ CCACHE setup complete - cache preserved for incremental builds"
 
       - name: Configure Kernel
         run: |
@@ -371,6 +362,17 @@ jobs:
           make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
           BUILD_TIME=$((SECONDS - START_TIME))
           echo "BUILD_TIME=${BUILD_TIME}s" >> $GITHUB_ENV
+
+      - name: Check CCACHE Performance
+        run: |
+          echo "📈 CCACHE stats AFTER build:"
+          ccache -s
+          
+          FINAL_HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          echo "FINAL_HIT_RATE=$FINAL_HIT_RATE" >> $GITHUB_ENV
+          
+          # Calculate actual hit rate for this build
+          echo "🎯 This build CCACHE hit rate: $FINAL_HIT_RATE"
 
       - name: Get Changes
         id: changes

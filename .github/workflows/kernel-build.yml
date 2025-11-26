@@ -54,6 +54,33 @@ jobs:
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
           echo "🔧 Build configuration: SuSFS = $ENABLE_SUSFS"
 
+      - name: Cache CCACHE Directory
+        uses: actions/cache@v4
+        with:
+          path: /mnt/ccache/.ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', 'susfs4ksu/**') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', 'susfs4ksu/**') }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Cache Kernel Source
+        uses: actions/cache@v4
+        with:
+          path: kernel
+          key: ${{ runner.os }}-kernel-${{ hashFiles('kernel/Makefile', 'kernel/Kconfig') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-kernel-${{ hashFiles('kernel/Makefile', 'kernel/Kconfig') }}-
+            ${{ runner.os }}-kernel-
+
+      - name: Cache SuSFS Source
+        if: env.ENABLE_SUSFS == 'true'
+        uses: actions/cache@v4
+        with:
+          path: susfs4ksu
+          key: ${{ runner.os }}-susfs-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-susfs-
+
       - name: Check Kernel Source Updates
         id: kernel-check
         run: |
@@ -241,7 +268,9 @@ jobs:
           
           # Get initial hit rate for reporting
           HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          CACHE_SIZE=$(ccache -s | grep -i "cache size" | head -1)
           echo "INITIAL_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          echo "INITIAL_CACHE_SIZE=$CACHE_SIZE" >> $GITHUB_ENV
           
           echo "✅ CCACHE setup complete - cache preserved for incremental builds"
 
@@ -373,10 +402,15 @@ jobs:
           ccache -s
           
           FINAL_HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          FINAL_CACHE_SIZE=$(ccache -s | grep -i "cache size" | head -1)
           echo "FINAL_HIT_RATE=$FINAL_HIT_RATE" >> $GITHUB_ENV
+          echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
           
-          # Calculate actual hit rate for this build
-          echo "🎯 This build CCACHE hit rate: $FINAL_HIT_RATE"
+          # Calculate cache efficiency
+          echo "🎯 CCACHE Performance Summary:"
+          echo "   Initial Hit Rate: ${{ env.INITIAL_HIT_RATE }}"
+          echo "   Final Hit Rate: $FINAL_HIT_RATE"
+          echo "   Cache Size: $FINAL_CACHE_SIZE"
 
       - name: Get Changes
         id: changes
@@ -442,7 +476,8 @@ jobs:
             
             ### 📊 Build Info
             - **Build Time:** ${{ env.BUILD_TIME }}
-            - **CCACHE Hit Rate:** ${{ env.FINAL_HIT_RATE }}
+            - **CCACHE Hit Rate:** ${{ env.FINAL_HIT_RATE }} (Initial: ${{ env.INITIAL_HIT_RATE }})
+            - **CCACHE Size:** ${{ env.FINAL_CACHE_SIZE }}
             - **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled (default)' || '❌ Disabled (manual trigger)' }}
             - **KernelSU Version:** r${{ env.KSU_VERSION }}
             

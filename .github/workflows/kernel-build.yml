@@ -411,10 +411,38 @@ jobs:
         run: |
           echo "📦 Creating boot image with magiskboot..."
           
-          # Download and use fresh magiskboot binary
+          # Download proper magiskboot binary from Magisk APK
           echo "📥 Downloading magiskboot binary..."
-          curl -LSs "https://github.com/topjohnwu/Magisk/releases/download/27.0/magisk-init" -o magiskboot
-          chmod +x magiskboot
+          # Download Magisk APK and extract magiskboot
+          curl -LSs "https://github.com/topjohnwu/Magisk/releases/download/27.0/magisk.apk" -o magisk.apk
+          unzip -p magisk.apk assets/boot_patch.sh > /dev/null 2>&1 && echo "✅ Magisk APK downloaded"
+          
+          # Extract magiskboot from the APK
+          unzip -j magisk.apk lib/x86_64/libmagiskboot.so -d ./ > /dev/null 2>&1 || \
+          unzip -j magisk.apk lib/arm64-v8a/libmagiskboot.so -d ./ > /dev/null 2>&1 || \
+          unzip -j magisk.apk lib/armeabi-v7a/libmagiskboot.so -d ./ > /dev/null 2>&1
+          
+          if [ -f "libmagiskboot.so" ]; then
+            mv libmagiskboot.so magiskboot
+            chmod +x magiskboot
+            echo "✅ magiskboot extracted from APK"
+            rm -f magisk.apk
+          else
+            echo "❌ Failed to extract magiskboot from APK"
+            echo "💡 Trying alternative download..."
+            # Alternative: Download pre-built magiskboot binary
+            curl -LSs "https://raw.githubusercontent.com/topjohnwu/magisk-files/master/scripts/boot_patch.sh" | \
+            grep -o 'https://[^"]*magiskboot[^"]*' | head -1 | xargs curl -LSs -o magiskboot
+            chmod +x magiskboot
+          fi
+          
+          # Verify magiskboot works
+          if ! ./magiskboot --help > /dev/null 2>&1; then
+            echo "❌ magiskboot binary is not working"
+            exit 1
+          fi
+          
+          echo "✅ magiskboot is ready: $(./magiskboot --version 2>/dev/null || echo 'unknown version')"
           
           # Download stock boot image
           echo "📥 Downloading stock boot image..."

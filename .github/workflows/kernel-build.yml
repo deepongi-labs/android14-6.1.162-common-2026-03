@@ -192,12 +192,64 @@ jobs:
           cd kernel
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
 
-      - name: Setup CCACHE
+      - name: Setup and Verify CCACHE
+        id: ccache
         run: |
+          echo "🔧 Setting up and verifying CCACHE..."
+          
+          # Setup CCACHE environment
           export PATH="/usr/lib/ccache:$PATH"
-          mkdir -p "${{ env.CCACHE_DIR }}"
+          echo "✅ Added CCACHE to PATH"
+          
+          # Check if CCACHE directory exists and is accessible
+          CCACHE_DIR="/mnt/ccache/.ccache"
+          echo "📁 Checking CCACHE directory: $CCACHE_DIR"
+          if [ -d "$CCACHE_DIR" ]; then
+            echo "✅ CCACHE directory exists"
+            echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
+            echo "📊 CCACHE directory contents:"
+            ls -la "$CCACHE_DIR" | head -5
+          else
+            echo "❌ CCACHE directory does not exist: $CCACHE_DIR"
+            echo "⚠️ Creating CCACHE directory..."
+            sudo mkdir -p "$CCACHE_DIR"
+            sudo chown -R $USER:$USER "$CCACHE_DIR"
+            echo "✅ Created CCACHE directory"
+          fi
+          
+          # Configure CCACHE
+          echo "⚙️ Configuring CCACHE..."
           ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache --set-config=sloppiness=file_macro,locale,time_macros
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
           ccache -z
+          echo "✅ CCACHE configured and zeroed"
+          
+          # Check CCACHE binary and version
+          echo "🔧 Checking CCACHE binary..."
+          if command -v ccache &> /dev/null; then
+            echo "✅ CCACHE found: $(which ccache)"
+            echo "📋 CCACHE version: $(ccache --version | head -1)"
+          else
+            echo "❌ CCACHE not found in PATH"
+            exit 1
+          fi
+          
+          # Check current CCACHE configuration
+          echo "⚙️ Current CCACHE configuration:"
+          ccache -p | grep -E "(cache_dir|max_size|sloppiness|compression)" || true
+          
+          # Get CCACHE stats and hit rate
+          echo "📊 Getting CCACHE statistics..."
+          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          
+          # Show detailed stats
+          echo "📈 Detailed CCACHE stats:"
+          ccache -s
+          
+          echo "✅ CCACHE setup and verification complete"
 
       - name: Configure Kernel
         run: |
@@ -320,52 +372,6 @@ jobs:
           BUILD_TIME=$((SECONDS - START_TIME))
           echo "BUILD_TIME=${BUILD_TIME}s" >> $GITHUB_ENV
 
-      - name: Verify CCACHE and Get Stats
-        id: ccache
-        run: |
-          echo "🔍 Verifying CCACHE configuration and getting stats..."
-          
-          # Check if CCACHE directory exists and is accessible
-          CCACHE_DIR="/mnt/ccache/.ccache"
-          echo "📁 Checking CCACHE directory: $CCACHE_DIR"
-          if [ -d "$CCACHE_DIR" ]; then
-            echo "✅ CCACHE directory exists"
-            echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
-            echo "📊 CCACHE directory contents:"
-            ls -la "$CCACHE_DIR" | head -5
-          else
-            echo "❌ CCACHE directory does not exist: $CCACHE_DIR"
-            echo "⚠️ Creating CCACHE directory..."
-            sudo mkdir -p "$CCACHE_DIR"
-            sudo chown -R $USER:$USER "$CCACHE_DIR"
-            echo "✅ Created CCACHE directory"
-          fi
-          
-          # Check CCACHE binary and version
-          echo "🔧 Checking CCACHE binary..."
-          if command -v ccache &> /dev/null; then
-            echo "✅ CCACHE found: $(which ccache)"
-            echo "📋 CCACHE version: $(ccache --version | head -1)"
-          else
-            echo "❌ CCACHE not found in PATH"
-            exit 1
-          fi
-          
-          # Check current CCACHE configuration
-          echo "⚙️ Current CCACHE configuration:"
-          ccache -p | grep -E "(cache_dir|max_size|sloppiness|compression)" || true
-          
-          # Get CCACHE stats and hit rate
-          echo "📊 Getting CCACHE statistics..."
-          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
-          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          
-          # Show detailed stats
-          echo "📈 Detailed CCACHE stats:"
-          ccache -s
-          
-          echo "✅ CCACHE verification and stats complete"
-
       - name: Get Changes
         id: changes
         run: |
@@ -411,38 +417,16 @@ jobs:
         run: |
           echo "📦 Creating boot image with magiskboot..."
           
-          # Download proper magiskboot binary from Magisk APK
-          echo "📥 Downloading magiskboot binary..."
-          # Download Magisk APK and extract magiskboot
-          curl -LSs "https://github.com/topjohnwu/Magisk/releases/download/27.0/magisk.apk" -o magisk.apk
-          unzip -p magisk.apk assets/boot_patch.sh > /dev/null 2>&1 && echo "✅ Magisk APK downloaded"
-          
-          # Extract magiskboot from the APK
-          unzip -j magisk.apk lib/x86_64/libmagiskboot.so -d ./ > /dev/null 2>&1 || \
-          unzip -j magisk.apk lib/arm64-v8a/libmagiskboot.so -d ./ > /dev/null 2>&1 || \
-          unzip -j magisk.apk lib/armeabi-v7a/libmagiskboot.so -d ./ > /dev/null 2>&1
-          
-          if [ -f "libmagiskboot.so" ]; then
-            mv libmagiskboot.so magiskboot
-            chmod +x magiskboot
-            echo "✅ magiskboot extracted from APK"
-            rm -f magisk.apk
-          else
-            echo "❌ Failed to extract magiskboot from APK"
-            echo "💡 Trying alternative download..."
-            # Alternative: Download pre-built magiskboot binary
-            curl -LSs "https://raw.githubusercontent.com/topjohnwu/magisk-files/master/scripts/boot_patch.sh" | \
-            grep -o 'https://[^"]*magiskboot[^"]*' | head -1 | xargs curl -LSs -o magiskboot
-            chmod +x magiskboot
-          fi
-          
-          # Verify magiskboot works
-          if ! ./magiskboot --help > /dev/null 2>&1; then
-            echo "❌ magiskboot binary is not working"
+          # Verify local magiskboot is available
+          echo "🔧 Using local magiskboot..."
+          if ! command -v magiskboot &> /dev/null; then
+            echo "❌ magiskboot not found in PATH"
+            echo "💡 Please ensure magiskboot is installed and available in PATH"
             exit 1
           fi
           
-          echo "✅ magiskboot is ready: $(./magiskboot --version 2>/dev/null || echo 'unknown version')"
+          echo "✅ magiskboot found: $(which magiskboot)"
+          echo "📋 magiskboot version: $(magiskboot --version 2>/dev/null || echo 'unknown')"
           
           # Download stock boot image
           echo "📥 Downloading stock boot image..."
@@ -467,7 +451,7 @@ jobs:
             
             # Use magiskboot to unpack, replace kernel, and repack
             echo "🔧 Unpacking stock boot image..."
-            ./magiskboot unpack stock_boot.img
+            magiskboot unpack stock_boot.img
             
             # Skip ramdisk cleaning - keep original ramdisk intact
             echo "🔧 Keeping original ramdisk..."
@@ -478,8 +462,8 @@ jobs:
             
             # Repack boot image
             echo "🔧 Repacking boot image..."
-            ./magiskboot repack stock_boot.img
-            ./magiskboot cleanup
+            magiskboot repack stock_boot.img
+            magiskboot cleanup
             
             # Move the new boot image
             if [ -f "new-boot.img" ]; then

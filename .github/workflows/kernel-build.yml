@@ -65,16 +65,25 @@ jobs:
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
           echo "🔧 Build configuration: SuSFS = $ENABLE_SUSFS, Clean Build = $FORCE_CLEAN"
 
-      - name: Cache CCACHE Directory
-        uses: actions/cache@v4
-        with:
-          path: /mnt/ccache/.ccache
-          key: ${{ runner.os }}-ccache-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', 'susfs4ksu/**') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', 'susfs4ksu/**') }}-
-            ${{ runner.os }}-ccache-
+      - name: Setup Local CCACHE
+        id: local-ccache
+        run: |
+          echo "🏠 Using local CCACHE directory: ${{ env.CCACHE_DIR }}"
+          
+          # Verify local CCACHE directory exists and is accessible
+          if [ -d "${{ env.CCACHE_DIR }}" ]; then
+            echo "✅ Local CCACHE directory found"
+            CCACHE_SIZE=$(du -sh "${{ env.CCACHE_DIR }}" | cut -f1)
+            CCACHE_FILES=$(find "${{ env.CCACHE_DIR }}" -type f | wc -l)
+            echo "📊 Local CCACHE stats: Size=$CCACHE_SIZE, Files=$CCACHE_FILES"
+            echo "local_ccache_available=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ Local CCACHE directory not found, will use fallback caching"
+            echo "local_ccache_available=false" >> $GITHUB_ENV
+          fi
 
-      - name: Cache Kernel Source
+      - name: Cache Kernel Source (Fallback)
+        if: env.local_ccache_available == 'false'
         uses: actions/cache@v4
         with:
           path: kernel
@@ -83,8 +92,8 @@ jobs:
             ${{ runner.os }}-kernel-${{ hashFiles('kernel/Makefile', 'kernel/Kconfig') }}-
             ${{ runner.os }}-kernel-
 
-      - name: Cache SuSFS Source
-        if: env.ENABLE_SUSFS == 'true'
+      - name: Cache SuSFS Source (Fallback)
+        if: env.ENABLE_SUSFS == 'true' && env.local_ccache_available == 'false'
         uses: actions/cache@v4
         with:
           path: susfs4ksu
@@ -92,7 +101,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-susfs-
 
-      - name: Cache Build Output
+      - name: Cache Build Output (Fallback)
+        if: env.local_ccache_available == 'false'
         uses: actions/cache@v4
         with:
           path: kernel/out
@@ -248,29 +258,29 @@ jobs:
         run: |
           echo "🔧 Setting up and verifying CCACHE..."
           
-          # Setup CCACHE environment
+          # Setup CCACHE environment - always use local path first
           export PATH="/usr/lib/ccache:$PATH"
           echo "✅ Added CCACHE to PATH"
           
-          # Check if CCACHE directory exists and is accessible
-          CCACHE_DIR="/mnt/ccache/.ccache"
-          echo "📁 Checking CCACHE directory: $CCACHE_DIR"
+          # Always use the local CCACHE directory
+          CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          echo "🏠 Using CCACHE directory: $CCACHE_DIR"
+          
+          # Ensure CCACHE directory exists and is accessible
           if [ ! -d "$CCACHE_DIR" ]; then
-            echo "⚠️ Creating CCACHE directory..."
+            echo "⚠️ CCACHE directory not found, creating..."
             sudo mkdir -p "$CCACHE_DIR"
             sudo chown -R $USER:$USER "$CCACHE_DIR"
             echo "✅ Created CCACHE directory"
           fi
           
-          echo "📊 CCACHE directory size: $(du -sh $CCACHE_DIR | cut -f1)"
-          
-          # Configure CCACHE (without resetting)
-          echo "⚙️ Configuring CCACHE..."
+          # Configure CCACHE to use local directory
+          ccache --set-config=cache_dir=$CCACHE_DIR
           ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
           ccache --set-config=sloppiness=file_macro,locale,time_macros
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
-          echo "✅ CCACHE configured"
+          echo "✅ CCACHE configured for local directory"
           
           # Check CCACHE binary and version
           echo "🔧 Checking CCACHE binary..."
@@ -289,10 +299,12 @@ jobs:
           # Get initial hit rate for reporting
           HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
           CACHE_SIZE=$(ccache -s | grep -i "cache size" | head -1)
+          CACHE_BACKEND=$(ccache -s | grep -i "cache directory" | head -1)
           echo "INITIAL_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
           echo "INITIAL_CACHE_SIZE=$CACHE_SIZE" >> $GITHUB_ENV
+          echo "CCACHE_BACKEND=$CACHE_BACKEND" >> $GITHUB_ENV
           
-          echo "✅ CCACHE setup complete - cache preserved for incremental builds"
+          echo "✅ CCACHE setup complete - using local persistent cache"
 
       - name: Configure Kernel
         run: |
@@ -490,6 +502,7 @@ jobs:
           
           # Calculate cache efficiency
           echo "🎯 CCACHE Performance Summary:"
+          echo "   Cache Backend: ${{ env.CCACHE_BACKEND }}"
           echo "   Initial Hit Rate: ${{ env.INITIAL_HIT_RATE }}"
           echo "   Final Hit Rate: $FINAL_HIT_RATE"
           echo "   Cache Size: $FINAL_CACHE_SIZE"
@@ -564,6 +577,7 @@ jobs:
             - **Build Strategy:** ${{ env.BUILD_STRATEGY }} (${{ env.BUILD_REASON }})
             - **CCACHE Hit Rate:** ${{ env.FINAL_HIT_RATE }} (Initial: ${{ env.INITIAL_HIT_RATE }})
             - **CCACHE Size:** ${{ env.FINAL_CACHE_SIZE }}
+            - **CCACHE Backend:** Local Persistent
             - **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled (default)' || '❌ Disabled (manual trigger)' }}
             - **KernelSU Version:** r${{ env.KSU_VERSION }}
             

@@ -3,8 +3,8 @@ name: Build GKI Kernel with KernelSU
 on:
   workflow_dispatch:
     inputs:
-      enable_susfs:
-        description: 'Enable SuSFS features'
+      disable_susfs:
+        description: 'Disable SuSFS features (default: enabled)'
         required: true
         default: false
         type: boolean
@@ -42,13 +42,17 @@ jobs:
       - name: Set Build Config
         id: config
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ENABLE_SUSFS="${{ github.event.inputs.enable_susfs }}"
-          else
+          # Default: SuSFS enabled
+          ENABLE_SUSFS=true
+          
+          # Only disable if manually triggered with disable_susfs=true
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.disable_susfs }}" = "true" ]; then
             ENABLE_SUSFS=false
           fi
+          
           echo "ENABLE_SUSFS=$ENABLE_SUSFS" >> $GITHUB_ENV
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
+          echo "🔧 Build configuration: SuSFS = $ENABLE_SUSFS"
 
       - name: Check Kernel Source Updates
         id: kernel-check
@@ -219,7 +223,6 @@ jobs:
           ccache --set-config=sloppiness=file_macro,locale,time_macros
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
-          # REMOVED: ccache -z  # This was causing the problem!
           echo "✅ CCACHE configured"
           
           # Check CCACHE binary and version
@@ -329,6 +332,7 @@ jobs:
           CONFIG_LOCALVERSION=\"-deepongi+\"
           CONFIG_NET_SCH_CAKE=y"
 
+          # Default: SuSFS enabled, only disable if explicitly requested
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             SUSFS_CONFIG="CONFIG_KSU_SUSFS=y
             CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -438,8 +442,8 @@ jobs:
             
             ### 📊 Build Info
             - **Build Time:** ${{ env.BUILD_TIME }}
-            - **CCACHE Hit Rate:** ${{ env.CCACHE_HIT_RATE }}
-            - **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled' || '❌ Disabled (default)' }}
+            - **CCACHE Hit Rate:** ${{ env.FINAL_HIT_RATE }}
+            - **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled (default)' || '❌ Disabled (manual trigger)' }}
             - **KernelSU Version:** r${{ env.KSU_VERSION }}
             
             ### 📈 Recent Changes

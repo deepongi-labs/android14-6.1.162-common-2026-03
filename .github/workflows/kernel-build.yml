@@ -220,8 +220,24 @@ jobs:
           echo "✅ KernelSU version: r$KSU_VERSION from $KSU_REPO"
           cd ..
           
-          # Setup KernelSU in kernel tree
-          ln -sf KernelSU/kernel drivers/kernelsu
+          # Setup KernelSU in kernel tree - use absolute path for symlink
+          ln -sf "$(pwd)/KernelSU/kernel" drivers/kernelsu
+          
+          # Verify symlink was created correctly
+          if [ -d "drivers/kernelsu" ] && [ -f "drivers/kernelsu/Kconfig" ]; then
+            echo "✅ KernelSU symlink created successfully"
+            ls -la drivers/kernelsu/
+          else
+            echo "❌ KernelSU symlink failed, trying copy instead..."
+            rm -rf drivers/kernelsu
+            cp -r KernelSU/kernel drivers/kernelsu
+            if [ -f "drivers/kernelsu/Kconfig" ]; then
+              echo "✅ KernelSU copied successfully"
+            else
+              echo "❌ KernelSU setup failed"
+              exit 1
+            fi
+          fi
           
           # Add to Makefile if not present
           if ! grep -q "kernelsu" drivers/Makefile; then

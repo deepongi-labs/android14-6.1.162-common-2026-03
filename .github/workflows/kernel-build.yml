@@ -251,23 +251,17 @@ jobs:
               ;;
           esac
           
-          # Clone KernelSU (shallow for speed)
+          # Clone KernelSU (shallow for speed initially)
           git clone --depth=1 --branch=$KSU_BRANCH \
             "https://github.com/$KSU_REPO" KernelSU
           
-          # Get version using GitHub API (accurate count without unshallow)
+          # Get accurate version by unshallowing
           cd KernelSU
-          KSU_COUNT=$(curl -s "https://api.github.com/repos/$KSU_REPO/commits?sha=$KSU_BRANCH&per_page=1" \
-            -H "Accept: application/vnd.github.v3+json" | grep -o '"sha"' | wc -l || echo "0")
-          
-          # If API fails, try to get from git (unshallow if needed)
-          if [ "$KSU_COUNT" -eq 0 ] || [ "$KSU_COUNT" -eq 1 ]; then
-            echo "📊 Getting commit count via git..."
-            git fetch --unshallow 2>/dev/null || true
-            KSU_COUNT=$(git rev-list --count HEAD)
-          fi
-          
+          echo "📊 Getting accurate commit count..."
+          git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
+          KSU_COUNT=$(git rev-list --count HEAD)
           KSU_VERSION=$((KSU_COUNT + 20000))
+          
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
           echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT) from $KSU_REPO"

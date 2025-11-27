@@ -122,7 +122,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel
-          key: kernel-android14-6.1-2025-09-${{ hashFiles('.gitmodules') }}
+          key: kernel-android14-6.1-2025-09-v1
           restore-keys: |
             kernel-android14-6.1-2025-09-
 
@@ -140,58 +140,43 @@ jobs:
           KERNEL_BRANCH="android14-6.1-2025-09"
           SUSFS_BRANCH="gki-android14-6.1-dev"
           
-          # Function to check if repo needs update
-          check_and_clone_kernel() {
-            if [ -d "kernel/.git" ] && [ -f "kernel/Makefile" ]; then
-              echo "📦 Kernel exists, checking for updates..."
-              cd kernel
-              git fetch origin $KERNEL_BRANCH --depth=1
-              LOCAL=$(git rev-parse HEAD)
-              REMOTE=$(git rev-parse FETCH_HEAD)
-              if [ "$LOCAL" = "$REMOTE" ]; then
-                echo "✅ Kernel is up to date"
-                cd ..
-                return 0
-              else
-                echo "🔄 Kernel has updates, re-cloning..."
-                cd ..
-                rm -rf kernel
-              fi
-            fi
-            
+          # Kernel: reset to upstream or clone fresh
+          if [ -d "kernel/.git" ] && [ -f "kernel/Makefile" ]; then
+            echo "📦 Kernel exists, resetting to upstream..."
+            cd kernel
+            git fetch origin $KERNEL_BRANCH --depth=1
+            git reset --hard FETCH_HEAD
+            git clean -fdx
+            echo "✅ Kernel reset to upstream and cleaned"
+            cd ..
+          else
             echo "📥 Cloning kernel..."
+            rm -rf kernel
             git clone --depth=1 --single-branch -b $KERNEL_BRANCH \
               https://github.com/aosp-mirror/kernel_common.git kernel
-          }
+          fi
           
-          check_and_clone_susfs() {
-            if [ -d "susfs4ksu/.git" ] && [ -d "susfs4ksu/kernel_patches" ]; then
-              echo "📦 SuSFS exists, checking for updates..."
-              cd susfs4ksu
-              git fetch origin $SUSFS_BRANCH --depth=1
-              LOCAL=$(git rev-parse HEAD)
-              REMOTE=$(git rev-parse FETCH_HEAD)
-              if [ "$LOCAL" = "$REMOTE" ]; then
-                echo "✅ SuSFS is up to date"
-                cd ..
-                return 0
-              else
-                echo "🔄 SuSFS has updates, re-cloning..."
-                cd ..
-                rm -rf susfs4ksu
-              fi
+          # SuSFS: check for updates or clone
+          if [ -d "susfs4ksu/.git" ] && [ -d "susfs4ksu/kernel_patches" ]; then
+            echo "📦 SuSFS exists, checking for updates..."
+            cd susfs4ksu
+            git fetch origin $SUSFS_BRANCH --depth=1
+            LOCAL=$(git rev-parse HEAD)
+            REMOTE=$(git rev-parse FETCH_HEAD)
+            if [ "$LOCAL" = "$REMOTE" ]; then
+              echo "✅ SuSFS is up to date (cached)"
+            else
+              echo "🔄 SuSFS has updates, resetting..."
+              git reset --hard FETCH_HEAD
+              git clean -fdx
             fi
-            
+            cd ..
+          else
             echo "📥 Cloning susfs4ksu..."
+            rm -rf susfs4ksu
             git clone --depth=1 --single-branch -b $SUSFS_BRANCH \
               https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          }
-          
-          # Clone or update kernel
-          check_and_clone_kernel
-          
-          # Clone or update susfs4ksu
-          check_and_clone_susfs
+          fi
           
           # Verify kernel
           if [ -f "kernel/Makefile" ]; then
@@ -266,17 +251,26 @@ jobs:
               ;;
           esac
           
-          # Clone KernelSU
+          # Clone KernelSU (shallow for speed)
           git clone --depth=1 --branch=$KSU_BRANCH \
             "https://github.com/$KSU_REPO" KernelSU
           
-          # Get version
+          # Get version using GitHub API (accurate count without unshallow)
           cd KernelSU
-          KSU_COUNT=$(git rev-list --count HEAD)
+          KSU_COUNT=$(curl -s "https://api.github.com/repos/$KSU_REPO/commits?sha=$KSU_BRANCH&per_page=1" \
+            -H "Accept: application/vnd.github.v3+json" | grep -o '"sha"' | wc -l || echo "0")
+          
+          # If API fails, try to get from git (unshallow if needed)
+          if [ "$KSU_COUNT" -eq 0 ] || [ "$KSU_COUNT" -eq 1 ]; then
+            echo "📊 Getting commit count via git..."
+            git fetch --unshallow 2>/dev/null || true
+            KSU_COUNT=$(git rev-list --count HEAD)
+          fi
+          
           KSU_VERSION=$((KSU_COUNT + 20000))
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
-          echo "✅ KernelSU version: r$KSU_VERSION from $KSU_REPO"
+          echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT) from $KSU_REPO"
           cd ..
           
           # Setup KernelSU in kernel tree - use absolute path for symlink

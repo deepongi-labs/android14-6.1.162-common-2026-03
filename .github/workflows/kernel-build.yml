@@ -234,14 +234,30 @@ jobs:
           
           cd kernel
           
-          # Apply kernel patch
-          echo "📋 Applying 50_add_susfs_in_gki-android14-6.1.patch"
-          patch -p1 --forward < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || true
+          # Apply kernel SuSFS patch - check for variant-specific first
+          VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
+          DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           
-          # Apply KernelSU-specific SuSFS patch
+          if [ -f "$VARIANT_SUSFS_PATCH" ]; then
+            echo "📋 Applying variant-specific SuSFS patch from .github/patches/${{ matrix.variant }}/"
+            patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || true
+          else
+            echo "📋 Applying default SuSFS patch from susfs4ksu submodule"
+            patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || true
+          fi
+          
+          # Apply KernelSU-specific SuSFS patch - check for variant-specific first
           cd KernelSU
-          echo "📋 Applying 10_enable_susfs_for_ksu.patch"
-          patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          
+          if [ -f "$VARIANT_KSU_PATCH" ]; then
+            echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/${{ matrix.variant }}/"
+            patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
+          else
+            echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
+            patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+          fi
           cd ..
 
       - name: Apply Variant-Specific Patches
@@ -254,6 +270,11 @@ jobs:
             echo "📋 Applying common patches..."
             for patch in ../.github/patches/common/*.patch; do
               if [ -f "$patch" ]; then
+                # Skip SuSFS patches (already applied in Setup SuSFS step)
+                if [[ "$(basename $patch)" == "50_add_susfs"* ]] || [[ "$(basename $patch)" == "10_enable_susfs"* ]]; then
+                  echo "  Skipping (already applied): $(basename $patch)"
+                  continue
+                fi
                 echo "  Applying: $(basename $patch)"
                 patch -p1 --forward < "$patch" || true
               fi
@@ -265,6 +286,11 @@ jobs:
             echo "📋 Applying ${{ matrix.variant }}-specific patches..."
             for patch in $PATCH_DIR/*.patch; do
               if [ -f "$patch" ]; then
+                # Skip SuSFS patches (already applied in Setup SuSFS step)
+                if [[ "$(basename $patch)" == "50_add_susfs"* ]] || [[ "$(basename $patch)" == "10_enable_susfs"* ]]; then
+                  echo "  Skipping (already applied): $(basename $patch)"
+                  continue
+                fi
                 echo "  Applying: $(basename $patch)"
                 patch -p1 --forward < "$patch" || true
               fi

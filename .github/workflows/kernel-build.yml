@@ -1,21 +1,34 @@
-name: Build GKI Kernel with KernelSU
+name: Build GKI Kernel with KernelSU Variants
 
 on:
   workflow_dispatch:
     inputs:
-      disable_susfs:
-        description: 'Disable SuSFS features (default: enabled)'
+      ksu_variant:
+        description: 'KernelSU variant to build'
         required: true
+        default: 'tiann'
+        type: choice
+        options:
+          - tiann
+          - kowsu
+          - mksu
+          - all
+      disable_susfs:
+        description: 'Disable SuSFS features'
+        required: false
         default: false
         type: boolean
       force_clean_build:
         description: 'Force clean build (ignore cache)'
-        required: true
+        required: false
         default: false
         type: boolean
   push:
     branches:
       - main
+      - ksu-tiann
+      - ksu-kowsu
+      - ksu-mksu
   pull_request:
     branches:
       - main
@@ -36,18 +49,40 @@ env:
   MAKE_JOBS: 8
 
 jobs:
-  build:
+  # Determine which variants to build
+  setup:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 90
-
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      enable_susfs: ${{ steps.config.outputs.enable_susfs }}
+      force_clean: ${{ steps.config.outputs.force_clean }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Set Build Matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VARIANT="${{ github.event.inputs.ksu_variant }}"
+          elif [ "${{ github.ref }}" = "refs/heads/ksu-tiann" ]; then
+            VARIANT="tiann"
+          elif [ "${{ github.ref }}" = "refs/heads/ksu-kowsu" ]; then
+            VARIANT="kowsu"
+          elif [ "${{ github.ref }}" = "refs/heads/ksu-mksu" ]; then
+            VARIANT="mksu"
+          else
+            # Default to tiann for main branch or PRs
+            VARIANT="tiann"
+          fi
+          
+          if [ "$VARIANT" = "all" ]; then
+            echo 'matrix={"variant":["tiann","kowsu","mksu"]}' >> $GITHUB_OUTPUT
+          else
+            echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
+          fi
+          echo "🎯 Building variant(s): $VARIANT"
 
       - name: Set Build Config
         id: config
         run: |
-          # Default: SuSFS enabled
           ENABLE_SUSFS=true
           FORCE_CLEAN=false
           
@@ -60,251 +95,204 @@ jobs:
             fi
           fi
           
-          echo "ENABLE_SUSFS=$ENABLE_SUSFS" >> $GITHUB_ENV
-          echo "FORCE_CLEAN=$FORCE_CLEAN" >> $GITHUB_ENV
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
-          echo "🔧 Build configuration: SuSFS = $ENABLE_SUSFS, Clean Build = $FORCE_CLEAN"
+          echo "force_clean=$FORCE_CLEAN" >> $GITHUB_OUTPUT
 
-      - name: Setup Local CCACHE
-        id: local-ccache
+  build:
+    needs: setup
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+    
+    env:
+      ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
+      FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      KSU_VARIANT: ${{ matrix.variant }}
+
+    steps:
+      - name: Checkout with Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Update Submodules
         run: |
-          echo "🏠 Using local CCACHE directory: ${{ env.CCACHE_DIR }}"
+          echo "📥 Updating submodules..."
+          git submodule update --init --recursive --remote
           
-          # Verify local CCACHE directory exists and is accessible
-          if [ -d "${{ env.CCACHE_DIR }}" ]; then
-            echo "✅ Local CCACHE directory found"
-            CCACHE_SIZE=$(du -sh "${{ env.CCACHE_DIR }}" | cut -f1)
-            CCACHE_FILES=$(find "${{ env.CCACHE_DIR }}" -type f | wc -l)
-            echo "📊 Local CCACHE stats: Size=$CCACHE_SIZE, Files=$CCACHE_FILES"
-            echo "local_ccache_available=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ Local CCACHE directory not found, will use fallback caching"
-            echo "local_ccache_available=false" >> $GITHUB_ENV
-          fi
-
-      - name: Cache Kernel Source (Fallback)
-        if: env.local_ccache_available == 'false'
-        uses: actions/cache@v4
-        with:
-          path: kernel
-          key: ${{ runner.os }}-kernel-${{ hashFiles('kernel/Makefile', 'kernel/Kconfig') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-kernel-${{ hashFiles('kernel/Makefile', 'kernel/Kconfig') }}-
-            ${{ runner.os }}-kernel-
-
-      - name: Cache SuSFS Source (Fallback)
-        if: env.ENABLE_SUSFS == 'true' && env.local_ccache_available == 'false'
-        uses: actions/cache@v4
-        with:
-          path: susfs4ksu
-          key: ${{ runner.os }}-susfs-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-susfs-
-
-      - name: Cache Build Output (Fallback)
-        if: env.local_ccache_available == 'false'
-        uses: actions/cache@v4
-        with:
-          path: kernel/out
-          key: ${{ runner.os }}-build-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', '**/.config', '**/*.patch') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ hashFiles('kernel/Makefile', 'kernel/arch/arm64/configs/gki_defconfig', '**/.config', '**/*.patch') }}-
-            ${{ runner.os }}-build-
-
-      - name: Check Kernel Source Updates
-        id: kernel-check
-        run: |
-          echo "🔍 Checking for kernel source updates..."
-          
-          if [ ! -d "kernel" ] || [ ! -f "kernel/Makefile" ]; then
-            echo "📥 Kernel source not found, will clone"
-            echo "needs_clone=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          cd kernel
-          VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3)
-          PATCHLEVEL=$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3)
-          cd ..
-          
-          if [ "$VERSION" != "6" ] || [ "$PATCHLEVEL" != "1" ]; then
-            echo "⚠️ Kernel source is wrong version ($VERSION.$PATCHLEVEL), will replace"
-            echo "needs_clone=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Check if we can check for remote updates
-          if [ -d "kernel/.git" ]; then
+          # Verify kernel submodule
+          if [ -f "kernel/Makefile" ]; then
             cd kernel
-            git fetch origin android14-6.1-2025-09
-            LOCAL_COMMIT=$(git rev-parse HEAD)
-            REMOTE_COMMIT=$(git rev-parse origin/android14-6.1-2025-09)
-            
-            if [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
-              echo "🔄 New kernel commits available, will update"
-              echo "needs_clone=true" >> $GITHUB_OUTPUT
-            else
-              echo "✅ Kernel source is up to date"
-              echo "needs_clone=false" >> $GITHUB_OUTPUT
-            fi
+            VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3)
+            PATCHLEVEL=$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3)
+            echo "✅ Kernel version: $VERSION.$PATCHLEVEL"
             cd ..
           else
-            echo "⚠️ Kernel source is not a git repo, will clone fresh"
-            echo "needs_clone=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get Kernel Source
-        if: steps.kernel-check.outputs.needs_clone == 'true'
-        run: |
-          echo "📥 Cloning fresh kernel source..."
-          rm -rf kernel
-          git clone --depth=1 --branch=android14-6.1-2025-09 \
-            https://github.com/aosp-mirror/kernel_common kernel
-          echo "✅ Kernel source cloned successfully"
-
-      - name: Check SuSFS Updates
-        id: susfs-check
-        if: env.ENABLE_SUSFS == 'true'
-        run: |
-          echo "🔍 Checking for SuSFS updates..."
-          
-          if [ ! -d "susfs4ksu" ]; then
-            echo "📥 SuSFS source not found, will clone"
-            echo "needs_susfs_update=true" >> $GITHUB_OUTPUT
-            exit 0
+            echo "❌ Kernel submodule not properly initialized"
+            exit 1
           fi
           
-          # Check if susfs4ksu is a git repo and has updates
-          if [ -d "susfs4ksu/.git" ]; then
-            cd susfs4ksu
-            git fetch origin
-            LOCAL_COMMIT=$(git rev-parse HEAD)
-            REMOTE_COMMIT=$(git rev-parse origin/gki-android14-6.1)
-            
-            if [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
-              echo "🔄 New SuSFS commits available, will update"
-              echo "needs_susfs_update=true" >> $GITHUB_OUTPUT
-            else
-              echo "✅ SuSFS source is up to date"
-              echo "needs_susfs_update=false" >> $GITHUB_OUTPUT
-            fi
-            cd ..
+          # Verify susfs4ksu submodule
+          if [ -d "susfs4ksu/kernel_patches" ]; then
+            echo "✅ SuSFS submodule verified"
           else
-            echo "⚠️ SuSFS source is not a git repo, will use existing"
-            echo "needs_susfs_update=false" >> $GITHUB_OUTPUT
+            echo "❌ SuSFS submodule not properly initialized"
+            exit 1
           fi
 
-      - name: Update SuSFS Source
-        if: env.ENABLE_SUSFS == 'true' && steps.susfs-check.outputs.needs_susfs_update == 'true'
+      - name: Setup CCACHE
         run: |
-          echo "📥 Updating SuSFS source..."
-          rm -rf susfs4ksu
-          git clone --depth=1 --branch=gki-android14-6.1 \
-            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          rm -rf susfs4ksu/.git
-          echo "✅ SuSFS source updated successfully"
+          echo "🔧 Setting up CCACHE..."
+          export PATH="/usr/lib/ccache:$PATH"
+          
+          if [ ! -d "${{ env.CCACHE_DIR }}" ]; then
+            sudo mkdir -p "${{ env.CCACHE_DIR }}"
+            sudo chown -R $USER:$USER "${{ env.CCACHE_DIR }}"
+          fi
+          
+          ccache --set-config=cache_dir=${{ env.CCACHE_DIR }}
+          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache --set-config=sloppiness=file_macro,locale,time_macros
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          
+          echo "📈 CCACHE stats BEFORE build:"
+          ccache -s
+          
+          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
+          echo "INITIAL_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
 
       - name: Clean ABI Exports
         run: |
           cd kernel
           echo "🧹 Cleaning ABI protected exports..."
           rm -vf android/abi_gki_protected_exports_* || true
-          echo "✅ ABI exports cleaned"
 
-      - name: Setup KernelSU
+      - name: Setup KernelSU - ${{ matrix.variant }}
         run: |
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+          
+          # Remove any existing KernelSU
+          rm -rf KernelSU drivers/kernelsu
+          
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo "📦 Setting up tiann/KernelSU (Official)..."
+              KSU_REPO="tiann/KernelSU"
+              KSU_BRANCH="main"
+              ;;
+            "kowsu")
+              echo "📦 Setting up KOWX712/KernelSU (KowSU)..."
+              KSU_REPO="KOWX712/KernelSU"
+              KSU_BRANCH="main"
+              ;;
+            "mksu")
+              echo "📦 Setting up 5ec1cff/KernelSU (MKSU)..."
+              KSU_REPO="5ec1cff/KernelSU"
+              KSU_BRANCH="main"
+              ;;
+          esac
+          
+          # Clone KernelSU
+          git clone --depth=1 --branch=$KSU_BRANCH \
+            "https://github.com/$KSU_REPO" KernelSU
+          
+          # Get version
           cd KernelSU
           KSU_COUNT=$(git rev-list --count HEAD)
-          echo "KSU_VERSION=$((KSU_COUNT + 20000))" >> $GITHUB_ENV
+          KSU_VERSION=$((KSU_COUNT + 20000))
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+          echo "✅ KernelSU version: r$KSU_VERSION from $KSU_REPO"
+          cd ..
+          
+          # Setup KernelSU in kernel tree
+          ln -sf KernelSU/kernel drivers/kernelsu
+          
+          # Add to Makefile if not present
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+          
+          # Add to Kconfig if not present
+          if ! grep -q "kernelsu" drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
 
       - name: Setup SuSFS
         if: env.ENABLE_SUSFS == 'true'
         run: |
+          echo "📦 Setting up SuSFS from submodule..."
+          
+          # Copy SuSFS files from submodule
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
           
           cd kernel
+          
+          # Apply kernel patch
+          echo "📋 Applying 50_add_susfs_in_gki-android14-6.1.patch"
           patch -p1 --forward < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || true
+          
+          # Apply KernelSU-specific SuSFS patch
           cd KernelSU
+          echo "📋 Applying 10_enable_susfs_for_ksu.patch"
           patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
           cd ..
-          
-          # Apply proc base fix patch (SuSFS related)
-          echo "📋 Applying fix_proc_base.patch"
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix_proc_base.patch" -o fix_proc_base.patch
-          patch -p1 --forward < fix_proc_base.patch || true
-          rm fix_proc_base.patch
 
-      - name: Apply Essential Patches
+      - name: Apply Variant-Specific Patches
+        run: |
+          cd kernel
+          PATCH_DIR="../.github/patches/${{ matrix.variant }}"
+          
+          # Apply common patches first
+          if [ -d "../.github/patches/common" ]; then
+            echo "📋 Applying common patches..."
+            for patch in ../.github/patches/common/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "  Applying: $(basename $patch)"
+                patch -p1 --forward < "$patch" || true
+              fi
+            done
+          fi
+          
+          # Apply variant-specific patches
+          if [ -d "$PATCH_DIR" ]; then
+            echo "📋 Applying ${{ matrix.variant }}-specific patches..."
+            for patch in $PATCH_DIR/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "  Applying: $(basename $patch)"
+                patch -p1 --forward < "$patch" || true
+              fi
+            done
+          fi
+
+      - name: Apply Remote Patches
         run: |
           cd kernel
           
-          # Always apply CLIDR fix patch
-          echo "📋 Applying fix-clidr-uninitialized.patch (essential)"
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o fix-clidr-uninitialized.patch
-          patch -p1 --forward < fix-clidr-uninitialized.patch || true
-          rm fix-clidr-uninitialized.patch
+          # CLIDR fix (essential for all variants)
+          echo "📋 Applying fix-clidr-uninitialized.patch"
+          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" \
+            -o /tmp/fix-clidr.patch
+          patch -p1 --forward < /tmp/fix-clidr.patch || true
+          
+          # Proc base fix (for SuSFS)
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            echo "📋 Applying fix_proc_base.patch"
+            curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix_proc_base.patch" \
+              -o /tmp/fix_proc_base.patch
+            patch -p1 --forward < /tmp/fix_proc_base.patch || true
+          fi
 
       - name: Patch Scripts
         run: |
           cd kernel
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
-
-      - name: Setup and Verify CCACHE
-        id: ccache
-        run: |
-          echo "🔧 Setting up and verifying CCACHE..."
-          
-          # Setup CCACHE environment - always use local path first
-          export PATH="/usr/lib/ccache:$PATH"
-          echo "✅ Added CCACHE to PATH"
-          
-          # Always use the local CCACHE directory
-          CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          echo "🏠 Using CCACHE directory: $CCACHE_DIR"
-          
-          # Ensure CCACHE directory exists and is accessible
-          if [ ! -d "$CCACHE_DIR" ]; then
-            echo "⚠️ CCACHE directory not found, creating..."
-            sudo mkdir -p "$CCACHE_DIR"
-            sudo chown -R $USER:$USER "$CCACHE_DIR"
-            echo "✅ Created CCACHE directory"
-          fi
-          
-          # Configure CCACHE to use local directory
-          ccache --set-config=cache_dir=$CCACHE_DIR
-          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
-          ccache --set-config=sloppiness=file_macro,locale,time_macros
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          echo "✅ CCACHE configured for local directory"
-          
-          # Check CCACHE binary and version
-          echo "🔧 Checking CCACHE binary..."
-          if command -v ccache &> /dev/null; then
-            echo "✅ CCACHE found: $(which ccache)"
-            echo "📋 CCACHE version: $(ccache --version | head -1)"
-          else
-            echo "❌ CCACHE not found in PATH"
-            exit 1
-          fi
-          
-          # Show current stats BEFORE build
-          echo "📈 CCACHE stats BEFORE build:"
-          ccache -s
-          
-          # Get initial hit rate for reporting
-          HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
-          CACHE_SIZE=$(ccache -s | grep -i "cache size" | head -1)
-          CACHE_BACKEND=$(ccache -s | grep -i "cache directory" | head -1)
-          echo "INITIAL_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          echo "INITIAL_CACHE_SIZE=$CACHE_SIZE" >> $GITHUB_ENV
-          echo "CCACHE_BACKEND=$CACHE_BACKEND" >> $GITHUB_ENV
-          
-          echo "✅ CCACHE setup complete - using local persistent cache"
 
       - name: Configure Kernel
         run: |
@@ -314,10 +302,11 @@ jobs:
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
 
-          # Always start with fresh config for consistency
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
 
-          BASE_CONFIG="CONFIG_ARM64_CORTEX_X3=y
+          # Base configuration
+          cat >> out/.config << 'EOF'
+          CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_A510=y
           CONFIG_ARM64_VA_BITS=48
@@ -358,10 +347,6 @@ jobs:
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
-          CONFIG_KSU_KPROBES_HOOK=n
-          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
-          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_IP_NF_TARGET_TTL=y
@@ -374,7 +359,6 @@ jobs:
           CONFIG_TCP_CONG_WESTWOOD=n
           CONFIG_TCP_CONG_HTCP=n
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CCACHE=y
           CONFIG_LTO=y
           CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
@@ -391,75 +375,48 @@ jobs:
           CONFIG_IP_SET_HASH_NETNET=y
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_LOCALVERSION=\"-deepongi+\"
-          CONFIG_NET_SCH_CAKE=y"
+          CONFIG_NET_SCH_CAKE=y
+          EOF
+          
+          # Variant-specific config
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo 'CONFIG_LOCALVERSION="-deepongi-ksu"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              ;;
+            "kowsu")
+              echo 'CONFIG_LOCALVERSION="-deepongi-kowsu"' >> out/.config
+              # Add KowSU-specific configs here
+              ;;
+            "mksu")
+              echo 'CONFIG_LOCALVERSION="-deepongi-mksu"' >> out/.config
+              # Add MKSU-specific configs here
+              ;;
+          esac
 
-          # Default: SuSFS enabled, only disable if explicitly requested
+          # SuSFS configuration
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            SUSFS_CONFIG="CONFIG_KSU_SUSFS=y
-            CONFIG_KSU_SUSFS_SUS_PATH=y
-            CONFIG_KSU_SUSFS_SUS_MOUNT=y
-            CONFIG_KSU_SUSFS_SUS_KSTAT=y
-            CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-            CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-            CONFIG_KSU_SUSFS_ENABLE_LOG=y
-            CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-            CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-            CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-            CONFIG_KSU_SUSFS_SUS_MAP=y"
-            echo "$BASE_CONFIG" >> out/.config
-            echo "$SUSFS_CONFIG" >> out/.config
-          else
-            echo "$BASE_CONFIG" >> out/.config
+            cat >> out/.config << 'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
           fi
 
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-      - name: Analyze Build Dependencies
-        id: build-analysis
-        run: |
-          cd kernel
-          echo "🔍 Analyzing build dependencies for incremental build..."
-          
-          # Check if we can safely do incremental build
-          BUILD_TYPE="full"
-          REASON=""
-          
-          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
-            BUILD_TYPE="clean"
-            REASON="manual clean build requested"
-          elif [ ! -f "out/.config" ]; then
-            BUILD_TYPE="full"
-            REASON="missing kernel configuration"
-          elif [ ! -f "out/include/generated/autoconf.h" ]; then
-            BUILD_TYPE="full" 
-            REASON="missing autoconf headers"
-          else
-            # Check for configuration changes
-            CONFIG_CHANGED=$(find . -name "*.config" -newer out/.config 2>/dev/null | wc -l)
-            PATCHES_CHANGED=$(find ../ -name "*.patch" -newer out/.config 2>/dev/null | wc -l)
-            SOURCE_CHANGED=$(find . -name "*.[chS]" -newer out/.config 2>/dev/null | head -5 | wc -l)
-            
-            if [ "$CONFIG_CHANGED" -gt 0 ]; then
-              BUILD_TYPE="full"
-              REASON="kernel configuration changed"
-            elif [ "$PATCHES_CHANGED" -gt 0 ]; then
-              BUILD_TYPE="full" 
-              REASON="patches were updated"
-            elif [ "$SOURCE_CHANGED" -gt 0 ]; then
-              BUILD_TYPE="incremental"
-              REASON="source files modified, safe for incremental build"
-            else
-              BUILD_TYPE="incremental"
-              REASON="no changes detected, using cached build objects"
-            fi
-          fi
-          
-          echo "BUILD_TYPE=$BUILD_TYPE" >> $GITHUB_ENV
-          echo "BUILD_REASON=$REASON" >> $GITHUB_ENV
-          echo "🔧 Build analysis: $BUILD_TYPE - $REASON"
-
-      - name: Smart Kernel Build
+      - name: Build Kernel
         run: |
           cd kernel
           export ARCH=arm64
@@ -470,25 +427,16 @@ jobs:
 
           START_TIME=$SECONDS
           
-          case "${{ env.BUILD_TYPE }}" in
-            "clean")
-              echo "🧹 Performing clean build..."
-              make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
-              make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
-              ;;
-            "full")
-              echo "🏗️ Performing full build..."
-              make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
-              ;;
-            "incremental")
-              echo "🔄 Performing incremental build..."
-              make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
-              ;;
-          esac
+          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+            echo "🧹 Performing clean build..."
+            make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
+          fi
+          
+          echo "🏗️ Building kernel for ${{ matrix.variant }}..."
+          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           echo "BUILD_TIME=${BUILD_TIME}s" >> $GITHUB_ENV
-          echo "BUILD_STRATEGY=${{ env.BUILD_TYPE }}" >> $GITHUB_ENV
 
       - name: Check CCACHE Performance
         run: |
@@ -496,51 +444,34 @@ jobs:
           ccache -s
           
           FINAL_HIT_RATE=$(ccache -s | grep -i "cache hit" | head -1 | grep -Eo "[0-9]+\.[0-9]+%" || echo "0%")
-          FINAL_CACHE_SIZE=$(ccache -s | grep -i "cache size" | head -1)
           echo "FINAL_HIT_RATE=$FINAL_HIT_RATE" >> $GITHUB_ENV
-          echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
-          
-          # Calculate cache efficiency
-          echo "🎯 CCACHE Performance Summary:"
-          echo "   Cache Backend: ${{ env.CCACHE_BACKEND }}"
-          echo "   Initial Hit Rate: ${{ env.INITIAL_HIT_RATE }}"
-          echo "   Final Hit Rate: $FINAL_HIT_RATE"
-          echo "   Cache Size: $FINAL_CACHE_SIZE"
-          echo "   Build Strategy: ${{ env.BUILD_STRATEGY }}"
-          echo "   Build Reason: ${{ env.BUILD_REASON }}"
-
-      - name: Get Changes
-        id: changes
-        run: |
-          CHANGES=$(git log --oneline --pretty=format:"• %s" -n 5 2>/dev/null || echo "• Initial build")
-          CHANGES="${CHANGES//'%'/'%25'}"
-          CHANGES="${CHANGES//$'\n'/'%0A'}"
-          echo "CHANGES<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Package Kernel
         run: |
-          git clone --depth=1 --branch=KernelSU https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          # Clone AnyKernel3
+          git clone --depth=1 --branch=KernelSU \
+            https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
           cd AnyKernel3
           rm -rf .git .github
           
+          # Copy kernel files
           cp ../kernel/out/arch/arm64/boot/Image ./
           [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
           [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
 
+          # Copy SuSFS module if enabled
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ -d "../susfs4ksu/ksu_module_susfs" ]; then
             mkdir -p modules
             cp -r ../susfs4ksu/ksu_module_susfs/* modules/
           fi
 
           TIMESTAMP=$(date +%Y%m%d-%H%M)
+          VARIANT_UPPER=$(echo "${{ matrix.variant }}" | tr '[:lower:]' '[:upper:]')
           
-          # Different ZIP names based on SuSFS status
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS-${{ env.BUILD_STRATEGY }}.zip"
+            ZIP_NAME="AK3-6.1.145-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
           else
-            ZIP_NAME="AK3-6.1.145-KSU-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUSFS-${{ env.BUILD_STRATEGY }}.zip"
+            ZIP_NAME="AK3-6.1.145-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
           fi
           
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
@@ -553,7 +484,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ github.run_number }}
+          name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
@@ -562,42 +493,32 @@ jobs:
           retention-days: 30
 
       - name: Create Release
-        if: success() && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+        if: success() && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: build-${{ github.run_number }}
-          name: "Kernel Build #${{ github.run_number }}"
+          tag_name: ${{ matrix.variant }}-build-${{ github.run_number }}
+          name: "${{ matrix.variant }} Build #${{ github.run_number }}"
           body: |
-            ## 🚀 GKI Kernel with KernelSU
+            ## 🚀 GKI Kernel with ${{ matrix.variant == 'tiann' && 'KernelSU' || matrix.variant == 'kowsu' && 'KowSU' || 'MKSU' }}
             
             **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
             
             ### 📊 Build Info
-            - **Build Time:** ${{ env.BUILD_TIME }}
-            - **Build Strategy:** ${{ env.BUILD_STRATEGY }} (${{ env.BUILD_REASON }})
-            - **CCACHE Hit Rate:** ${{ env.FINAL_HIT_RATE }} (Initial: ${{ env.INITIAL_HIT_RATE }})
-            - **CCACHE Size:** ${{ env.FINAL_CACHE_SIZE }}
-            - **CCACHE Backend:** Local Persistent
-            - **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled (default)' || '❌ Disabled (manual trigger)' }}
-            - **KernelSU Version:** r${{ env.KSU_VERSION }}
-            
-            ### 📈 Recent Changes
-            ${{ steps.changes.outputs.CHANGES }}
+            | Property | Value |
+            |----------|-------|
+            | **Variant** | ${{ matrix.variant }} |
+            | **KernelSU Source** | ${{ env.KSU_REPO }} |
+            | **KernelSU Version** | r${{ env.KSU_VERSION }} |
+            | **SuSFS** | ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled' || '❌ Disabled' }} |
+            | **Build Time** | ${{ env.BUILD_TIME }} |
+            | **CCACHE Hit Rate** | ${{ env.FINAL_HIT_RATE }} |
             
             ### 📦 Installation
             1. Flash `${{ env.KERNEL_ZIP }}` in custom recovery
             2. Reboot and enjoy!
             
-            ### 🔐 Verification
-            **SHA256:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.sha256)
-            ```
-            
-            **MD5:**
-            ```
-            $(cat ${{ env.KERNEL_ZIP }}.md5)
-            ```
+            ### 🔐 Checksums
+            See attached `.sha256` and `.md5` files
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256

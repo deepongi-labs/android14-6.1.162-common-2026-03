@@ -1,0 +1,9 @@
+[submodule "kernel"]
+	path = kernel
+	url = https://github.com/aosp-mirror/kernel_common.git
+	branch = android14-6.1-2025-09
+
+[submodule "susfs4ksu"]
+	path = susfs4ksu
+	url = https://gitlab.com/simonpunk/susfs4ksu.git
+	branch = gki-android14-6.1-dev

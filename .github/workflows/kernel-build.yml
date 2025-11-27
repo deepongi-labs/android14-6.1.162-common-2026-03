@@ -117,24 +117,83 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Clone Submodules Manually
+      - name: Cache Kernel Source
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: kernel
+          key: kernel-android14-6.1-2025-09-${{ hashFiles('.gitmodules') }}
+          restore-keys: |
+            kernel-android14-6.1-2025-09-
+
+      - name: Cache SuSFS Source
+        id: cache-susfs
+        uses: actions/cache@v4
+        with:
+          path: susfs4ksu
+          key: susfs4ksu-gki-android14-6.1-dev-${{ hashFiles('.gitmodules') }}
+          restore-keys: |
+            susfs4ksu-gki-android14-6.1-dev-
+
+      - name: Clone/Update Submodules
         run: |
-          echo "📥 Cloning submodules manually..."
+          KERNEL_BRANCH="android14-6.1-2025-09"
+          SUSFS_BRANCH="gki-android14-6.1-dev"
           
-          # Remove any existing submodule directories
-          rm -rf kernel susfs4ksu
+          # Function to check if repo needs update
+          check_and_clone_kernel() {
+            if [ -d "kernel/.git" ] && [ -f "kernel/Makefile" ]; then
+              echo "📦 Kernel exists, checking for updates..."
+              cd kernel
+              git fetch origin $KERNEL_BRANCH --depth=1
+              LOCAL=$(git rev-parse HEAD)
+              REMOTE=$(git rev-parse FETCH_HEAD)
+              if [ "$LOCAL" = "$REMOTE" ]; then
+                echo "✅ Kernel is up to date"
+                cd ..
+                return 0
+              else
+                echo "🔄 Kernel has updates, re-cloning..."
+                cd ..
+                rm -rf kernel
+              fi
+            fi
+            
+            echo "📥 Cloning kernel..."
+            git clone --depth=1 --single-branch -b $KERNEL_BRANCH \
+              https://github.com/aosp-mirror/kernel_common.git kernel
+          }
           
-          # Clone kernel submodule
-          echo "📥 Cloning kernel..."
-          git clone --depth=1 --single-branch -b android14-6.1-2025-09 \
-            https://github.com/aosp-mirror/kernel_common.git kernel
+          check_and_clone_susfs() {
+            if [ -d "susfs4ksu/.git" ] && [ -d "susfs4ksu/kernel_patches" ]; then
+              echo "📦 SuSFS exists, checking for updates..."
+              cd susfs4ksu
+              git fetch origin $SUSFS_BRANCH --depth=1
+              LOCAL=$(git rev-parse HEAD)
+              REMOTE=$(git rev-parse FETCH_HEAD)
+              if [ "$LOCAL" = "$REMOTE" ]; then
+                echo "✅ SuSFS is up to date"
+                cd ..
+                return 0
+              else
+                echo "🔄 SuSFS has updates, re-cloning..."
+                cd ..
+                rm -rf susfs4ksu
+              fi
+            fi
+            
+            echo "📥 Cloning susfs4ksu..."
+            git clone --depth=1 --single-branch -b $SUSFS_BRANCH \
+              https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          }
           
-          # Clone susfs4ksu submodule
-          echo "📥 Cloning susfs4ksu..."
-          git clone --depth=1 --single-branch -b gki-android14-6.1-dev \
-            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          # Clone or update kernel
+          check_and_clone_kernel
           
-          # Verify kernel submodule
+          # Clone or update susfs4ksu
+          check_and_clone_susfs
+          
+          # Verify kernel
           if [ -f "kernel/Makefile" ]; then
             cd kernel
             VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3)
@@ -142,15 +201,15 @@ jobs:
             echo "✅ Kernel version: $VERSION.$PATCHLEVEL"
             cd ..
           else
-            echo "❌ Kernel clone failed"
+            echo "❌ Kernel not available"
             exit 1
           fi
           
-          # Verify susfs4ksu submodule
+          # Verify susfs4ksu
           if [ -d "susfs4ksu/kernel_patches" ]; then
-            echo "✅ SuSFS clone verified"
+            echo "✅ SuSFS verified"
           else
-            echo "❌ SuSFS clone failed"
+            echo "❌ SuSFS not available"
             exit 1
           fi
 

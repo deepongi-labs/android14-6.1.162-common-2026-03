@@ -112,16 +112,27 @@ jobs:
       KSU_VARIANT: ${{ matrix.variant }}
 
     steps:
-      - name: Checkout with Submodules
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Update Submodules
+      - name: Clone Submodules Manually
         run: |
-          echo "📥 Updating submodules..."
-          git submodule update --init --recursive --remote
+          echo "📥 Cloning submodules manually..."
+          
+          # Remove any existing submodule directories
+          rm -rf kernel susfs4ksu
+          
+          # Clone kernel submodule
+          echo "📥 Cloning kernel..."
+          git clone --depth=1 --single-branch -b android14-6.1-2025-09 \
+            https://github.com/aosp-mirror/kernel_common.git kernel
+          
+          # Clone susfs4ksu submodule
+          echo "📥 Cloning susfs4ksu..."
+          git clone --depth=1 --single-branch -b gki-android14-6.1-dev \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
           
           # Verify kernel submodule
           if [ -f "kernel/Makefile" ]; then
@@ -131,15 +142,15 @@ jobs:
             echo "✅ Kernel version: $VERSION.$PATCHLEVEL"
             cd ..
           else
-            echo "❌ Kernel submodule not properly initialized"
+            echo "❌ Kernel clone failed"
             exit 1
           fi
           
           # Verify susfs4ksu submodule
           if [ -d "susfs4ksu/kernel_patches" ]; then
-            echo "✅ SuSFS submodule verified"
+            echo "✅ SuSFS clone verified"
           else
-            echo "❌ SuSFS submodule not properly initialized"
+            echo "❌ SuSFS clone failed"
             exit 1
           fi
 

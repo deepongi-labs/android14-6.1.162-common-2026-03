@@ -803,62 +803,176 @@ jobs:
             ${{ env.CHANGELOG_FILE }}
           retention-days: 30
 
-      - name: Create Release
-        if: success()
+  create_release:
+    needs: build
+    runs-on: [self-hosted, Linux, X64]
+    if: success()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Prepare Release Assets
+        run: |
+          cd release-assets
+          
+          # Flatten directory structure
+          find . -type f -exec mv {} . \; 2>/dev/null || true
+          find . -type d -empty -delete
+          
+          ls -lh
+          
+          # Count variants built
+          VARIANT_COUNT=$(ls -1 CHANGELOG-*.md 2>/dev/null | wc -l)
+          echo "VARIANT_COUNT=$VARIANT_COUNT" >> $GITHUB_ENV
+          
+          # Get build date from any changelog (they're all from same run)
+          if [ -f "CHANGELOG-tiann.md" ]; then
+            BUILD_DATE=$(grep "Build Date:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2- | xargs)
+          elif [ -f "CHANGELOG-kowsu.md" ]; then
+            BUILD_DATE=$(grep "Build Date:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2- | xargs)
+          elif [ -f "CHANGELOG-mksu.md" ]; then
+            BUILD_DATE=$(grep "Build Date:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2- | xargs)
+          else
+            BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          fi
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+          
+          # Determine which variants were built
+          VARIANTS_BUILT=""
+          [ -f "CHANGELOG-tiann.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}tiann "
+          [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
+          [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
+          echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
+
+      - name: Generate Unified Release Notes
+        run: |
+          cd release-assets
+          
+          cat > RELEASE_NOTES.md << 'EOF'
+          # 🚀 GKI Kernel Build #${{ github.run_number }}
+          
+          **Build Date:** ${{ env.BUILD_DATE }}
+          **Variants:** ${{ env.VARIANTS_BUILT }}
+          
+          ---
+          
+          EOF
+          
+          # Add sections for each variant
+          if [ -f "CHANGELOG-tiann.md" ]; then
+            cat >> RELEASE_NOTES.md << 'TIANN_EOF'
+          ## 🔧 tiann - Official KernelSU
+          
+          TIANN_EOF
+            
+            # Extract version info
+            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
+            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-tiann.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            
+            cat >> RELEASE_NOTES.md << TIANN_INFO
+          **KernelSU Version:** $KSU_VERSION  
+          **SuSFS:** $SUSFS_STATUS  
+          **Commit:** \`$KSU_COMMIT\`
+          
+          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-tiann.md)**
+          
+          **Download:**
+          - Kernel: \`$(ls AK3-*-TIANN-*.zip | head -1)\`
+          - Checksums: SHA256 | MD5
+          
+          ---
+          
+          TIANN_INFO
+          fi
+          
+          if [ -f "CHANGELOG-kowsu.md" ]; then
+            cat >> RELEASE_NOTES.md << 'KOWSU_EOF'
+          ## 🔧 kowsu - KowSU Fork
+          
+          KOWSU_EOF
+            
+            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
+            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-kowsu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            
+            cat >> RELEASE_NOTES.md << KOWSU_INFO
+          **KernelSU Version:** $KSU_VERSION  
+          **SuSFS:** $SUSFS_STATUS  
+          **Commit:** \`$KSU_COMMIT\`
+          
+          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-kowsu.md)**
+          
+          **Download:**
+          - Kernel: \`$(ls AK3-*-KOWSU-*.zip | head -1)\`
+          - Checksums: SHA256 | MD5
+          
+          ---
+          
+          KOWSU_INFO
+          fi
+          
+          if [ -f "CHANGELOG-mksu.md" ]; then
+            cat >> RELEASE_NOTES.md << 'MKSU_EOF'
+          ## 🔧 mksu - MKSU Fork
+          
+          MKSU_EOF
+            
+            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
+            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-mksu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            
+            cat >> RELEASE_NOTES.md << MKSU_INFO
+          **KernelSU Version:** $KSU_VERSION  
+          **SuSFS:** $SUSFS_STATUS  
+          **Commit:** \`$KSU_COMMIT\`
+          
+          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-mksu.md)**
+          
+          **Download:**
+          - Kernel: \`$(ls AK3-*-MKSU-*.zip | head -1)\`
+          - Checksums: SHA256 | MD5
+          
+          ---
+          
+          MKSU_INFO
+          fi
+          
+          cat >> RELEASE_NOTES.md << 'FOOTER_EOF'
+          
+          ## 📦 Installation Instructions
+          
+          1. Download the kernel ZIP for your preferred variant
+          2. Verify checksums (optional but recommended)
+          3. Flash the ZIP in custom recovery (TWRP/OrangeFox)
+          4. Reboot and enjoy!
+          
+          ## 🔗 Resources
+          
+          - **Repository:** https://github.com/${{ github.repository }}
+          - **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          ---
+          
+          _All variants built from the same kernel base (android14-6.1-2025-09) with variant-specific KernelSU implementations._
+          FOOTER_EOF
+          
+          echo "✅ Unified release notes generated"
+          cat RELEASE_NOTES.md
+
+      - name: Create Unified Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ matrix.variant }}-build-${{ github.run_number }}
-          name: "${{ matrix.variant }} Build #${{ github.run_number }}"
-          body: |
-            ## 🚀 GKI Kernel with ${{ matrix.variant == 'tiann' && 'KernelSU (Official)' || matrix.variant == 'kowsu' && 'KowSU Fork' || 'MKSU Fork' }}
-            
-            **Build #${{ github.run_number }}** • ${{ env.KSU_COMMIT_DATE }}
-            
-            ### 📊 Build Information
-            | Property | Value |
-            |----------|-------|
-            | **Variant** | ${{ matrix.variant }} |
-            | **KernelSU Version** | r${{ env.KSU_VERSION }} |
-            | **SuSFS** | ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled' || '❌ Disabled' }} |
-            | **Build Time** | ${{ env.BUILD_TIME }} |
-            | **CCACHE Hit Rate** | ${{ env.CCACHE_HIT_RATE }} |
-            | **Cache Size** | ${{ env.FINAL_CACHE_SIZE }} |
-            
-            ### 🔖 Component Versions
-            | Component | Commit | Summary |
-            |-----------|--------|---------|
-            | **KernelSU** | `${{ env.KSU_COMMIT_SHORT }}` | ${{ env.KSU_COMMIT_MSG }} |
-            | **Kernel** | `${{ env.KERNEL_COMMIT_SHORT }}` | ${{ env.KERNEL_COMMIT_MSG }} |
-            | **SuSFS4KSU** | `${{ env.SUSFS_COMMIT_SHORT }}` | ${{ env.SUSFS_COMMIT_MSG }} |
-            | **Workflow** | `${{ env.WORKFLOW_COMMIT_SHORT }}` | ${{ env.WORKFLOW_COMMIT_MSG }} |
-            
-            ### 📝 Full Changelog
-            
-            📋 **[View Complete Changelog](https://github.com/${{ github.repository }}/releases/download/${{ matrix.variant }}-build-${{ github.run_number }}/CHANGELOG-${{ matrix.variant }}.md)**
-            
-            The comprehensive changelog includes detailed changes for:
-            - KernelSU (${{ matrix.variant }} variant)
-            - Linux Kernel (android14-6.1-2025-09)
-            - SuSFS4KSU (filesystem hiding framework)
-            - Build Workflow
-            
-            ### 📦 Installation
-            1. Flash `${{ env.KERNEL_ZIP }}` in custom recovery
-            2. Reboot and enjoy!
-            
-            ### 🔐 Checksums
-            See attached `.sha256` and `.md5` files for verification
-            
-            ### 🔗 Quick Links
-            - **KernelSU Commit:** https://github.com/${{ env.KSU_REPO }}/commit/${{ env.KSU_COMMIT }}
-            - **Kernel Commit:** https://github.com/aosp-mirror/kernel_common/commit/${{ env.KERNEL_COMMIT }}
-            - **SuSFS Commit:** https://gitlab.com/simonpunk/susfs4ksu/-/commit/${{ env.SUSFS_COMMIT }}
-            - **Build Workflow:** https://github.com/${{ github.repository }}/commit/${{ env.WORKFLOW_COMMIT }}
-            - **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          files: |
-            ${{ env.KERNEL_ZIP }}
-            ${{ env.KERNEL_ZIP }}.sha256
-            ${{ env.KERNEL_ZIP }}.md5
-            ${{ env.CHANGELOG_FILE }}
+          tag_name: build-${{ github.run_number }}
+          name: "Build #${{ github.run_number }} - All Variants"
+          body_path: release-assets/RELEASE_NOTES.md
+          files: release-assets/*
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

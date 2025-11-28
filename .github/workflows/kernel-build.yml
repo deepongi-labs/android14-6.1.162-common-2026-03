@@ -89,6 +89,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Store Workflow Commit Info
+        run: |
+          WORKFLOW_COMMIT=$(git rev-parse HEAD)
+          WORKFLOW_COMMIT_SHORT=$(git rev-parse --short HEAD)
+          WORKFLOW_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
+          WORKFLOW_COMMIT_MSG=$(git log -1 --format=%s)
+          
+          echo "WORKFLOW_COMMIT=$WORKFLOW_COMMIT" >> $GITHUB_ENV
+          echo "WORKFLOW_COMMIT_SHORT=$WORKFLOW_COMMIT_SHORT" >> $GITHUB_ENV
+          echo "WORKFLOW_COMMIT_DATE=$WORKFLOW_COMMIT_DATE" >> $GITHUB_ENV
+          echo "WORKFLOW_COMMIT_MSG=$WORKFLOW_COMMIT_MSG" >> $GITHUB_ENV
+          
+          echo "📝 Workflow commit: $WORKFLOW_COMMIT_SHORT - $WORKFLOW_COMMIT_MSG"
+
       - name: Clone/Update Kernel Source
         run: |
           KERNEL_BRANCH="android14-6.1-2025-09"
@@ -116,6 +130,21 @@ jobs:
             echo "❌ Kernel not available"
             exit 1
           fi
+
+      - name: Store Kernel Commit Info
+        run: |
+          cd kernel
+          KERNEL_COMMIT=$(git rev-parse HEAD)
+          KERNEL_COMMIT_SHORT=$(git rev-parse --short HEAD)
+          KERNEL_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
+          KERNEL_COMMIT_MSG=$(git log -1 --format=%s)
+          
+          echo "KERNEL_COMMIT=$KERNEL_COMMIT" >> $GITHUB_ENV
+          echo "KERNEL_COMMIT_SHORT=$KERNEL_COMMIT_SHORT" >> $GITHUB_ENV
+          echo "KERNEL_COMMIT_DATE=$KERNEL_COMMIT_DATE" >> $GITHUB_ENV
+          echo "KERNEL_COMMIT_MSG=$KERNEL_COMMIT_MSG" >> $GITHUB_ENV
+          
+          echo "📝 Kernel commit: $KERNEL_COMMIT_SHORT - $KERNEL_COMMIT_MSG"
 
       - name: Clone/Update SuSFS Source
         run: |
@@ -149,6 +178,21 @@ jobs:
             echo "❌ SuSFS not available"
             exit 1
           fi
+
+      - name: Store SuSFS Commit Info
+        run: |
+          cd susfs4ksu
+          SUSFS_COMMIT=$(git rev-parse HEAD)
+          SUSFS_COMMIT_SHORT=$(git rev-parse --short HEAD)
+          SUSFS_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
+          SUSFS_COMMIT_MSG=$(git log -1 --format=%s)
+          
+          echo "SUSFS_COMMIT=$SUSFS_COMMIT" >> $GITHUB_ENV
+          echo "SUSFS_COMMIT_SHORT=$SUSFS_COMMIT_SHORT" >> $GITHUB_ENV
+          echo "SUSFS_COMMIT_DATE=$SUSFS_COMMIT_DATE" >> $GITHUB_ENV
+          echo "SUSFS_COMMIT_MSG=$SUSFS_COMMIT_MSG" >> $GITHUB_ENV
+          
+          echo "📝 SuSFS commit: $SUSFS_COMMIT_SHORT - $SUSFS_COMMIT_MSG"
 
       - name: Show CCACHE Status
         run: |
@@ -201,6 +245,7 @@ jobs:
           
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
           echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT) from $KSU_REPO"
           cd ..
           
@@ -231,6 +276,254 @@ jobs:
           if ! grep -q "kernelsu" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
+
+      - name: Store KernelSU Commit Info
+        run: |
+          cd kernel/KernelSU
+          KSU_COMMIT=$(git rev-parse HEAD)
+          KSU_COMMIT_SHORT=$(git rev-parse --short HEAD)
+          KSU_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
+          KSU_COMMIT_MSG=$(git log -1 --format=%s)
+          KSU_COMMIT_AUTHOR=$(git log -1 --format='%an')
+          
+          echo "KSU_COMMIT=$KSU_COMMIT" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHORT=$KSU_COMMIT_SHORT" >> $GITHUB_ENV
+          echo "KSU_COMMIT_DATE=$KSU_COMMIT_DATE" >> $GITHUB_ENV
+          echo "KSU_COMMIT_MSG=$KSU_COMMIT_MSG" >> $GITHUB_ENV
+          echo "KSU_COMMIT_AUTHOR=$KSU_COMMIT_AUTHOR" >> $GITHUB_ENV
+          
+          echo "📝 KernelSU commit: $KSU_COMMIT_SHORT - $KSU_COMMIT_MSG"
+
+      - name: Generate Comprehensive Changelog - ${{ matrix.variant }}
+        run: |
+          mkdir -p changelogs
+          CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
+          
+          echo "📝 Generating comprehensive changelog for ${{ matrix.variant }}..."
+          
+          # ============================================
+          # HEADER SECTION
+          # ============================================
+          cat > "$CHANGELOG_FILE" << 'HEADER_EOF'
+          # 📋 Comprehensive Build Changelog
+          
+          HEADER_EOF
+          
+          # Add variant info
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo "**Variant:** Official KernelSU (tiann)" >> "$CHANGELOG_FILE"
+              ;;
+            "kowsu")
+              echo "**Variant:** KowSU Fork (KOWX712)" >> "$CHANGELOG_FILE"
+              ;;
+            "mksu")
+              echo "**Variant:** MKSU Fork (5ec1cff)" >> "$CHANGELOG_FILE"
+              ;;
+          esac
+          
+          cat >> "$CHANGELOG_FILE" << HEADER_INFO
+          **Build Number:** #${{ github.run_number }}
+          **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          **KernelSU Version:** r${{ env.KSU_VERSION }}
+          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+          
+          ---
+          
+          HEADER_INFO
+          
+          # ============================================
+          # COMPONENT VERSIONS TABLE
+          # ============================================
+          cat >> "$CHANGELOG_FILE" << 'TABLE_HEADER'
+          ## 🔖 Component Versions
+          
+          | Component | Current Commit | Date | Summary |
+          |-----------|---------------|------|---------|
+          TABLE_HEADER
+          
+          echo "| **KernelSU (${{ matrix.variant }})** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
+          echo "| **Kernel (android14-6.1-2025-09)** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
+          echo "| **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
+          echo "| **Build Workflow** | \`${{ env.WORKFLOW_COMMIT_SHORT }}\` | ${{ env.WORKFLOW_COMMIT_DATE }} | ${{ env.WORKFLOW_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
+          
+          echo "" >> "$CHANGELOG_FILE"
+          echo "---" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          
+          # ============================================
+          # CHECK FOR PREVIOUS BUILD
+          # ============================================
+          cd kernel/KernelSU
+          PREVIOUS_TAG=$(git tag --list "${{ matrix.variant }}-build-*" --sort=-version:refname 2>/dev/null | head -n 1 || echo "")
+          
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # ============================================
+            # INITIAL BUILD - Show recent commits
+            # ============================================
+            echo "## 🎉 Initial Build" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            echo "This is the first tracked build for the **${{ matrix.variant }}** variant. Below are the recent changes in each component:" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            
+            # KernelSU Recent Changes
+            echo "### 🔧 KernelSU - ${{ matrix.variant }} (Last 10 commits)" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            echo "**Repository:** https://github.com/${{ env.KSU_REPO }}" >> "../../$CHANGELOG_FILE"
+            echo "**Branch:** ${{ env.KSU_BRANCH }}" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            
+            # Kernel Recent Changes
+            cd ../../kernel
+            echo "### 🐧 Kernel - android14-6.1-2025-09 (Last 10 commits)" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "**Repository:** https://github.com/aosp-mirror/kernel_common" >> "../$CHANGELOG_FILE"
+            echo "**Branch:** android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            
+            # SuSFS Recent Changes
+            cd ../susfs4ksu
+            echo "### 🛡️ SuSFS4KSU (Last 10 commits)" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "**Repository:** https://gitlab.com/simonpunk/susfs4ksu" >> "../$CHANGELOG_FILE"
+            echo "**Branch:** gki-android14-6.1-dev" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            
+            # Workflow Recent Changes
+            cd ..
+            echo "### ⚙️ Build Workflow (Last 5 commits)" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            echo "**Repository:** ${{ github.repository }}" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            git log -5 --pretty=format:"- **%h** - %s (%an, %ar)" -- .github/workflows/ >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            
+            echo "---" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            echo "_This is the initial tracked build. Future builds will show detailed changes since the last build._" >> "$CHANGELOG_FILE"
+            
+          else
+            # ============================================
+            # SUBSEQUENT BUILD - Show changes since last build
+            # ============================================
+            echo "## 🔄 Changes Since Last Build" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            echo "**Previous Build:** \`$PREVIOUS_TAG\`" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            
+            # Get previous commit from last build metadata (we'll store this in a file)
+            # For now, we'll check git tags to see if we have stored commit info
+            PREV_KSU_COMMIT=$(git rev-parse "$PREVIOUS_TAG" 2>/dev/null || echo "")
+            
+            if [ -n "$PREV_KSU_COMMIT" ]; then
+              COMMIT_RANGE="${PREV_KSU_COMMIT}..HEAD"
+              KSU_CHANGE_COUNT=$(git rev-list --count $COMMIT_RANGE 2>/dev/null || echo "0")
+            else
+              # Fallback: try to get from notes or show last 5 commits
+              KSU_CHANGE_COUNT="unknown"
+              COMMIT_RANGE=""
+            fi
+            
+            # KernelSU Changes
+            echo "### 🔧 KernelSU - ${{ matrix.variant }}" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            
+            if [ -n "$COMMIT_RANGE" ] && [ "$KSU_CHANGE_COUNT" != "0" ]; then
+              echo "**Changes:** $KSU_CHANGE_COUNT commit(s)" >> "../../$CHANGELOG_FILE"
+              echo "" >> "../../$CHANGELOG_FILE"
+              git log $COMMIT_RANGE --pretty=format:"#### %h - %s%n%n**Author:** %an <%ae>  %n**Date:** %ad%n%n%b%n----%n" --date=format:'%Y-%m-%d %H:%M:%S' >> "../../$CHANGELOG_FILE"
+            else
+              echo "**Status:** No changes detected (or first build after tag migration)" >> "../../$CHANGELOG_FILE"
+              echo "" >> "../../$CHANGELOG_FILE"
+              echo "_Current commit:_ \`${{ env.KSU_COMMIT_SHORT }}\` - ${{ env.KSU_COMMIT_MSG }}" >> "../../$CHANGELOG_FILE"
+            fi
+            echo "" >> "../../$CHANGELOG_FILE"
+            echo "" >> "../../$CHANGELOG_FILE"
+            
+            # Note: For kernel, SuSFS, and workflow - we'll show current state since we don't have previous tracking
+            # This can be enhanced in future to store previous commits
+            
+            cd ../../kernel
+            echo "### 🐧 Kernel - android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "**Current State:** \`${{ env.KERNEL_COMMIT_SHORT }}\` - ${{ env.KERNEL_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "_Note: Kernel tracking will be enhanced in future builds. Showing current commit._" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            
+            cd ../susfs4ksu
+            echo "### 🛡️ SuSFS4KSU" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "**Current State:** \`${{ env.SUSFS_COMMIT_SHORT }}\` - ${{ env.SUSFS_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            echo "_Note: SuSFS tracking will be enhanced in future builds. Showing current commit._" >> "../$CHANGELOG_FILE"
+            echo "" >> "../$CHANGELOG_FILE"
+            
+            cd ..
+            echo "### ⚙️ Build Workflow" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            echo "**Current State:** \`${{ env.WORKFLOW_COMMIT_SHORT }}\` - ${{ env.WORKFLOW_COMMIT_MSG }}" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+            echo "_Note: Workflow tracking will be enhanced in future builds. Showing current commit._" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+          fi
+          
+          # ============================================
+          # FOOTER SECTION - Links and References
+          # ============================================
+          echo "---" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "## 🔗 Component Links" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "### KernelSU (${{ matrix.variant }})" >> "$CHANGELOG_FILE"
+          echo "- **Repository:** https://github.com/${{ env.KSU_REPO }}" >> "$CHANGELOG_FILE"
+          echo "- **Branch:** ${{ env.KSU_BRANCH }}" >> "$CHANGELOG_FILE"
+          echo "- **Commit:** https://github.com/${{ env.KSU_REPO }}/commit/${{ env.KSU_COMMIT }}" >> "$CHANGELOG_FILE"
+          echo "- **Full History:** https://github.com/${{ env.KSU_REPO }}/commits/${{ env.KSU_BRANCH }}" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "### Kernel" >> "$CHANGELOG_FILE"
+          echo "- **Repository:** https://github.com/aosp-mirror/kernel_common" >> "$CHANGELOG_FILE"
+          echo "- **Branch:** android14-6.1-2025-09" >> "$CHANGELOG_FILE"
+          echo "- **Commit:** https://github.com/aosp-mirror/kernel_common/commit/${{ env.KERNEL_COMMIT }}" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "### SuSFS4KSU" >> "$CHANGELOG_FILE"
+          echo "- **Repository:** https://gitlab.com/simonpunk/susfs4ksu" >> "$CHANGELOG_FILE"
+          echo "- **Branch:** gki-android14-6.1-dev" >> "$CHANGELOG_FILE"
+          echo "- **Commit:** https://gitlab.com/simonpunk/susfs4ksu/-/commit/${{ env.SUSFS_COMMIT }}" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "### Build Workflow" >> "$CHANGELOG_FILE"
+          echo "- **Repository:** https://github.com/${{ github.repository }}" >> "$CHANGELOG_FILE"
+          echo "- **Commit:** https://github.com/${{ github.repository }}/commit/${{ env.WORKFLOW_COMMIT }}" >> "$CHANGELOG_FILE"
+          echo "- **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$CHANGELOG_FILE"
+          
+          echo "" >> "$CHANGELOG_FILE"
+          echo "---" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "_Generated automatically by GitHub Actions on $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> "$CHANGELOG_FILE"
+          
+          # Tag this build for future reference
+          cd kernel/KernelSU
+          git tag "${{ matrix.variant }}-build-${{ github.run_number }}" 2>/dev/null || true
+          
+          cd ../..
+          
+          # Display preview
+          echo "📝 Changelog preview (first 50 lines):"
+          head -n 50 "$CHANGELOG_FILE" || cat "$CHANGELOG_FILE"
+          
+          echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
+          
+          echo "✅ Comprehensive changelog generated successfully!"
 
       - name: Setup SuSFS
         if: env.ENABLE_SUSFS == 'true'
@@ -489,6 +782,7 @@ jobs:
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
             kernel/build.log
+            ${{ env.CHANGELOG_FILE }}
           retention-days: 30
 
       - name: Create Release
@@ -498,30 +792,55 @@ jobs:
           tag_name: ${{ matrix.variant }}-build-${{ github.run_number }}
           name: "${{ matrix.variant }} Build #${{ github.run_number }}"
           body: |
-            ## 🚀 GKI Kernel with ${{ matrix.variant == 'tiann' && 'KernelSU' || matrix.variant == 'kowsu' && 'KowSU' || 'MKSU' }}
+            ## 🚀 GKI Kernel with ${{ matrix.variant == 'tiann' && 'KernelSU (Official)' || matrix.variant == 'kowsu' && 'KowSU Fork' || 'MKSU Fork' }}
             
             **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
             
-            ### 📊 Build Info
+            ### 📊 Build Information
             | Property | Value |
             |----------|-------|
             | **Variant** | ${{ matrix.variant }} |
-            | **KernelSU Source** | ${{ env.KSU_REPO }} |
             | **KernelSU Version** | r${{ env.KSU_VERSION }} |
             | **SuSFS** | ${{ env.ENABLE_SUSFS == 'true' && '✅ Enabled' || '❌ Disabled' }} |
             | **Build Time** | ${{ env.BUILD_TIME }} |
             | **CCACHE Hit Rate** | ${{ env.CCACHE_HIT_RATE }} |
             | **Cache Size** | ${{ env.FINAL_CACHE_SIZE }} |
             
+            ### 🔖 Component Versions
+            | Component | Commit | Summary |
+            |-----------|--------|---------|
+            | **KernelSU** | `${{ env.KSU_COMMIT_SHORT }}` | ${{ env.KSU_COMMIT_MSG }} |
+            | **Kernel** | `${{ env.KERNEL_COMMIT_SHORT }}` | ${{ env.KERNEL_COMMIT_MSG }} |
+            | **SuSFS4KSU** | `${{ env.SUSFS_COMMIT_SHORT }}` | ${{ env.SUSFS_COMMIT_MSG }} |
+            | **Workflow** | `${{ env.WORKFLOW_COMMIT_SHORT }}` | ${{ env.WORKFLOW_COMMIT_MSG }} |
+            
+            ### 📝 Full Changelog
+            
+            📋 **[View Complete Changelog](https://github.com/${{ github.repository }}/releases/download/${{ matrix.variant }}-build-${{ github.run_number }}/CHANGELOG-${{ matrix.variant }}.md)**
+            
+            The comprehensive changelog includes detailed changes for:
+            - KernelSU (${{ matrix.variant }} variant)
+            - Linux Kernel (android14-6.1-2025-09)
+            - SuSFS4KSU (filesystem hiding framework)
+            - Build Workflow
+            
             ### 📦 Installation
             1. Flash `${{ env.KERNEL_ZIP }}` in custom recovery
             2. Reboot and enjoy!
             
             ### 🔐 Checksums
-            See attached `.sha256` and `.md5` files
+            See attached `.sha256` and `.md5` files for verification
+            
+            ### 🔗 Quick Links
+            - **KernelSU Commit:** https://github.com/${{ env.KSU_REPO }}/commit/${{ env.KSU_COMMIT }}
+            - **Kernel Commit:** https://github.com/aosp-mirror/kernel_common/commit/${{ env.KERNEL_COMMIT }}
+            - **SuSFS Commit:** https://gitlab.com/simonpunk/susfs4ksu/-/commit/${{ env.SUSFS_COMMIT }}
+            - **Build Workflow:** https://github.com/${{ github.repository }}/commit/${{ env.WORKFLOW_COMMIT }}
+            - **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           files: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.KERNEL_ZIP }}.sha256
             ${{ env.KERNEL_ZIP }}.md5
+            ${{ env.CHANGELOG_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

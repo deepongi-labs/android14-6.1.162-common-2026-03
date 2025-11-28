@@ -31,6 +31,7 @@ env:
   CLANG_BIN: /mnt/Android/clang-22/bin
   ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
   ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
+  CCACHE_DIR: /mnt/ccache/.ccache
   MAKE_JOBS: 8
 
 jobs:
@@ -151,6 +152,8 @@ jobs:
 
       - name: Show CCACHE Status
         run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          echo "📂 CCACHE directory: $CCACHE_DIR"
           echo "📈 CCACHE stats BEFORE build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
@@ -409,7 +412,9 @@ jobs:
           export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CC="ccache clang"
+          export CXX="ccache clang++"
           
           START_TIME=$SECONDS
           
@@ -419,7 +424,8 @@ jobs:
           fi
           
           echo "🏗️ Building kernel for ${{ matrix.variant }}..."
-          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out 2>&1 | tee build.log
+          echo "📂 Using CCACHE at: $CCACHE_DIR"
+          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out CC="ccache clang" 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           BUILD_MINS=$((BUILD_TIME / 60))
@@ -428,6 +434,7 @@ jobs:
 
       - name: Check CCACHE Performance
         run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           echo "📈 CCACHE stats AFTER build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
           

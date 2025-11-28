@@ -738,43 +738,41 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # Get full ccache stats
-          CCACHE_OUTPUT=$(ccache -s)
-          echo "$CCACHE_OUTPUT"
+          ccache -s
           
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 Extracting Performance Metrics..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Extract cache size (ccache 4.12.1 format: "Cache size (GiB): 2.5 / 20.0")
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | awk '{print $4, $5}' || echo "0 GB")
+          # Save ccache output to variable
+          CCACHE_OUTPUT=$(ccache -s)
           
-          # Extract hit rate for ccache 4.12.1
-          # Format: "  Hits:             1668 / 2434 (68.52 %)"
-          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk -F'[()]' '{print $2}' | awk '{print $1}')
+          # Extract cache size from the last line that mentions "cache size"
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{print $4, $5, $6, $7}' | sed 's/^ *//;s/ *$//')
           
-          # Fallback: if primary method fails, try alternative extraction
+          # Extract hit rate - your format has TWO "Hits:" lines, we want the FIRST one
+          # Format: "  Hits:            70522 /  71006 (99.32%)"
+          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | grep -oE '\([0-9]+\.[0-9]+%\)' | tr -d '()')
+          
+          # If extraction failed, try alternative method
           if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-            echo "⚠️  Primary extraction failed, trying fallback method..."
+            echo "⚠️  Primary extraction failed, trying calculation method..."
             
-            # Fallback: calculate from hits and total
-            HITS=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk '{print $2}')
-            TOTAL=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk '{print $4}')
+            # Get hits and total from first "Hits:" line
+            HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $2}')
+            TOTAL=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $4}')
             
             if [ -n "$HITS" ] && [ -n "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
-              HIT_RATE=$(awk "BEGIN {printf \"%.2f\", ($HITS / $TOTAL) * 100}")
-              echo "✅ Calculated from hits/total: $HIT_RATE%"
+              HIT_RATE=$(awk "BEGIN {printf \"%.2f%%\", ($HITS / $TOTAL) * 100}")
+              echo "✅ Calculated: $HIT_RATE"
             else
               HIT_RATE="N/A"
-              echo "❌ Could not calculate hit rate"
+              echo "❌ Could not extract hit rate"
+              echo "   HITS=$HITS, TOTAL=$TOTAL"
             fi
           else
-            echo "✅ Hit rate extracted successfully: $HIT_RATE%"
-          fi
-          
-          # Add % sign if not present
-          if [[ "$HIT_RATE" != *"%"* ]] && [ "$HIT_RATE" != "N/A" ]; then
-            HIT_RATE="${HIT_RATE}%"
+            echo "✅ Hit rate extracted: $HIT_RATE"
           fi
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -784,7 +782,7 @@ jobs:
           echo "🎯 Hit Rate: $HIT_RATE"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Export to environment variables
+          # Export to environment
           echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
 

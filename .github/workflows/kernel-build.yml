@@ -788,9 +788,26 @@ jobs:
 
       - name: Package Kernel
         run: |
-          # Clone AnyKernel3
-          git clone --depth=1 --branch=KernelSU \
+          # Determine which AnyKernel3 branch to use based on variant
+          case "${{ matrix.variant }}" in
+            "tiann")
+              AK3_BRANCH="KernelSU"
+              echo "📦 Using AnyKernel3 branch: KernelSU (for tiann variant)"
+              ;;
+            "kowsu")
+              AK3_BRANCH="KowSU"
+              echo "📦 Using AnyKernel3 branch: KowSU (for kowsu variant)"
+              ;;
+            "mksu")
+              AK3_BRANCH="MKSU"
+              echo "📦 Using AnyKernel3 branch: MKSU (for mksu variant)"
+              ;;
+          esac
+          
+          # Clone the appropriate AnyKernel3 branch
+          git clone --depth=1 --branch=$AK3_BRANCH \
             https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          
           cd AnyKernel3
           rm -rf .git .github
           
@@ -813,6 +830,9 @@ jobs:
           
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
+          
+          echo "✅ Packaged kernel: $ZIP_NAME"
+          echo "📋 Using AnyKernel3 branch: $AK3_BRANCH"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Upload Artifacts

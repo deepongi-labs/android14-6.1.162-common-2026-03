@@ -1,4 +1,5 @@
 name: Build GKI Kernel with KernelSU Variants
+
 on:
   workflow_dispatch:
     inputs:
@@ -421,15 +422,13 @@ jobs:
             echo "**Previous Build:** \`$PREVIOUS_TAG\`" >> "../../$CHANGELOG_FILE"
             echo "" >> "../../$CHANGELOG_FILE"
             
-            # Get previous commit from last build metadata (we'll store this in a file)
-            # For now, we'll check git tags to see if we have stored commit info
+            # Get previous commit from last build metadata
             PREV_KSU_COMMIT=$(git rev-parse "$PREVIOUS_TAG" 2>/dev/null || echo "")
             
             if [ -n "$PREV_KSU_COMMIT" ]; then
               COMMIT_RANGE="${PREV_KSU_COMMIT}..HEAD"
               KSU_CHANGE_COUNT=$(git rev-list --count $COMMIT_RANGE 2>/dev/null || echo "0")
             else
-              # Fallback: try to get from notes or show last 5 commits
               KSU_CHANGE_COUNT="unknown"
               COMMIT_RANGE=""
             fi
@@ -451,7 +450,6 @@ jobs:
             echo "" >> "../../$CHANGELOG_FILE"
             
             # Note: For kernel, SuSFS, and workflow - we'll show current state since we don't have previous tracking
-            # This can be enhanced in future to store previous commits
             
             cd ../../kernel
             echo "### 🐧 Kernel - android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
@@ -873,7 +871,7 @@ jobs:
             # Extract version info
             KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
             SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-tiann.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-tiann.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
             
             cat >> RELEASE_NOTES.md << TIANN_INFO
           **KernelSU Version:** $KSU_VERSION  
@@ -899,7 +897,7 @@ jobs:
             
             KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
             SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-kowsu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-kowsu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
             
             cat >> RELEASE_NOTES.md << KOWSU_INFO
           **KernelSU Version:** $KSU_VERSION  
@@ -925,7 +923,7 @@ jobs:
             
             KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
             SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-mksu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '`')
+            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-mksu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
             
             cat >> RELEASE_NOTES.md << MKSU_INFO
           **KernelSU Version:** $KSU_VERSION  
@@ -980,12 +978,11 @@ jobs:
   notify:
     needs: [create_release]
     runs-on: [self-hosted, Linux, X64]
-    if: always()  # Run even if previous jobs fail
+    if: always()
     steps:
       - name: Send Success Notification
         if: ${{ needs.create_release.result == 'success' }}
         run: |
-          # Determine which variants were built
           VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
           if [ "$VARIANT_INPUT" = "all" ]; then
             VARIANTS="tiann, kowsu, mksu"
@@ -993,17 +990,15 @@ jobs:
             VARIANTS="$VARIANT_INPUT"
           fi
           
-          # Create success message
           MESSAGE="✅ *Kernel Build #${{ github.run_number }} completed successfully!*
-
-📦 *Variants:* ${VARIANTS}
-⏱️ *Build Time:* Started at ${{ github.event.repository.updated_at }}
-💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
-
-🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-📊 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           
-          # Send to Telegram
+          📦 *Variants:* ${VARIANTS}
+          ⏱️ *Build Time:* Started at ${{ github.event.repository.updated_at }}
+          💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
+          
+          🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
+          📊 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$MESSAGE" \
@@ -1013,7 +1008,6 @@ jobs:
       - name: Send Failure Notification
         if: ${{ needs.create_release.result == 'failure' || needs.build.result == 'failure' }}
         run: |
-          # Determine which variants were built
           VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
           if [ "$VARIANT_INPUT" = "all" ]; then
             VARIANTS="tiann, kowsu, mksu"
@@ -1021,25 +1015,22 @@ jobs:
             VARIANTS="$VARIANT_INPUT"
           fi
           
-          # Determine what failed
           if [ "${{ needs.build.result }}" = "failure" ]; then
             FAILED_STAGE="Build"
           else
             FAILED_STAGE="Release Creation"
           fi
           
-          # Create failure message
           MESSAGE="❌ *Kernel Build #${{ github.run_number }} FAILED!*
-
-📦 *Variants:* ${VARIANTS}
-⚠️ *Failed Stage:* ${FAILED_STAGE}
-💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
-
-🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-
-Please check the logs for details."
           
-          # Send to Telegram
+          📦 *Variants:* ${VARIANTS}
+          ⚠️ *Failed Stage:* ${FAILED_STAGE}
+          💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
+          
+          🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          Please check the logs for details."
+          
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$MESSAGE" \
@@ -1050,8 +1041,8 @@ Please check the logs for details."
         if: ${{ needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled' }}
         run: |
           MESSAGE="⚠️ *Kernel Build #${{ github.run_number }} was cancelled*
-
-🔗 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          🔗 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \

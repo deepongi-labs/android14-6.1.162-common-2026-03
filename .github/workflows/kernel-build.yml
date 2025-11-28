@@ -739,10 +739,28 @@ jobs:
           echo "📈 CCACHE stats AFTER build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
           
-          FINAL_CACHE_SIZE=$(ccache -s | grep "Cache size" | awk '{print $NF}' || echo "0")
-          HIT_RATE=$(ccache -s | grep -i "hit rate" | head -1 | awk '{print $NF}' || echo "N/A")
+          # Extract cache size
+          FINAL_CACHE_SIZE=$(ccache -s | grep -i "cache size" | awk '{print $NF}' || echo "0")
+          
+          # Extract hit rate - try multiple formats
+          HIT_RATE=$(ccache -s | grep -iE "(hit rate|cache hit rate)" | head -1 | grep -oE '[0-9]+(\.[0-9]+)?%' || echo "N/A")
+          
+          # If still empty, try alternative format
+          if [ "$HIT_RATE" = "N/A" ]; then
+            HITS=$(ccache -s | grep -i "cache hit (direct)" | awk '{print $4}' || echo "0")
+            MISSES=$(ccache -s | grep -i "cache miss" | awk '{print $3}' || echo "0")
+            if [ "$HITS" != "0" ] || [ "$MISSES" != "0" ]; then
+              TOTAL=$((HITS + MISSES))
+              if [ "$TOTAL" -gt 0 ]; then
+                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($HITS / $TOTAL) * 100}")
+              fi
+            fi
+          fi
+          
           echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          echo "📊 Cache Size: $FINAL_CACHE_SIZE"
+          echo "📊 Hit Rate: $HIT_RATE"
 
       - name: Package Kernel
         run: |
@@ -794,7 +812,7 @@ jobs:
           body: |
             ## 🚀 GKI Kernel with ${{ matrix.variant == 'tiann' && 'KernelSU (Official)' || matrix.variant == 'kowsu' && 'KowSU Fork' || 'MKSU Fork' }}
             
-            **Build #${{ github.run_number }}** • $(date -u +%Y-%m-%d)
+            **Build #${{ github.run_number }}** • ${{ env.KSU_COMMIT_DATE }}
             
             ### 📊 Build Information
             | Property | Value |

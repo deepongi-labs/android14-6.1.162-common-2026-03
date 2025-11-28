@@ -976,3 +976,84 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    needs: [create_release]
+    runs-on: [self-hosted, Linux, X64]
+    if: always()  # Run even if previous jobs fail
+    steps:
+      - name: Send Success Notification
+        if: ${{ needs.create_release.result == 'success' }}
+        run: |
+          # Determine which variants were built
+          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
+          if [ "$VARIANT_INPUT" = "all" ]; then
+            VARIANTS="tiann, kowsu, mksu"
+          else
+            VARIANTS="$VARIANT_INPUT"
+          fi
+          
+          # Create success message
+          MESSAGE="✅ *Kernel Build #${{ github.run_number }} completed successfully!*
+
+📦 *Variants:* ${VARIANTS}
+⏱️ *Build Time:* Started at ${{ github.event.repository.updated_at }}
+💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
+
+🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
+📊 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          # Send to Telegram
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
+
+      - name: Send Failure Notification
+        if: ${{ needs.create_release.result == 'failure' || needs.build.result == 'failure' }}
+        run: |
+          # Determine which variants were built
+          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
+          if [ "$VARIANT_INPUT" = "all" ]; then
+            VARIANTS="tiann, kowsu, mksu"
+          else
+            VARIANTS="$VARIANT_INPUT"
+          fi
+          
+          # Determine what failed
+          if [ "${{ needs.build.result }}" = "failure" ]; then
+            FAILED_STAGE="Build"
+          else
+            FAILED_STAGE="Release Creation"
+          fi
+          
+          # Create failure message
+          MESSAGE="❌ *Kernel Build #${{ github.run_number }} FAILED!*
+
+📦 *Variants:* ${VARIANTS}
+⚠️ *Failed Stage:* ${FAILED_STAGE}
+💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
+
+🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+Please check the logs for details."
+          
+          # Send to Telegram
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true
+
+      - name: Send Cancellation Notification
+        if: ${{ needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled' }}
+        run: |
+          MESSAGE="⚠️ *Kernel Build #${{ github.run_number }} was cancelled*
+
+🔗 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$MESSAGE" \
+            -d parse_mode="Markdown"

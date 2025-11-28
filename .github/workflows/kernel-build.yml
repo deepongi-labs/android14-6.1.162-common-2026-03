@@ -735,30 +735,58 @@ jobs:
         run: |
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           echo "📈 CCACHE stats AFTER build:"
-          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Extract cache size
-          FINAL_CACHE_SIZE=$(ccache -s | grep -i "cache size" | awk '{print $NF}' || echo "0")
+          # Get full ccache stats
+          CCACHE_OUTPUT=$(ccache -s)
+          echo "$CCACHE_OUTPUT"
           
-          # Extract hit rate - try multiple formats
-          HIT_RATE=$(ccache -s | grep -iE "(hit rate|cache hit rate)" | head -1 | grep -oE '[0-9]+(\.[0-9]+)?%' || echo "N/A")
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Extracting Performance Metrics..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # If still empty, try alternative format
-          if [ "$HIT_RATE" = "N/A" ]; then
-            HITS=$(ccache -s | grep -i "cache hit (direct)" | awk '{print $4}' || echo "0")
-            MISSES=$(ccache -s | grep -i "cache miss" | awk '{print $3}' || echo "0")
-            if [ "$HITS" != "0" ] || [ "$MISSES" != "0" ]; then
-              TOTAL=$((HITS + MISSES))
-              if [ "$TOTAL" -gt 0 ]; then
-                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($HITS / $TOTAL) * 100}")
-              fi
+          # Extract cache size (ccache 4.12.1 format: "Cache size (GiB): 2.5 / 20.0")
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | awk '{print $4, $5}' || echo "0 GB")
+          
+          # Extract hit rate for ccache 4.12.1
+          # Format: "  Hits:             1668 / 2434 (68.52 %)"
+          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk -F'[()]' '{print $2}' | awk '{print $1}')
+          
+          # Fallback: if primary method fails, try alternative extraction
+          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
+            echo "⚠️  Primary extraction failed, trying fallback method..."
+            
+            # Fallback: calculate from hits and total
+            HITS=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk '{print $2}')
+            TOTAL=$(echo "$CCACHE_OUTPUT" | grep "^\s*Hits:" | head -1 | awk '{print $4}')
+            
+            if [ -n "$HITS" ] && [ -n "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+              HIT_RATE=$(awk "BEGIN {printf \"%.2f\", ($HITS / $TOTAL) * 100}")
+              echo "✅ Calculated from hits/total: $HIT_RATE%"
+            else
+              HIT_RATE="N/A"
+              echo "❌ Could not calculate hit rate"
             fi
+          else
+            echo "✅ Hit rate extracted successfully: $HIT_RATE%"
           fi
           
+          # Add % sign if not present
+          if [[ "$HIT_RATE" != *"%"* ]] && [ "$HIT_RATE" != "N/A" ]; then
+            HIT_RATE="${HIT_RATE}%"
+          fi
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Final Results:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "💾 Cache Size: $FINAL_CACHE_SIZE"
+          echo "🎯 Hit Rate: $HIT_RATE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Export to environment variables
           echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          echo "📊 Cache Size: $FINAL_CACHE_SIZE"
-          echo "📊 Hit Rate: $HIT_RATE"
 
       - name: Package Kernel
         run: |

@@ -380,9 +380,17 @@ jobs:
               ;;
             "kowsu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "mksu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
           esac
           

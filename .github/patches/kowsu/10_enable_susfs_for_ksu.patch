@@ -1,26 +1,27 @@
-From c395e4e6e5c67cc644d05e894b4c038d59623a6d Mon Sep 17 00:00:00 2001
+From aeb0d70a529def11f902a8b9dce55c5940937df0 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Fri, 28 Nov 2025 09:40:13 +0000
+Date: Fri, 28 Nov 2025 15:19:58 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
- kernel/Kconfig           |  91 +++++++++++++++++++++++-
+ kernel/Kconfig           |  91 ++++++++++++++++++++++-
  kernel/Makefile          |  10 ++-
- kernel/allowlist.c       |   4 ++
+ kernel/allowlist.c       |   4 +
+ kernel/apk_sign.c        |   2 +-
  kernel/app_profile.c     |   6 ++
  kernel/kernel_umount.c   |   3 +
- kernel/ksu.c             |  10 +++
- kernel/ksud.c            |  52 ++++++++++++++
+ kernel/ksu.c             |  16 +++-
+ kernel/ksud.c            |  52 +++++++++++++
  kernel/ksud.h            |  19 +++++
  kernel/manager.h         |  14 ++++
  kernel/selinux/rules.c   |   9 +++
- kernel/selinux/selinux.c |  93 +++++++++++++++++++++++++
+ kernel/selinux/selinux.c |  93 +++++++++++++++++++++++
  kernel/selinux/selinux.h |  13 ++++
- kernel/setuid_hook.c     | 119 +++++++++++++++++++++++++++++++
- kernel/sucompat.c        | 124 +++++++++++++++++++++++++++++++++
+ kernel/setuid_hook.c     | 119 +++++++++++++++++++++++++++++
+ kernel/sucompat.c        | 124 +++++++++++++++++++++++++++++++
  kernel/sucompat.h        |  10 ++-
- kernel/supercalls.c      | 146 +++++++++++++++++++++++++++++++++++++++
- 16 files changed, 718 insertions(+), 5 deletions(-)
+ kernel/supercalls.c      | 156 ++++++++++++++++++++++++++++++++++++++-
+ 17 files changed, 731 insertions(+), 10 deletions(-)
 
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
@@ -180,6 +181,17 @@ index b163eb3f..0fa5f8de 100644
      }
  
      return result;
+diff --git a/kernel/apk_sign.c b/kernel/apk_sign.c
+index 71a7f1bd..d41141ea 100644
+--- a/kernel/apk_sign.c
++++ b/kernel/apk_sign.c
+@@ -319,4 +319,4 @@ bool is_manager_apk(char *path)
+     || check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549") // backslashxx/KernelSU
+     || check_v2_signature(path, 384, "7e0c6d7278a3bb8e364e0fcba95afaf3666cf5ff3c245a3b63c8833bd0445cc4")  // 5ec1cff/KernelSU
+     );
+-}
+\ No newline at end of file
++}
 diff --git a/kernel/app_profile.c b/kernel/app_profile.c
 index ad62a2ff..0428ee1c 100644
 --- a/kernel/app_profile.c
@@ -237,10 +249,28 @@ index 35be022f..cbb5ddfd 100644
      pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
  
 diff --git a/kernel/ksu.c b/kernel/ksu.c
-index 8205e104..a9c4c74f 100644
+index 8205e104..13af846d 100644
 --- a/kernel/ksu.c
 +++ b/kernel/ksu.c
-@@ -35,13 +35,21 @@ int __init kernelsu_init(void)
+@@ -4,12 +4,17 @@
+ #include <linux/module.h>
+ #include <linux/workqueue.h>
+ #include <linux/moduleparam.h>
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs.h>
++#endif // #ifdef CONFIG_KSU_SUSFS
+ 
+ #include "allowlist.h"
+ #include "feature.h"
+ #include "klog.h" // IWYU pragma: keep
+ #include "throne_tracker.h"
++#ifndef CONFIG_KSU_SUSFS
+ #include "syscall_hook_manager.h"
++#endif // #ifndef CONFIG_KSU_SUSFS
+ #include "ksud.h"
+ #include "supercalls.h"
+ 
+@@ -35,13 +40,21 @@ int __init kernelsu_init(void)
  
      ksu_supercalls_init();
  
@@ -262,7 +292,7 @@ index 8205e104..a9c4c74f 100644
  
  #ifdef MODULE
  #ifndef CONFIG_KSU_DEBUG
-@@ -60,9 +68,11 @@ void kernelsu_exit(void)
+@@ -60,9 +73,11 @@ void kernelsu_exit(void)
  
      ksu_observer_exit();
  
@@ -274,6 +304,11 @@ index 8205e104..a9c4c74f 100644
  
      ksu_supercalls_exit();
  
+@@ -80,4 +95,3 @@ MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+ #else
+ MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+ #endif
+-
 diff --git a/kernel/ksud.c b/kernel/ksud.c
 index e1f17319..9ad6823c 100644
 --- a/kernel/ksud.c
@@ -973,10 +1008,21 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index b5054509..8ec5153d 100644
+index b5054509..5ec2e194 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
-@@ -25,7 +25,13 @@
+@@ -11,6 +11,10 @@
+ #include <linux/task_work.h>
+ #include <linux/uaccess.h>
+ #include <linux/version.h>
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/namei.h>
++#include <linux/susfs.h>
++#endif // #ifdef CONFIG_KSU_SUSFS
+ #include <linux/pid.h>
+ 
+ #include "supercalls.h"
+@@ -25,7 +29,13 @@
  #include "selinux/selinux.h"
  #include "objsec.h"
  #include "file_wrapper.h"
@@ -990,7 +1036,7 @@ index b5054509..8ec5153d 100644
  
  // Permission check functions
  bool only_manager(void)
-@@ -109,6 +115,9 @@ static int do_report_event(void __user *arg)
+@@ -109,6 +119,9 @@ static int do_report_event(void __user *arg)
              boot_complete_lock = true;
              pr_info("boot_complete triggered\n");
              on_boot_completed();
@@ -1000,7 +1046,7 @@ index b5054509..8ec5153d 100644
          }
          break;
      }
-@@ -387,7 +396,9 @@ put_orig_file:
+@@ -387,7 +400,9 @@ put_orig_file:
  static int do_manage_mark(void __user *arg)
  {
      struct ksu_manage_mark_cmd cmd;
@@ -1010,7 +1056,7 @@ index b5054509..8ec5153d 100644
  
      if (copy_from_user(&cmd, arg, sizeof(cmd))) {
          pr_err("manage_mark: copy_from_user failed\n");
-@@ -396,6 +407,7 @@ static int do_manage_mark(void __user *arg)
+@@ -396,6 +411,7 @@ static int do_manage_mark(void __user *arg)
  
      switch (cmd.operation) {
      case KSU_MARK_GET: {
@@ -1018,7 +1064,7 @@ index b5054509..8ec5153d 100644
          // Get task mark status
          ret = ksu_get_task_mark(cmd.pid);
          if (ret < 0) {
-@@ -404,8 +416,13 @@ static int do_manage_mark(void __user *arg)
+@@ -404,8 +420,13 @@ static int do_manage_mark(void __user *arg)
          }
          cmd.result = (u32)ret;
          break;
@@ -1032,7 +1078,7 @@ index b5054509..8ec5153d 100644
          if (cmd.pid == 0) {
              ksu_mark_all_process();
          } else {
-@@ -416,9 +433,15 @@ static int do_manage_mark(void __user *arg)
+@@ -416,9 +437,15 @@ static int do_manage_mark(void __user *arg)
                  return ret;
              }
          }
@@ -1048,7 +1094,7 @@ index b5054509..8ec5153d 100644
          if (cmd.pid == 0) {
              ksu_unmark_all_process();
          } else {
-@@ -429,11 +452,20 @@ static int do_manage_mark(void __user *arg)
+@@ -429,11 +456,20 @@ static int do_manage_mark(void __user *arg)
                  return ret;
              }
          }
@@ -1069,15 +1115,31 @@ index b5054509..8ec5153d 100644
          break;
      }
      default: {
-@@ -707,6 +739,7 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
-     return 0;
+@@ -653,12 +689,13 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
+     kfree(tw);
  }
  
 +#ifndef CONFIG_KSU_SUSFS
- static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
+ // downstream: make sure to pass arg as reference, this can allow us to extend things.
+ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
  {
-     struct pt_regs *real_regs = PT_REAL_REGS(regs);
-@@ -723,7 +756,114 @@ static struct kprobe reboot_kp = {
+ 
+     if (magic1 != KSU_INSTALL_MAGIC1)
+-    	return 0;
++        return 0;
+ 
+     pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
+ 
+@@ -698,7 +735,7 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
+ 
+         if (cmd == ksu_get_manager_uid()) {
+             if (copy_to_user((void __user *)*arg, &reply, sizeof(reply)))
+-            	pr_info("sys_reboot: reply fail\n");
++                pr_info("sys_reboot: reply fail\n");
+         }
+ 
+         return 0;
+@@ -723,7 +760,114 @@ static struct kprobe reboot_kp = {
      .symbol_name = REBOOT_SYMBOL,
      .pre_handler = reboot_handler_pre,
  };
@@ -1192,7 +1254,7 @@ index b5054509..8ec5153d 100644
  
  void ksu_supercalls_init(void)
  {
-@@ -734,16 +874,22 @@ void ksu_supercalls_init(void)
+@@ -734,16 +878,22 @@ void ksu_supercalls_init(void)
          pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
      }
  
@@ -1215,6 +1277,13 @@ index b5054509..8ec5153d 100644
  }
  
  // IOCTL dispatcher
+@@ -816,4 +966,4 @@ int ksu_install_fd(void)
+     pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
+ 
+     return fd;
+-}
++}
+\ No newline at end of file
 -- 
 2.52.0
 

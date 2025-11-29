@@ -23,6 +23,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_telegram:
+        description: 'Enable Telegram notifications'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -1007,7 +1012,7 @@ jobs:
     if: always()
     steps:
       - name: Send Success Notification
-        if: ${{ needs.create_release.result == 'success' }}
+        if: ${{ needs.create_release.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
         run: |
           VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
           if [ "$VARIANT_INPUT" = "all" ]; then
@@ -1032,7 +1037,7 @@ jobs:
             -d disable_web_page_preview=true
 
       - name: Send Failure Notification
-        if: ${{ needs.create_release.result == 'failure' || needs.build.result == 'failure' }}
+        if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
         run: |
           VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
           if [ "$VARIANT_INPUT" = "all" ]; then
@@ -1064,7 +1069,7 @@ jobs:
             -d disable_web_page_preview=true
 
       - name: Send Cancellation Notification
-        if: ${{ needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled' }}
+        if: ${{ (needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled') && github.event.inputs.enable_telegram == 'true' }}
         run: |
           MESSAGE="⚠️ *Kernel Build #${{ github.run_number }} was cancelled*
           

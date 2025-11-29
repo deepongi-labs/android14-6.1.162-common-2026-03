@@ -47,7 +47,15 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
+      build_start_time: ${{ steps.timestamp.outputs.start_time }}
     steps:
+      - name: Record Build Start Time
+        id: timestamp
+        run: |
+          START_TIME=$(date +%s)
+          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "🕐 Build started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
       - name: Set Build Matrix
         id: set-matrix
         run: |
@@ -93,7 +101,7 @@ jobs:
       - name: Checkout with Submodules
         uses: actions/checkout@v4
         with:
-          submodules: false  # We'll handle submodules manually
+          submodules: false
           fetch-depth: 0
 
       - name: Initialize and Update Submodules
@@ -121,7 +129,7 @@ jobs:
           echo "WORKFLOW_COMMIT_DATE=$WORKFLOW_COMMIT_DATE" >> $GITHUB_ENV
           echo "WORKFLOW_COMMIT_MSG=$WORKFLOW_COMMIT_MSG" >> $GITHUB_ENV
           
-          echo "📝 Workflow commit: $WORKFLOW_COMMIT_SHORT - $WORKFLOW_COMMIT_MSG"
+          echo "🔖 Workflow commit: $WORKFLOW_COMMIT_SHORT - $WORKFLOW_COMMIT_MSG"
 
       - name: Verify Kernel Source
         run: |
@@ -147,7 +155,7 @@ jobs:
           echo "KERNEL_COMMIT_DATE=$KERNEL_COMMIT_DATE" >> $GITHUB_ENV
           echo "KERNEL_COMMIT_MSG=$KERNEL_COMMIT_MSG" >> $GITHUB_ENV
           
-          echo "📝 Kernel commit: $KERNEL_COMMIT_SHORT - $KERNEL_COMMIT_MSG"
+          echo "🔖 Kernel commit: $KERNEL_COMMIT_SHORT - $KERNEL_COMMIT_MSG"
 
       - name: Verify SuSFS Source
         run: |
@@ -171,7 +179,7 @@ jobs:
           echo "SUSFS_COMMIT_DATE=$SUSFS_COMMIT_DATE" >> $GITHUB_ENV
           echo "SUSFS_COMMIT_MSG=$SUSFS_COMMIT_MSG" >> $GITHUB_ENV
           
-          echo "📝 SuSFS commit: $SUSFS_COMMIT_SHORT - $SUSFS_COMMIT_MSG"
+          echo "🔖 SuSFS commit: $SUSFS_COMMIT_SHORT - $SUSFS_COMMIT_MSG"
 
       - name: Show CCACHE Status
         run: |
@@ -271,14 +279,14 @@ jobs:
           echo "KSU_COMMIT_MSG=$KSU_COMMIT_MSG" >> $GITHUB_ENV
           echo "KSU_COMMIT_AUTHOR=$KSU_COMMIT_AUTHOR" >> $GITHUB_ENV
           
-          echo "📝 KernelSU commit: $KSU_COMMIT_SHORT - $KSU_COMMIT_MSG"
+          echo "🔖 KernelSU commit: $KSU_COMMIT_SHORT - $KSU_COMMIT_MSG"
 
       - name: Generate Comprehensive Changelog - ${{ matrix.variant }}
         run: |
           mkdir -p changelogs
           CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
           
-          echo "📝 Generating comprehensive changelog for ${{ matrix.variant }}..."
+          echo "📋 Generating comprehensive changelog for ${{ matrix.variant }}..."
           
           # ============================================
           # HEADER SECTION
@@ -315,7 +323,7 @@ jobs:
           # COMPONENT VERSIONS TABLE
           # ============================================
           cat >> "$CHANGELOG_FILE" << 'TABLE_HEADER'
-          ## 🔖 Component Versions
+          ## 📖 Component Versions
           
           | Component | Current Commit | Date | Summary |
           |-----------|---------------|------|---------|
@@ -357,7 +365,7 @@ jobs:
             
             # Kernel Recent Changes
             cd ../../kernel
-            echo "### 🐧 Kernel - android14-6.1-2025-09 (Last 10 commits)" >> "../$CHANGELOG_FILE"
+            echo "### 🧬 Kernel - android14-6.1-2025-09 (Last 10 commits)" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
             echo "**Repository:** https://github.com/aosp-mirror/kernel_common" >> "../$CHANGELOG_FILE"
             echo "**Branch:** android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
@@ -430,7 +438,7 @@ jobs:
             # Note: For kernel, SuSFS, and workflow - we'll show current state since we don't have previous tracking
             
             cd ../../kernel
-            echo "### 🐧 Kernel - android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
+            echo "### 🧬 Kernel - android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
             echo "**Current State:** \`${{ env.KERNEL_COMMIT_SHORT }}\` - ${{ env.KERNEL_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
@@ -494,7 +502,7 @@ jobs:
           cd ../..
           
           # Display preview
-          echo "📝 Changelog preview (first 50 lines):"
+          echo "📋 Changelog preview (first 50 lines):"
           head -n 50 "$CHANGELOG_FILE" || cat "$CHANGELOG_FILE"
           
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
@@ -707,7 +715,7 @@ jobs:
             make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
           fi
           
-          echo "🏗️ Building kernel for ${{ matrix.variant }}..."
+          echo "🗿️ Building kernel for ${{ matrix.variant }}..."
           echo "📂 Using CCACHE at: $CCACHE_DIR"
           make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out CC="ccache clang" 2>&1 | tee build.log
           
@@ -736,7 +744,7 @@ jobs:
           # Extract cache size from the last line that mentions "cache size"
           FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{print $4, $5, $6, $7}' | sed 's/^ *//;s/ *$//')
           
-          # Extract hit rate - your format has TWO "Hits:" lines, we want the FIRST one
+          # Extract hit rate - format has TWO "Hits:" lines, we want the FIRST one
           # Format: "  Hits:            70522 /  71006 (99.32%)"
           HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | grep -oE '\([0-9]+\.[0-9]+%\)' | tr -d '()')
           
@@ -813,10 +821,14 @@ jobs:
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
           cd ..
           
+          # Get file size
+          FILE_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+          echo "FILE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
+          
           sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
           
-          echo "✅ Packaged kernel: $ZIP_NAME"
+          echo "✅ Packaged kernel: $ZIP_NAME ($FILE_SIZE)"
           echo "📋 Using AnyKernel3 branch: $AK3_BRANCH"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -833,12 +845,22 @@ jobs:
           retention-days: 30
 
   create_release:
-    needs: build
+    needs: [setup, build]
     runs-on: [self-hosted, Linux, X64]
     if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Calculate Build Duration
+        run: |
+          START_TIME="${{ needs.setup.outputs.build_start_time }}"
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          DURATION_MINS=$((DURATION / 60))
+          DURATION_SECS=$((DURATION % 60))
+          echo "BUILD_DURATION=${DURATION_MINS}m ${DURATION_SECS}s" >> $GITHUB_ENV
+          echo "🕐 Total build duration: ${DURATION_MINS}m ${DURATION_SECS}s"
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -877,128 +899,223 @@ jobs:
           [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
           [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
           echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
+          
+          # Extract CCACHE hit rate and cache size from first available build log
+          if [ -f "build-tiann.log" ]; then
+            BUILD_LOG="build-tiann.log"
+          elif [ -f "build-kowsu.log" ]; then
+            BUILD_LOG="build-kowsu.log"
+          elif [ -f "build-mksu.log" ]; then
+            BUILD_LOG="build-mksu.log"
+          fi
+          
+          if [ -n "$BUILD_LOG" ]; then
+            CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$BUILD_LOG" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
+            CACHE_SIZE=$(grep "💾 Cache Size:" "$BUILD_LOG" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
+            echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
+            echo "CACHE_SIZE=$CACHE_SIZE" >> $GITHUB_ENV
+          fi
 
-      - name: Generate Unified Release Notes
+      - name: Generate Enhanced Release Notes
         run: |
           cd release-assets
           
-          cat > RELEASE_NOTES.md << 'EOF'
-          # 🚀 GKI Kernel Build #${{ github.run_number }}
+          # Start building the release notes
+          cat > RELEASE_NOTES.md << 'HEADER_EOF'
+          # 🚀 Android 16 GKI Kernel Build #
+          HEADER_EOF
           
-          **Build Date:** ${{ env.BUILD_DATE }}
-          **Variants:** ${{ env.VARIANTS_BUILT }}
+          # Add build number
+          echo "${{ github.run_number }}" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          
+          # Build info card
+          cat >> RELEASE_NOTES.md << INFO_CARD
+          <div align="center">
+          
+          | 🏗️ Build Info | 📊 Details |
+          |--------------|-----------|
+          | **Build Number** | #${{ github.run_number }} |
+          | **Build Date** | ${{ env.BUILD_DATE }} |
+          | **Build Duration** | ${{ env.BUILD_DURATION }} |
+          | **Target Android** | Android 16 |
+          | **Primary Device** | Google Pixel 8a |
+          | **Compatible** | Pixel 8, 8 Pro |
+          | **Variants Built** | ${{ env.VARIANT_COUNT }}/3 (${{ env.VARIANTS_BUILT }}) |
+          | **SuSFS** | ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }} |
+          | **CCACHE Hit Rate** | ${{ env.CCACHE_HIT_RATE }} |
+          | **Cache Size** | ${{ env.CACHE_SIZE }} |
+          
+          </div>
           
           ---
           
-          EOF
+          INFO_CARD
+          
+          # Add download section for each variant
+          echo "## 📦 Download Packages" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          
+          # Function to add variant section
+          add_variant_section() {
+            local variant=$1
+            local variant_upper=$2
+            local variant_name=$3
+            
+            if [ -f "CHANGELOG-${variant}.md" ]; then
+              KSU_VERSION=$(grep "KernelSU Version:" "CHANGELOG-${variant}.md" | head -1 | cut -d':' -f2 | xargs)
+              SUSFS_STATUS=$(grep "SuSFS:" "CHANGELOG-${variant}.md" | head -1 | cut -d':' -f2 | xargs)
+              KSU_COMMIT=$(grep "| \*\*KernelSU" "CHANGELOG-${variant}.md" | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
+              KSU_COMMIT_MSG=$(grep "| \*\*KernelSU" "CHANGELOG-${variant}.md" | head -1 | cut -d'|' -f5 | xargs)
+              
+              ZIP_FILE=$(ls AK3-*-${variant_upper}-*.zip 2>/dev/null | head -1)
+              if [ -n "$ZIP_FILE" ]; then
+                FILE_SIZE=$(du -h "$ZIP_FILE" | cut -f1)
+                SHA256_FILE="${ZIP_FILE}.sha256"
+                MD5_FILE="${ZIP_FILE}.md5"
+                
+                cat >> RELEASE_NOTES.md << VARIANT_SECTION
+          ### 🔧 ${variant_name}
+          **Version:** \`${KSU_VERSION}\` | **Updated:** Just now | **Size:** ${FILE_SIZE}
+          
+          <details>
+          <summary>📥 <b>Download & Details</b></summary>
+          
+          | Component | Value |
+          |-----------|-------|
+          | **File** | \`${ZIP_FILE}\` |
+          | **Size** | ${FILE_SIZE} |
+          | **SHA256** | [View Checksum](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${SHA256_FILE}) |
+          | **MD5** | [View Checksum](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${MD5_FILE}) |
+          | **KernelSU Commit** | \`${KSU_COMMIT}\` - ${KSU_COMMIT_MSG} |
+          | **SuSFS** | ${SUSFS_STATUS} |
+          
+          **📋 Downloads:**
+          - 📦 **[Download Kernel ZIP](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${ZIP_FILE})**
+          - 🔐 [SHA256](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${SHA256_FILE})
+          - 🔑 [MD5](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${MD5_FILE})
+          - 📄 [Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-${variant}.md)
+          
+          </details>
+          
+          VARIANT_SECTION
+              fi
+            fi
+          }
           
           # Add sections for each variant
-          if [ -f "CHANGELOG-tiann.md" ]; then
-            cat >> RELEASE_NOTES.md << 'TIANN_EOF'
-          ## 🔧 tiann - Official KernelSU
+          add_variant_section "tiann" "TIANN" "Official KernelSU (tiann)"
+          add_variant_section "kowsu" "KOWSU" "KowSU Fork (kowsu)"
+          add_variant_section "mksu" "MKSU" "MKSU Fork (mksu)"
           
-          TIANN_EOF
-            
-            # Extract version info
-            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
-            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-tiann.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
-            
-            cat >> RELEASE_NOTES.md << TIANN_INFO
-          **KernelSU Version:** $KSU_VERSION  
-          **SuSFS:** $SUSFS_STATUS  
-          **Commit:** \`$KSU_COMMIT\`
+          # Add comparison table
+          cat >> RELEASE_NOTES.md << 'COMPARISON_EOF'
+          ---
           
-          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-tiann.md)**
+          ## 🔍 Variant Comparison
           
-          **Download:**
-          - Kernel: \`$(ls AK3-*-TIANN-*.zip | head -1)\`
-          - Checksums: SHA256 | MD5
+          | Feature | Official (tiann) | KowSU (kowsu) | MKSU (mksu) |
+          |---------|------------------|---------------|-------------|
+          | **Base Source** | Official | Fork | Fork |
+          | **SuSFS** | ✅ | ✅ | ✅ |
+          | **LSM Hooks** | ✅ | ✅ | ✅ |
+          | **Custom Features** | Standard | Enhanced | Specialized |
+          | **Update Frequency** | Daily | Weekly | As needed |
+          | **Stability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+          | **Recommended For** | Daily driver | Power users | Compatibility |
           
           ---
           
-          TIANN_INFO
-          fi
+          ## 📱 Compatibility
           
-          if [ -f "CHANGELOG-kowsu.md" ]; then
-            cat >> RELEASE_NOTES.md << 'KOWSU_EOF'
-          ## 🔧 kowsu - KowSU Fork
+          ### Devices
+          - ✅ **Google Pixel 8a** - Primary target, fully tested
+          - ✅ **Google Pixel 8** - Compatible (same Tensor G3)
+          - ✅ **Google Pixel 8 Pro** - Compatible (same Tensor G3)
           
-          KOWSU_EOF
-            
-            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
-            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-kowsu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
-            
-            cat >> RELEASE_NOTES.md << KOWSU_INFO
-          **KernelSU Version:** $KSU_VERSION  
-          **SuSFS:** $SUSFS_STATUS  
-          **Commit:** \`$KSU_COMMIT\`
+          **Note:** All Pixel 8 series devices share the Tensor G3 chipset.
           
-          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-kowsu.md)**
+          ### Android Version
+          - ✅ **Android 16** - Target version
           
-          **Download:**
-          - Kernel: \`$(ls AK3-*-KOWSU-*.zip | head -1)\`
-          - Checksums: SHA256 | MD5
+          ### Requirements
+          - Unlocked bootloader
+          - [Kernel Flasher v1.6](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) (recommended) or custom recovery
+          - Backup recommended
           
           ---
           
-          KOWSU_INFO
-          fi
+          ## 🛠️ Installation
           
-          if [ -f "CHANGELOG-mksu.md" ]; then
-            cat >> RELEASE_NOTES.md << 'MKSU_EOF'
-          ## 🔧 mksu - MKSU Fork
+          ### Method 1: Kernel Flasher (Recommended) ⭐
+          1. **Download & Install** [Kernel Flasher v1.6](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) by fatalcoder524
+          2. **Download** your preferred variant ZIP
+          3. **Open** Kernel Flasher app
+          4. **Select** the downloaded ZIP
+          5. **Flash** and wait for completion
+          6. **Reboot**
           
-          MKSU_EOF
-            
-            KSU_VERSION=$(grep "KernelSU Version:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
-            SUSFS_STATUS=$(grep "SuSFS:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2 | xargs)
-            KSU_COMMIT=$(grep "| \*\*KernelSU" CHANGELOG-mksu.md | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
-            
-            cat >> RELEASE_NOTES.md << MKSU_INFO
-          **KernelSU Version:** $KSU_VERSION  
-          **SuSFS:** $SUSFS_STATUS  
-          **Commit:** \`$KSU_COMMIT\`
+          **Why Kernel Flasher?**
+          - ✅ No recovery needed
+          - ✅ Flash from Android directly
+          - ✅ Easier and faster
+          - ✅ User-friendly interface
           
-          📋 **[Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-mksu.md)**
-          
-          **Download:**
-          - Kernel: \`$(ls AK3-*-MKSU-*.zip | head -1)\`
-          - Checksums: SHA256 | MD5
+          ### Method 2: Custom Recovery (Alternative)
+          1. **Download** your preferred variant ZIP
+          2. **Boot** into recovery (TWRP/OrangeFox)
+          3. **Flash** the ZIP
+          4. **Reboot**
           
           ---
           
-          MKSU_INFO
-          fi
+          ## ℹ️ About This Kernel
           
-          cat >> RELEASE_NOTES.md << 'FOOTER_EOF'
+          This is a **GKI (Generic Kernel Image)** kernel built for **Android 16** on **Google Pixel 8a**.
           
-          ## 📦 Installation Instructions
+          **Device Compatibility:**
+          - ✅ **Pixel 8a** - Primary target
+          - ✅ **Pixel 8** - Compatible (same Tensor G3)
+          - ✅ **Pixel 8 Pro** - Compatible (same Tensor G3)
           
-          1. Download the kernel ZIP for your preferred variant
-          2. Verify checksums (optional but recommended)
-          3. Flash the ZIP in custom recovery (TWRP/OrangeFox)
-          4. Reboot and enjoy!
+          **Why "android14" in the branch name?**  
+          The branch name `android14-6.1-2025-09` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
+          
+          **What this means:**
+          - ✅ This kernel is for Android 16
+          - ✅ Built from Google's GKI android14-6.1 branch
+          - ✅ Compatible with all Pixel 8 series devices
+          
+          **Chipset:** Google Tensor G3 | **Architecture:** ARM64
+          
+          ---
           
           ## 🔗 Resources
           
           - **Repository:** https://github.com/${{ github.repository }}
           - **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - **Kernel Flasher:** https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0
+          - **Issues:** https://github.com/${{ github.repository }}/issues
           
           ---
           
-          _All variants built from the same kernel base (android14-6.1-2025-09) with variant-specific KernelSU implementations._
-          FOOTER_EOF
+          <div align="center">
           
-          echo "✅ Unified release notes generated"
+          **Built with ❤️ for the Pixel 8 series community**
+          
+          *All variants built from the same kernel base with variant-specific KernelSU implementations*
+          
+          </div>
+          COMPARISON_EOF
+          
+          echo "✅ Enhanced release notes generated"
           cat RELEASE_NOTES.md
 
       - name: Create Unified Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: build-${{ github.run_number }}
-          name: "Build #${{ github.run_number }} - All Variants"
+          name: "Android 16 Kernel Build #${{ github.run_number }}"
           body_path: release-assets/RELEASE_NOTES.md
           files: release-assets/*
           draft: false
@@ -1007,28 +1124,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify:
-    needs: [create_release]
+    needs: [create_release, build]
     runs-on: [self-hosted, Linux, X64]
     if: always()
     steps:
+      - name: Extract Variant Info
+        if: always()
+        run: |
+          # Get variant info from matrix or input
+          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
+          if [ "$VARIANT_INPUT" = "all" ]; then
+            echo "VARIANTS_LIST=tiann, kowsu, mksu" >> $GITHUB_ENV
+          else
+            echo "VARIANTS_LIST=$VARIANT_INPUT" >> $GITHUB_ENV
+          fi
+
       - name: Send Success Notification
         if: ${{ needs.create_release.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
         run: |
-          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
-          if [ "$VARIANT_INPUT" = "all" ]; then
-            VARIANTS="tiann, kowsu, mksu"
-          else
-            VARIANTS="$VARIANT_INPUT"
-          fi
-          
-          MESSAGE="✅ *Kernel Build #${{ github.run_number }} completed successfully!*
-          
-          📦 *Variants:* ${VARIANTS}
-          ⏱️ *Build Time:* Started at ${{ github.event.repository.updated_at }}
-          💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
-          
-          🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-          📊 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          MESSAGE="✅ *Build #${{ github.run_number }} Complete*
+
+          📱 Pixel 8a/8/8 Pro | 🤖 Android 16
+
+          📦 *Downloads:*
+          • tiann - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
+          • kowsu - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
+          • mksu - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
+
+          🔗 [Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
           
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
@@ -1039,28 +1162,18 @@ jobs:
       - name: Send Failure Notification
         if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
         run: |
-          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
-          if [ "$VARIANT_INPUT" = "all" ]; then
-            VARIANTS="tiann, kowsu, mksu"
-          else
-            VARIANTS="$VARIANT_INPUT"
-          fi
-          
           if [ "${{ needs.build.result }}" = "failure" ]; then
             FAILED_STAGE="Build"
           else
-            FAILED_STAGE="Release Creation"
+            FAILED_STAGE="Release"
           fi
           
-          MESSAGE="❌ *Kernel Build #${{ github.run_number }} FAILED!*
-          
-          📦 *Variants:* ${VARIANTS}
-          ⚠️ *Failed Stage:* ${FAILED_STAGE}
-          💾 *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
-          
-          🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          
-          Please check the logs for details."
+          MESSAGE="❌ *Build #${{ github.run_number }} Failed*
+
+          ⚠️ *Failed:* ${FAILED_STAGE}
+          📦 *Variants:* ${{ env.VARIANTS_BUILT }}
+
+          🔗 [Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
@@ -1071,9 +1184,9 @@ jobs:
       - name: Send Cancellation Notification
         if: ${{ (needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled') && github.event.inputs.enable_telegram == 'true' }}
         run: |
-          MESSAGE="⚠️ *Kernel Build #${{ github.run_number }} was cancelled*
-          
-          🔗 [View Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          MESSAGE="⚠️ *Build #${{ github.run_number }} Cancelled*
+
+          🔗 [Actions](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \

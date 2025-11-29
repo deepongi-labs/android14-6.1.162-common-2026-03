@@ -85,10 +85,31 @@ jobs:
       KSU_VARIANT: ${{ matrix.variant }}
 
     steps:
-      - name: Checkout
+      - name: Checkout with Submodules
         uses: actions/checkout@v4
         with:
+          submodules: 'recursive'
           fetch-depth: 0
+
+      - name: Unshallow Submodules for Accurate Version Counting
+        run: |
+          echo "📊 Unshallowing submodules for accurate commit counting..."
+          
+          # Unshallow kernel submodule
+          if [ -d "kernel/.git" ]; then
+            cd kernel
+            git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
+            cd ..
+          fi
+          
+          # Unshallow susfs4ksu submodule
+          if [ -d "susfs4ksu/.git" ]; then
+            cd susfs4ksu
+            git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
+            cd ..
+          fi
+          
+          echo "✅ Submodules ready"
 
       - name: Store Workflow Commit Info
         run: |
@@ -104,25 +125,8 @@ jobs:
           
           echo "📝 Workflow commit: $WORKFLOW_COMMIT_SHORT - $WORKFLOW_COMMIT_MSG"
 
-      - name: Clone/Update Kernel Source
+      - name: Verify Kernel Source
         run: |
-          KERNEL_BRANCH="android14-6.1-2025-09"
-          
-          if [ -d "kernel/.git" ] && [ -f "kernel/Makefile" ]; then
-            echo "📦 Kernel exists, resetting to upstream..."
-            cd kernel
-            git fetch origin $KERNEL_BRANCH --depth=1
-            git reset --hard FETCH_HEAD
-            git clean -fdx
-            cd ..
-          else
-            echo "📥 Cloning kernel..."
-            rm -rf kernel
-            git clone --depth=1 --single-branch -b $KERNEL_BRANCH \
-              https://github.com/aosp-mirror/kernel_common.git kernel
-          fi
-          
-          # Verify
           if [ -f "kernel/Makefile" ]; then
             VERSION=$(grep "^VERSION" kernel/Makefile | cut -d' ' -f3)
             PATCHLEVEL=$(grep "^PATCHLEVEL" kernel/Makefile | cut -d' ' -f3)
@@ -147,32 +151,8 @@ jobs:
           
           echo "📝 Kernel commit: $KERNEL_COMMIT_SHORT - $KERNEL_COMMIT_MSG"
 
-      - name: Clone/Update SuSFS Source
+      - name: Verify SuSFS Source
         run: |
-          SUSFS_BRANCH="gki-android14-6.1-dev"
-          
-          if [ -d "susfs4ksu/.git" ] && [ -d "susfs4ksu/kernel_patches" ]; then
-            echo "📦 SuSFS exists, checking for updates..."
-            cd susfs4ksu
-            git fetch origin $SUSFS_BRANCH --depth=1
-            LOCAL=$(git rev-parse HEAD)
-            REMOTE=$(git rev-parse FETCH_HEAD)
-            if [ "$LOCAL" = "$REMOTE" ]; then
-              echo "✅ SuSFS is up to date"
-            else
-              echo "🔄 SuSFS has updates, syncing..."
-              git reset --hard FETCH_HEAD
-              git clean -fdx
-            fi
-            cd ..
-          else
-            echo "📥 Cloning SuSFS..."
-            rm -rf susfs4ksu
-            git clone --depth=1 --single-branch -b $SUSFS_BRANCH \
-              https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          fi
-          
-          # Verify
           if [ -d "susfs4ksu/kernel_patches" ]; then
             echo "✅ SuSFS verified"
           else

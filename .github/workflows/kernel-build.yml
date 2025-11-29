@@ -93,8 +93,21 @@ jobs:
       - name: Checkout with Submodules
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: false  # We'll handle submodules manually
           fetch-depth: 0
+
+      - name: Initialize and Update Submodules
+        run: |
+          echo "📦 Initializing submodules..."
+          git submodule init
+          
+          echo "📥 Updating kernel submodule (GitHub)..."
+          git submodule update --init --recursive kernel
+          
+          echo "📥 Updating susfs4ksu submodule (GitLab)..."
+          git submodule update --init --recursive susfs4ksu
+          
+          echo "✅ All submodules initialized"
 
       - name: Unshallow Submodules for Accurate Version Counting
         run: |

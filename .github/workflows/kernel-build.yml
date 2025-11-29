@@ -109,26 +109,6 @@ jobs:
           
           echo "✅ All submodules initialized"
 
-      - name: Unshallow Submodules for Accurate Version Counting
-        run: |
-          echo "📊 Unshallowing submodules for accurate commit counting..."
-          
-          # Unshallow kernel submodule
-          if [ -d "kernel/.git" ]; then
-            cd kernel
-            git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
-            cd ..
-          fi
-          
-          # Unshallow susfs4ksu submodule
-          if [ -d "susfs4ksu/.git" ]; then
-            cd susfs4ksu
-            git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
-            cd ..
-          fi
-          
-          echo "✅ Submodules ready"
-
       - name: Store Workflow Commit Info
         run: |
           WORKFLOW_COMMIT=$(git rev-parse HEAD)

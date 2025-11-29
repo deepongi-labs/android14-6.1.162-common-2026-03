@@ -506,6 +506,13 @@ jobs:
         run: |
           echo "📦 Setting up SuSFS..."
           
+          # Clean any previously applied patches
+          echo "🧹 Cleaning kernel directory..."
+          cd kernel
+          git checkout -- .
+          git clean -fd
+          cd ..
+          
           # Copy SuSFS files
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/

@@ -266,6 +266,22 @@ jobs:
           
           echo "✅ KernelSU setup completed for ${{ matrix.variant }}"
 
+      - name: Get KSU Version Info
+        run: |
+          cd kernel/KernelSU
+          
+          echo "📊 Unshallowing repository for accurate commit count..."
+          # Unshallow the repository to get full history
+          git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
+          
+          echo "🔢 Counting commits..."
+          KSU_COUNT=$(git rev-list --count HEAD)
+          KSU_VERSION=$((KSU_COUNT + 30000))
+          
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_COUNT=$KSU_COUNT" >> $GITHUB_ENV
+          echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT)"
+
       - name: Verify KernelSU Setup
         run: |
           cd kernel

@@ -204,74 +204,84 @@ jobs:
           echo "🧹 Cleaning ABI protected exports..."
           rm -vf android/abi_gki_protected_exports_* || true
 
-      - name: Setup KernelSU - ${{ matrix.variant }}
+      - name: Setup KernelSU Variant
         run: |
           cd kernel
+          
+          # Clean kernel directory for fresh setup
+          echo "🧹 Cleaning kernel directory for fresh KernelSU setup..."
+          git checkout -- .
+          git clean -fd
           
           # Remove any existing KernelSU
           rm -rf KernelSU drivers/kernelsu
           
+          # Set variant-specific information
           case "${{ matrix.variant }}" in
             "tiann")
-              echo "📦 Setting up tiann/KernelSU (Official)..."
+              echo "📦 Setting up Official KernelSU (tiann)..."
               KSU_REPO="tiann/KernelSU"
               KSU_BRANCH="main"
+              PATCH_DIR="KSU"
               ;;
             "kowsu")
-              echo "📦 Setting up KOWX712/KernelSU (KowSU)..."
+              echo "📦 Setting up KowSU (KOWX712)..."
               KSU_REPO="KOWX712/KernelSU"
               KSU_BRANCH="master"
+              PATCH_DIR="KowSU"
               ;;
             "mksu")
-              echo "📦 Setting up 5ec1cff/KernelSU (MKSU)..."
+              echo "📦 Setting up MKSU (5ec1cff)..."
               KSU_REPO="5ec1cff/KernelSU"
               KSU_BRANCH="main"
+              PATCH_DIR="5ec1cff"
               ;;
           esac
           
-          # Clone KernelSU
+          # Clone the KernelSU repository
+          echo "📥 Cloning $KSU_REPO on branch $KSU_BRANCH..."
           git clone --depth=1 --branch=$KSU_BRANCH \
-            "https://github.com/$KSU_REPO" KernelSU
+            https://github.com/$KSU_REPO.git KernelSU
           
-          # Get accurate version by unshallowing
-          cd KernelSU
-          echo "📊 Getting accurate commit count..."
-          git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
-          KSU_COUNT=$(git rev-list --count HEAD)
-          KSU_VERSION=$((KSU_COUNT + 30000))
+          # Execute setup.sh from kernel source directory, passing current directory (.)
+          echo "🚀 Running setup.sh from kernel source..."
+          if [ -f "KernelSU/kernel/setup.sh" ]; then
+            chmod +x KernelSU/kernel/setup.sh
+            ./KernelSU/kernel/setup.sh .
+          else
+            echo "❌ KernelSU/kernel/setup.sh not found!"
+            echo "📁 Available files in KernelSU:"
+            find KernelSU -name "*.sh" -type f
+            exit 1
+          fi
           
-          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "PATCH_DIR=$PATCH_DIR" >> $GITHUB_ENV
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
           echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
-          echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT) from $KSU_REPO"
-          cd ..
           
-          # Setup KernelSU in kernel tree
-          ln -sf "$(pwd)/KernelSU/kernel" drivers/kernelsu
+          echo "✅ KernelSU setup completed for ${{ matrix.variant }}"
+
+      - name: Verify KernelSU Setup
+        run: |
+          cd kernel
+          echo "🔍 Verifying KernelSU setup..."
           
-          # Verify symlink
-          if [ -d "drivers/kernelsu" ] && [ -f "drivers/kernelsu/Kconfig" ]; then
-            echo "✅ KernelSU symlink created successfully"
+          # Check if KernelSU files were created
+          if [ -d "drivers/kernelsu" ]; then
+            echo "✅ KernelSU drivers directory created"
           else
-            echo "❌ KernelSU symlink failed, trying copy instead..."
-            rm -rf drivers/kernelsu
-            cp -r KernelSU/kernel drivers/kernelsu
-            if [ -f "drivers/kernelsu/Kconfig" ]; then
-              echo "✅ KernelSU copied successfully"
+            echo "❌ KernelSU drivers directory not found"
+            exit 1
+          fi
+          
+          if [ -f ".config" ]; then
+            echo "✅ Kernel configuration exists"
+            # Check if KSU is enabled in config
+            if grep -q "CONFIG_KSU=y" .config || grep -q "CONFIG_KSU=m" .config; then
+              echo "✅ KernelSU configuration detected"
             else
-              echo "❌ KernelSU setup failed"
-              exit 1
+              echo "⚠️ KernelSU not in config, may need manual enabling"
             fi
-          fi
-          
-          # Add to Makefile if not present
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          fi
-          
-          # Add to Kconfig if not present
-          if ! grep -q "kernelsu" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
       - name: Store KernelSU Commit Info

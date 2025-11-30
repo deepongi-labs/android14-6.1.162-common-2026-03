@@ -1,31 +1,33 @@
-From 1b776899f00b753a4275886edc37e3faf770c8ac Mon Sep 17 00:00:00 2001
+From c7c75a60fb3a5a346fec48baaf8425a38aeb332d Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Sun, 30 Nov 2025 01:12:08 +0000
+Date: Sun, 30 Nov 2025 19:26:35 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
- kernel/Kbuild            |  11 ++-
+ kernel/Kbuild            |   1 -
  kernel/Kconfig           |  91 ++++++++++++++++-
  kernel/Makefile          |   9 ++
  kernel/allowlist.c       |   4 +
  kernel/apk_sign.c        |   5 +
  kernel/app_profile.c     | 206 ++++++++++++++++++++-------------------
+ kernel/kernel            |   1 +
  kernel/kernel_umount.c   |   3 +
- kernel/ksu.c             |  16 ++-
+ kernel/ksu.c             |  19 +++-
  kernel/ksud.c            |  52 ++++++++++
  kernel/ksud.h            |  19 ++++
  kernel/manager.h         |  14 +++
  kernel/selinux/rules.c   |   9 ++
  kernel/selinux/selinux.c |  93 ++++++++++++++++++
  kernel/selinux/selinux.h |  13 +++
- kernel/setuid_hook.c     | 119 ++++++++++++++++++++++
+ kernel/setuid_hook.c     | 116 ++++++++++++++++++++++
  kernel/sucompat.c        | 124 +++++++++++++++++++++++
  kernel/sucompat.h        |  10 +-
  kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 18 files changed, 842 insertions(+), 106 deletions(-)
+ 19 files changed, 831 insertions(+), 108 deletions(-)
+ create mode 120000 kernel/kernel
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index 94bfdb90..44b559ab 100644
+index 94bfdb90..bd5e85d1 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -36,21 +38,6 @@ index 94bfdb90..44b559ab 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
-@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
- ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
- ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
-+
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -453,6 +440,14 @@ index 2369abbc..4636ad2f 100644
 +    }
 +#endif // #ifndef CONFIG_KSU_SUSFS
  }
+diff --git a/kernel/kernel b/kernel/kernel
+new file mode 120000
+index 00000000..9e51d0d6
+--- /dev/null
++++ b/kernel/kernel
+@@ -0,0 +1 @@
++../KernelSU/kernel
+\ No newline at end of file
 diff --git a/kernel/kernel_umount.c b/kernel/kernel_umount.c
 index 35be022f..cbb5ddfd 100644
 --- a/kernel/kernel_umount.c
@@ -475,17 +470,18 @@ index 35be022f..cbb5ddfd 100644
      pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
  
 diff --git a/kernel/ksu.c b/kernel/ksu.c
-index 8205e104..8bf113fe 100644
+index 8205e104..86128bfe 100644
 --- a/kernel/ksu.c
 +++ b/kernel/ksu.c
-@@ -4,12 +4,16 @@
+@@ -3,13 +3,17 @@
+ #include <linux/kobject.h>
  #include <linux/module.h>
  #include <linux/workqueue.h>
- #include <linux/moduleparam.h>
--
+-#include <linux/moduleparam.h>
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
+ 
  #include "allowlist.h"
  #include "feature.h"
  #include "klog.h" // IWYU pragma: keep
@@ -530,6 +526,14 @@ index 8205e104..8bf113fe 100644
  
      ksu_supercalls_exit();
  
+@@ -79,5 +93,4 @@ MODULE_DESCRIPTION("Android KernelSU");
+ MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+ #else
+ MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+-#endif
+-
++#endif
+\ No newline at end of file
 diff --git a/kernel/ksud.c b/kernel/ksud.c
 index a8b4edb0..94c6ca93 100644
 --- a/kernel/ksud.c
@@ -903,7 +907,7 @@ index 431e0441..4b1d11d0 100644
 +
  #endif
 diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
-index 016ac058..d9ecd63f 100644
+index 016ac058..15e6f912 100644
 --- a/kernel/setuid_hook.c
 +++ b/kernel/setuid_hook.c
 @@ -27,6 +27,9 @@
@@ -958,7 +962,7 @@ index 016ac058..d9ecd63f 100644
  int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  {
      // we rely on the fact that zygote always call setresuid(3) with same uids
-@@ -135,6 +163,97 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
+@@ -135,6 +163,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  
      return 0;
  }
@@ -1036,20 +1040,17 @@ index 016ac058..d9ecd63f 100644
 +    // Handle kernel umount
 +    ksu_handle_umount(old_uid, new_uid);
 +
-+    get_task_struct(current);
-+
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +    // We can reorder the mnt_id now after all sus mounts are umounted
 +    susfs_reorder_mnt_id();
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +
-+    susfs_set_current_proc_umounted();
-+
-+    put_task_struct(current);
-+
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +    susfs_run_sus_path_loop(new_uid);
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
++
++    susfs_set_current_proc_umounted();
++
 +    return 0;
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS
@@ -1229,20 +1230,20 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index a18194fc..5bdd18c7 100644
+index 01a7bdb8..c7aa47cd 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
-@@ -11,6 +11,10 @@
- #include <linux/task_work.h>
+@@ -12,6 +12,10 @@
  #include <linux/uaccess.h>
  #include <linux/version.h>
+ #include <linux/pid.h>
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/namei.h>
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
- #include <linux/pid.h>
  
  #include "supercalls.h"
+ #include "arch.h"
 @@ -25,7 +29,13 @@
  #include "selinux/selinux.h"
  #include "objsec.h"
@@ -1336,7 +1337,7 @@ index a18194fc..5bdd18c7 100644
          break;
      }
      default: {
-@@ -653,6 +689,7 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
+@@ -651,6 +687,7 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
      kfree(tw);
  }
  
@@ -1344,7 +1345,7 @@ index a18194fc..5bdd18c7 100644
  static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
      struct pt_regs *real_regs = PT_REAL_REGS(regs);
-@@ -686,7 +723,114 @@ static struct kprobe reboot_kp = {
+@@ -684,7 +721,114 @@ static struct kprobe reboot_kp = {
      .symbol_name = REBOOT_SYMBOL,
      .pre_handler = reboot_handler_pre,
  };
@@ -1459,7 +1460,7 @@ index a18194fc..5bdd18c7 100644
  
  void ksu_supercalls_init(void)
  {
-@@ -697,16 +841,22 @@ void ksu_supercalls_init(void)
+@@ -695,16 +839,22 @@ void ksu_supercalls_init(void)
          pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
      }
  

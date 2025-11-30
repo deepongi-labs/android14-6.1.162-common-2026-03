@@ -208,12 +208,6 @@ jobs:
           cd ..
           echo "✅ Kernel directory reset to clean state"
 
-      - name: Clean ABI Exports
-        run: |
-          cd kernel
-          echo "🧹 Cleaning ABI protected exports..."
-          rm -vf android/abi_gki_protected_exports_* || true
-
       - name: Setup KernelSU Variant
         run: |
           cd kernel
@@ -670,21 +664,6 @@ jobs:
           CONFIG_KSU_DEBUG=y
           CONFIG_KSU_KPROBES_HOOK=n
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_SU=n
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
           CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
           CONFIG_LOCALVERSION_AUTO=n
           CONFIG_LTO=y
@@ -746,6 +725,12 @@ jobs:
           fi
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
+
+      - name: Clean ABI Exports
+        run: |
+          cd kernel
+          echo "🧹 Cleaning ABI protected exports..."
+          rm -vf android/abi_gki_protected_exports_* || true
 
       - name: Build Kernel
         run: |

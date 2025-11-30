@@ -1,12 +1,11 @@
-From fc832b97603fdde5e455b6a58ed0977397ff90db Mon Sep 17 00:00:00 2001
+From 4bf2841d7480506d39791b5960b1fdd592fea560 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
 Date: Sun, 30 Nov 2025 18:06:59 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
- kernel/Kbuild            |   1 -
+ kernel/Kbuild            |  11 ++-
  kernel/Kconfig           |  91 ++++++++++++++++-
- kernel/Makefile          |   9 ++
  kernel/allowlist.c       |   4 +
  kernel/apk_sign.c        |   5 +
  kernel/app_profile.c     | 206 ++++++++++++++++++++-------------------
@@ -22,10 +21,10 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/sucompat.c        | 124 +++++++++++++++++++++++
  kernel/sucompat.h        |  10 +-
  kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 18 files changed, 829 insertions(+), 105 deletions(-)
+ 17 files changed, 830 insertions(+), 105 deletions(-)
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index d98df1c3..a8bfc148 100644
+index d98df1c3..ac7a98c3 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -36,6 +35,21 @@ index d98df1c3..a8bfc148 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
+@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
++
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig

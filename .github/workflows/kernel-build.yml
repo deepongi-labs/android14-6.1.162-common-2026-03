@@ -239,7 +239,7 @@ jobs:
           echo "📊 Getting accurate commit count..."
           git fetch --unshallow 2>/dev/null || git fetch --depth=10000 2>/dev/null || true
           KSU_COUNT=$(git rev-list --count HEAD)
-          KSU_VERSION=$((KSU_COUNT + 20000))
+          KSU_VERSION=$((KSU_COUNT + 30000))
           
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV

@@ -1,10 +1,10 @@
-From 0824dd121e16fd598e561a3044bb1a6d165a8c07 Mon Sep 17 00:00:00 2001
+From fc832b97603fdde5e455b6a58ed0977397ff90db Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Sun, 30 Nov 2025 00:54:50 +0000
+Date: Sun, 30 Nov 2025 18:06:59 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
- kernel/Kbuild            |  11 ++-
+ kernel/Kbuild            |   1 -
  kernel/Kconfig           |  91 ++++++++++++++++-
  kernel/Makefile          |   9 ++
  kernel/allowlist.c       |   4 +
@@ -18,14 +18,14 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/selinux/rules.c   |   9 ++
  kernel/selinux/selinux.c |  93 ++++++++++++++++++
  kernel/selinux/selinux.h |  13 +++
- kernel/setuid_hook.c     | 119 ++++++++++++++++++++++
+ kernel/setuid_hook.c     | 116 ++++++++++++++++++++++
  kernel/sucompat.c        | 124 +++++++++++++++++++++++
  kernel/sucompat.h        |  10 +-
  kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 18 files changed, 842 insertions(+), 105 deletions(-)
+ 18 files changed, 829 insertions(+), 105 deletions(-)
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index d98df1c3..ac7a98c3 100644
+index d98df1c3..a8bfc148 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -36,21 +36,6 @@ index d98df1c3..ac7a98c3 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
-@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
- ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
- ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
-+
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -158,6 +143,24 @@ index cc4dbb3a..393e16cd 100644
 +endmenu
 +
  endmenu
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 0b8c8a10..ba9272ed 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -13,4 +13,13 @@ compdb:
+ clean:
+ 	make -C $(KDIR) M=$(MDIR) clean
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
 index 4fa59133..de729dff 100644
 --- a/kernel/allowlist.c
@@ -885,7 +888,7 @@ index 431e0441..4b1d11d0 100644
 +
  #endif
 diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
-index 016ac058..d9ecd63f 100644
+index 016ac058..15e6f912 100644
 --- a/kernel/setuid_hook.c
 +++ b/kernel/setuid_hook.c
 @@ -27,6 +27,9 @@
@@ -940,7 +943,7 @@ index 016ac058..d9ecd63f 100644
  int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  {
      // we rely on the fact that zygote always call setresuid(3) with same uids
-@@ -135,6 +163,97 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
+@@ -135,6 +163,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  
      return 0;
  }
@@ -1018,20 +1021,17 @@ index 016ac058..d9ecd63f 100644
 +    // Handle kernel umount
 +    ksu_handle_umount(old_uid, new_uid);
 +
-+    get_task_struct(current);
-+
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +    // We can reorder the mnt_id now after all sus mounts are umounted
 +    susfs_reorder_mnt_id();
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +
-+    susfs_set_current_proc_umounted();
-+
-+    put_task_struct(current);
-+
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +    susfs_run_sus_path_loop(new_uid);
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
++
++    susfs_set_current_proc_umounted();
++
 +    return 0;
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS

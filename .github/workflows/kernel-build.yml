@@ -726,11 +726,11 @@ jobs:
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-      - name: Clean ABI Exports
-        run: |
-          cd kernel
-          echo "🧹 Cleaning ABI protected exports..."
-          rm -vf android/abi_gki_protected_exports_* || true
+#      - name: Clean ABI Exports
+#        run: |
+#          cd kernel
+#          echo "🧹 Cleaning ABI protected exports..."
+#          rm -vf android/abi_gki_protected_exports_* || true
 
       - name: Build Kernel
         run: |

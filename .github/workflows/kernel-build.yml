@@ -194,6 +194,17 @@ jobs:
           echo "🧹 Cleaning ABI protected exports..."
           rm -vf android/abi_gki_protected_exports_* || true
 
+
+      # ✅ ADD THIS NEW STEP HERE (before Setup KernelSU)
+      - name: Clean Kernel Directory
+        run: |
+          echo "🧹 Cleaning kernel directory for fresh patch application..."
+          cd kernel
+          git checkout -- .
+          git clean -fd
+          cd ..
+          echo "✅ Kernel directory reset to clean state"
+
       - name: Setup KernelSU - ${{ matrix.variant }}
         run: |
           cd kernel
@@ -514,12 +525,8 @@ jobs:
         run: |
           echo "📦 Setting up SuSFS..."
           
-          # Clean any previously applied patches
-          echo "🧹 Cleaning kernel directory..."
-          cd kernel
-          git checkout -- .
-          git clean -fd
-          cd ..
+          # ❌ REMOVE THE CLEANING LINES FROM HERE
+          # They were breaking KernelSU setup
           
           # Copy SuSFS files
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/

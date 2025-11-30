@@ -188,13 +188,6 @@ jobs:
           echo "📈 CCACHE stats BEFORE build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
-      - name: Clean ABI Exports
-        run: |
-          cd kernel
-          echo "🧹 Cleaning ABI protected exports..."
-          rm -vf android/abi_gki_protected_exports_* || true
-
-
       # ✅ ADD THIS NEW STEP HERE (before Setup KernelSU)
       - name: Clean Kernel Directory
         run: |
@@ -204,6 +197,12 @@ jobs:
           git clean -fd
           cd ..
           echo "✅ Kernel directory reset to clean state"
+
+      - name: Clean ABI Exports
+        run: |
+          cd kernel
+          echo "🧹 Cleaning ABI protected exports..."
+          rm -vf android/abi_gki_protected_exports_* || true
 
       - name: Setup KernelSU - ${{ matrix.variant }}
         run: |

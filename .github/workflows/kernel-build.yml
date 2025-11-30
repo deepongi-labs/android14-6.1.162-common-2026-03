@@ -217,12 +217,7 @@ jobs:
       - name: Setup KernelSU Variant
         run: |
           cd kernel
-          
-          # Clean kernel directory for fresh setup
-          echo "🧹 Cleaning kernel directory for fresh KernelSU setup..."
-          git checkout -- .
-          git clean -fd
-          
+
           # Remove any existing KernelSU
           rm -rf KernelSU drivers/kernelsu
           
@@ -819,25 +814,36 @@ jobs:
 
       - name: Package Kernel
         run: |
+          # Get kernel version from Makefile
+          echo "📋 Extracting kernel version..."
+          cd kernel
+          KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
+          cd ..
+          echo "✅ Kernel version: $KERNEL_VERSION"
+          
           # Determine which AnyKernel3 branch to use based on variant
           case "${{ matrix.variant }}" in
             "tiann")
               AK3_BRANCH="KernelSU"
+              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
               echo "📦 Using AnyKernel3 branch: KernelSU (for tiann variant)"
               ;;
             "kowsu")
-              AK3_BRANCH="KowSU"
+              AK3_BRANCH="KowSU" 
+              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
               echo "📦 Using AnyKernel3 branch: KowSU (for kowsu variant)"
               ;;
             "mksu")
               AK3_BRANCH="MKSU"
+              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
               echo "📦 Using AnyKernel3 branch: MKSU (for mksu variant)"
               ;;
           esac
           
-          # Clone the appropriate AnyKernel3 branch
+          # Clone the appropriate AnyKernel3 branch for this variant
+          echo "📥 Cloning AnyKernel3 from $AK3_REPO on branch $AK3_BRANCH..."
           git clone --depth=1 --branch=$AK3_BRANCH \
-            https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+            https://github.com/$AK3_REPO AnyKernel3
           
           cd AnyKernel3
           rm -rf .git .github
@@ -850,10 +856,11 @@ jobs:
           TIMESTAMP=$(date +%Y%m%d-%H%M)
           VARIANT_UPPER=$(echo "${{ matrix.variant }}" | tr '[:lower:]' '[:upper:]')
           
+          # Use both kernel version and KSU version in ZIP name
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            ZIP_NAME="AK3-6.1.145-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
+            ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
           else
-            ZIP_NAME="AK3-6.1.145-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
+            ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}.zip"
           fi
           
           zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
@@ -867,8 +874,9 @@ jobs:
           md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
           
           echo "✅ Packaged kernel: $ZIP_NAME ($FILE_SIZE)"
-          echo "📋 Using AnyKernel3 branch: $AK3_BRANCH"
+          echo "📋 Using AnyKernel3 branch: $AK3_BRANCH from $AK3_REPO"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

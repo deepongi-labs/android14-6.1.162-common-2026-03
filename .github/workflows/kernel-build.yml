@@ -28,6 +28,12 @@ on:
         required: false
         default: true
         type: boolean
+      # ADD THIS NEW INPUT:
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -48,6 +54,8 @@ jobs:
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
+      # ADD THIS:
+      create_release: ${{ steps.config.outputs.create_release }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -73,6 +81,7 @@ jobs:
         run: |
           ENABLE_SUSFS=true
           FORCE_CLEAN=false
+          CREATE_RELEASE=true
           
           if [ "${{ github.event.inputs.disable_susfs }}" = "true" ]; then
             ENABLE_SUSFS=false
@@ -80,9 +89,13 @@ jobs:
           if [ "${{ github.event.inputs.force_clean_build }}" = "true" ]; then
             FORCE_CLEAN=true
           fi
+          if [ "${{ github.event.inputs.create_release }}" = "false" ]; then
+            CREATE_RELEASE=false
+          fi
           
           echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
           echo "force_clean=$FORCE_CLEAN" >> $GITHUB_OUTPUT
+          echo "create_release=$CREATE_RELEASE" >> $GITHUB_OUTPUT
 
   build:
     needs: setup
@@ -872,7 +885,8 @@ jobs:
   create_release:
     needs: [setup, build]
     runs-on: [self-hosted, Linux, X64]
-    if: success()
+    # ADD THIS CONDITION:
+    if: needs.setup.outputs.create_release == 'true' && success()
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1149,42 +1163,68 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify:
-    needs: [create_release, build]
+    needs: [setup, create_release]
     runs-on: [self-hosted, Linux, X64]
     if: always()
     steps:
       - name: Extract Variant Info
         if: always()
         run: |
-          # Get variant info from matrix or input
-          VARIANT_INPUT="${{ github.event.inputs.ksu_variant }}"
-          if [ "$VARIANT_INPUT" = "all" ]; then
-            echo "VARIANTS_LIST=tiann, kowsu, mksu" >> $GITHUB_ENV
-          else
-            echo "VARIANTS_LIST=$VARIANT_INPUT" >> $GITHUB_ENV
-          fi
+          # Get variant info from setup output
+          echo "VARIANTS_BUILT=${{ needs.setup.outputs.matrix }}" >> $GITHUB_ENV
+          
+          # Get release creation status
+          echo "CREATE_RELEASE=${{ needs.setup.outputs.create_release }}" >> $GITHUB_ENV
+          
+          # Determine which variants were actually built
+          BUILT_VARIANTS=""
+          [[ "${{ needs.setup.outputs.matrix }}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
+          [[ "${{ needs.setup.outputs.matrix }}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
+          [[ "${{ needs.setup.outputs.matrix }}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
+          echo "BUILT_VARIANTS_LIST=$BUILT_VARIANTS" >> $GITHUB_ENV
 
-      - name: Send Success Notification
+      - name: Send Enhanced Success Notification
         if: ${{ needs.create_release.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
         run: |
-          MESSAGE="✅ *Build #${{ github.run_number }} Complete*
-
-          📱 Pixel 8a/8/8 Pro | 🤖 Android 16
-
-          📦 *Downloads:*
-          • tiann - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-          • kowsu - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-          • mksu - [↓](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-
-          🔗 [Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+          # Determine release info
+          if [ "${{ env.CREATE_RELEASE }}" = "true" ]; then
+            RELEASE_INFO="📦 *Release:* [Build #${{ github.run_number }}](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+            DOWNLOAD_LINKS="• [Download All Variants](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+          else
+            RELEASE_INFO="📦 *Release:* Not created (disabled in workflow)"
+            DOWNLOAD_LINKS="• [Download Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          fi
           
+          # Get build duration if available
+          BUILD_DURATION="${{ env.BUILD_DURATION || 'Unknown' }}"
+          
+          # Get variant-specific info
+          VARIANT_COUNT=$(echo "${{ env.BUILT_VARIANTS_LIST }}" | wc -w)
+          
+          MESSAGE="🎊 *Build #${{ github.run_number }} Completed Successfully!*
+
+          🏗️ *Built Variants:* $VARIANT_COUNT/3 (${{ env.BUILT_VARIANTS_LIST }})
+          ⚡ *Build Duration:* $BUILD_DURATION
+          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
+          $RELEASE_INFO
+
+          📥 *Downloads:*
+          $DOWNLOAD_LINKS
+
+          📱 *Device:* Pixel 8a/8/8 Pro
+          🤖 *Android:* 16 (GKI)
+
+          🔍 *Details:* [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          *Built with ❤️ using GitHub Actions*"
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$MESSAGE" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview=true
 
-      - name: Send Failure Notification
+      - name: Send Failure Notification with Metrics
         if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
         run: |
           if [ "${{ needs.build.result }}" = "failure" ]; then
@@ -1193,13 +1233,21 @@ jobs:
             FAILED_STAGE="Release"
           fi
           
+          # Get build duration if available
+          BUILD_DURATION="${{ env.BUILD_DURATION || 'Unknown' }}"
+          
           MESSAGE="❌ *Build #${{ github.run_number }} Failed*
 
-          ⚠️ *Failed:* ${FAILED_STAGE}
-          📦 *Variants:* ${{ env.VARIANTS_BUILT }}
+          ⚠️ *Failed Stage:* $FAILED_STAGE
+          ⏱️ *Build Duration:* $BUILD_DURATION
+          📦 *Target Variants:* ${{ env.BUILT_VARIANTS_LIST }}
+          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
 
-          🔗 [Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          
+          🔗 [View Detailed Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          📋 [Build Configuration](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/workflow)
+
+          *Need help? Check the logs above for detailed error information.*"
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$MESSAGE" \
@@ -1211,8 +1259,11 @@ jobs:
         run: |
           MESSAGE="⚠️ *Build #${{ github.run_number }} Cancelled*
 
-          🔗 [Actions](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          
+          📦 *Target Variants:* ${{ env.BUILT_VARIANTS_LIST }}
+          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
+
+          🔗 [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$MESSAGE" \

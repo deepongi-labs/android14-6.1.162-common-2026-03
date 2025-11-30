@@ -559,6 +559,15 @@ jobs:
             echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
             patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
           fi
+          
+          # Apply LKM spoof patch after SuSFS patch
+          LKM_SPOOF_PATCH="../../.github/patches/${{ matrix.variant }}/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+          if [ -f "$LKM_SPOOF_PATCH" ]; then
+            echo "📋 Applying LKM spoof patch from .github/patches/${{ matrix.variant }}/"
+            patch -p1 --forward < "$LKM_SPOOF_PATCH" || true
+          else
+            echo "⚠️ LKM spoof patch not found: $LKM_SPOOF_PATCH"
+          fi
           cd ..
 
       - name: Apply Remote Patches

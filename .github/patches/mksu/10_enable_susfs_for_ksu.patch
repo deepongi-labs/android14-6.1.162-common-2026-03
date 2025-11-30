@@ -1,16 +1,17 @@
-From 70a13b2ed8a1395e85df42f3a8af55bde4bd8ac7 Mon Sep 17 00:00:00 2001
+From 1b776899f00b753a4275886edc37e3faf770c8ac Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Fri, 28 Nov 2025 10:45:00 +0000
+Date: Sun, 30 Nov 2025 01:12:08 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
+ kernel/Kbuild            |  11 ++-
  kernel/Kconfig           |  91 ++++++++++++++++-
- kernel/Makefile          |  10 +-
+ kernel/Makefile          |   9 ++
  kernel/allowlist.c       |   4 +
  kernel/apk_sign.c        |   5 +
  kernel/app_profile.c     | 206 ++++++++++++++++++++-------------------
  kernel/kernel_umount.c   |   3 +
- kernel/ksu.c             |  18 +++-
+ kernel/ksu.c             |  16 ++-
  kernel/ksud.c            |  52 ++++++++++
  kernel/ksud.h            |  19 ++++
  kernel/manager.h         |  14 +++
@@ -21,8 +22,35 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/sucompat.c        | 124 +++++++++++++++++++++++
  kernel/sucompat.h        |  10 +-
  kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 17 files changed, 833 insertions(+), 107 deletions(-)
+ 18 files changed, 842 insertions(+), 106 deletions(-)
 
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index 94bfdb90..44b559ab 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
+ kernelsu-objs += app_profile.o
+ kernelsu-objs += apk_sign.o
+ kernelsu-objs += sucompat.o
+-kernelsu-objs += syscall_hook_manager.o
+ kernelsu-objs += throne_tracker.o
+ kernelsu-objs += pkg_observer.o
+ kernelsu-objs += setuid_hook.o
+@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
++
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -131,18 +159,10 @@ index cc4dbb3a..393e16cd 100644
 +
  endmenu
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 926d0a6c..f0525f0e 100644
+index 0b8c8a10..ba9272ed 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
-@@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
- kernelsu-objs += app_profile.o
- kernelsu-objs += apk_sign.o
- kernelsu-objs += sucompat.o
--kernelsu-objs += syscall_hook_manager.o
- kernelsu-objs += throne_tracker.o
- kernelsu-objs += pkg_observer.o
- kernelsu-objs += setuid_hook.o
-@@ -86,4 +85,13 @@ compdb:
+@@ -13,4 +13,13 @@ compdb:
  clean:
  	make -C $(KDIR) M=$(MDIR) clean
  
@@ -455,17 +475,17 @@ index 35be022f..cbb5ddfd 100644
      pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
  
 diff --git a/kernel/ksu.c b/kernel/ksu.c
-index 8205e104..490377f2 100644
+index 8205e104..8bf113fe 100644
 --- a/kernel/ksu.c
 +++ b/kernel/ksu.c
-@@ -4,12 +4,17 @@
+@@ -4,12 +4,16 @@
  #include <linux/module.h>
  #include <linux/workqueue.h>
  #include <linux/moduleparam.h>
+-
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
- 
  #include "allowlist.h"
  #include "feature.h"
  #include "klog.h" // IWYU pragma: keep
@@ -476,7 +496,7 @@ index 8205e104..490377f2 100644
  #include "ksud.h"
  #include "supercalls.h"
  
-@@ -35,13 +40,21 @@ int __init kernelsu_init(void)
+@@ -35,13 +39,21 @@ int __init kernelsu_init(void)
  
      ksu_supercalls_init();
  
@@ -498,7 +518,7 @@ index 8205e104..490377f2 100644
  
  #ifdef MODULE
  #ifndef CONFIG_KSU_DEBUG
-@@ -60,9 +73,11 @@ void kernelsu_exit(void)
+@@ -60,9 +72,11 @@ void kernelsu_exit(void)
  
      ksu_observer_exit();
  
@@ -510,14 +530,6 @@ index 8205e104..490377f2 100644
  
      ksu_supercalls_exit();
  
-@@ -79,5 +94,4 @@ MODULE_DESCRIPTION("Android KernelSU");
- MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
- #else
- MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
--#endif
--
-+#endif
-\ No newline at end of file
 diff --git a/kernel/ksud.c b/kernel/ksud.c
 index a8b4edb0..94c6ca93 100644
 --- a/kernel/ksud.c
@@ -1217,20 +1229,20 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index a18194fc..789d8a4e 100644
+index a18194fc..5bdd18c7 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
-@@ -12,6 +12,10 @@
+@@ -11,6 +11,10 @@
+ #include <linux/task_work.h>
  #include <linux/uaccess.h>
  #include <linux/version.h>
- #include <linux/pid.h>
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/namei.h>
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
+ #include <linux/pid.h>
  
  #include "supercalls.h"
- #include "arch.h"
 @@ -25,7 +29,13 @@
  #include "selinux/selinux.h"
  #include "objsec.h"

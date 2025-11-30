@@ -1,28 +1,54 @@
-From aeb0d70a529def11f902a8b9dce55c5940937df0 Mon Sep 17 00:00:00 2001
+From 3c5ef72be1b906c9fbe2d8ffa5fd92668c5a39fb Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Fri, 28 Nov 2025 15:19:58 +0000
+Date: Fri, 28 Nov 2025 14:37:01 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
- kernel/Kconfig           |  91 ++++++++++++++++++++++-
- kernel/Makefile          |  10 ++-
+ kernel/Kconfig           |  91 ++++++++-
+ kernel/Makefile          |  10 +-
  kernel/allowlist.c       |   4 +
- kernel/apk_sign.c        |   2 +-
- kernel/app_profile.c     |   6 ++
+ kernel/app_profile.c     | 416 ++++++++++++++++++++-------------------
  kernel/kernel_umount.c   |   3 +
- kernel/ksu.c             |  16 +++-
- kernel/ksud.c            |  52 +++++++++++++
- kernel/ksud.h            |  19 +++++
- kernel/manager.h         |  14 ++++
- kernel/selinux/rules.c   |   9 +++
- kernel/selinux/selinux.c |  93 +++++++++++++++++++++++
- kernel/selinux/selinux.h |  13 ++++
- kernel/setuid_hook.c     | 119 +++++++++++++++++++++++++++++
- kernel/sucompat.c        | 124 +++++++++++++++++++++++++++++++
- kernel/sucompat.h        |  10 ++-
- kernel/supercalls.c      | 156 ++++++++++++++++++++++++++++++++++++++-
- 17 files changed, 731 insertions(+), 10 deletions(-)
+ kernel/ksu.c             |  18 +-
+ kernel/ksud.c            |  52 +++++
+ kernel/ksud.h            |  19 ++
+ kernel/manager.h         |  14 ++
+ kernel/selinux/rules.c   |   9 +
+ kernel/selinux/selinux.c |  93 +++++++++
+ kernel/selinux/selinux.h |  13 ++
+ kernel/setuid_hook.c     | 119 +++++++++++
+ kernel/sucompat.c        | 124 ++++++++++++
+ kernel/sucompat.h        |  10 +-
+ kernel/supercalls.c      | 150 ++++++++++++++
+ 16 files changed, 933 insertions(+), 212 deletions(-)
 
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index d98df1c3..ac7a98c3 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
+ kernelsu-objs += app_profile.o
+ kernelsu-objs += apk_sign.o
+ kernelsu-objs += sucompat.o
+-kernelsu-objs += syscall_hook_manager.o
+ kernelsu-objs += throne_tracker.o
+ kernelsu-objs += pkg_observer.o
+ kernelsu-objs += setuid_hook.o
+@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
++
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -130,32 +156,6 @@ index cc4dbb3a..393e16cd 100644
 +endmenu
 +
  endmenu
-diff --git a/kernel/Makefile b/kernel/Makefile
-index 9474d87c..b9fcd624 100644
---- a/kernel/Makefile
-+++ b/kernel/Makefile
-@@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
- kernelsu-objs += app_profile.o
- kernelsu-objs += apk_sign.o
- kernelsu-objs += sucompat.o
--kernelsu-objs += syscall_hook_manager.o
- kernelsu-objs += throne_tracker.o
- kernelsu-objs += pkg_observer.o
- kernelsu-objs += setuid_hook.o
-@@ -87,4 +86,13 @@ compdb:
- clean:
- 	make -C $(KDIR) M=$(MDIR) clean
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
 index b163eb3f..0fa5f8de 100644
 --- a/kernel/allowlist.c
@@ -181,22 +181,11 @@ index b163eb3f..0fa5f8de 100644
      }
  
      return result;
-diff --git a/kernel/apk_sign.c b/kernel/apk_sign.c
-index 71a7f1bd..d41141ea 100644
---- a/kernel/apk_sign.c
-+++ b/kernel/apk_sign.c
-@@ -319,4 +319,4 @@ bool is_manager_apk(char *path)
-     || check_v2_signature(path, 0x363, "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549") // backslashxx/KernelSU
-     || check_v2_signature(path, 384, "7e0c6d7278a3bb8e364e0fcba95afaf3666cf5ff3c245a3b63c8833bd0445cc4")  // 5ec1cff/KernelSU
-     );
--}
-\ No newline at end of file
-+}
 diff --git a/kernel/app_profile.c b/kernel/app_profile.c
-index ad62a2ff..0428ee1c 100644
+index ad62a2ff..777f4176 100644
 --- a/kernel/app_profile.c
 +++ b/kernel/app_profile.c
-@@ -20,7 +20,9 @@
+@@ -20,47 +20,49 @@
  #include "arch.h"
  #include "klog.h" // IWYU pragma: keep
  #include "selinux/selinux.h"
@@ -206,27 +195,457 @@ index ad62a2ff..0428ee1c 100644
  
  static struct group_info root_groups = { .usage = ATOMIC_INIT(2) };
  
-@@ -211,8 +213,10 @@ static void disable_seccomp(void)
+ void setup_groups(struct root_profile *profile, struct cred *cred)
+ {
+-	if (profile->groups_count > KSU_MAX_GROUPS) {
+-		pr_warn("Failed to setgroups, too large group: %d!\n", profile->uid);
+-		return;
+-	}
+-
+-	if (profile->groups_count == 1 && profile->groups[0] == 0) {
+-		// setgroup to root and return early.
+-		if (cred->group_info)
+-			put_group_info(cred->group_info);
+-		cred->group_info = get_group_info(&root_groups);
+-		return;
+-	}
+-
+-	u32 ngroups = profile->groups_count;
+-	struct group_info *group_info = groups_alloc(ngroups);
+-	if (!group_info) {
+-		pr_warn("Failed to setgroups, ENOMEM for: %d\n", profile->uid);
+-		return;
+-	}
+-
+-	int i;
+-	for (i = 0; i < ngroups; i++) {
+-		gid_t gid = profile->groups[i];
+-		kgid_t kgid = make_kgid(current_user_ns(), gid);
+-		if (!gid_valid(kgid)) {
+-			pr_warn("Failed to setgroups, invalid gid: %d\n", gid);
+-			put_group_info(group_info);
+-			return;
+-		}
+-		group_info->gid[i] = kgid;
+-	}
+-
+-	groups_sort(group_info);
+-	set_groups(cred, group_info);
+-	put_group_info(group_info);
++    if (profile->groups_count > KSU_MAX_GROUPS) {
++        pr_warn("Failed to setgroups, too large group: %d!\n", profile->uid);
++        return;
++    }
++
++    if (profile->groups_count == 1 && profile->groups[0] == 0) {
++        // setgroup to root and return early.
++        if (cred->group_info)
++            put_group_info(cred->group_info);
++        cred->group_info = get_group_info(&root_groups);
++        return;
++    }
++
++    u32 ngroups = profile->groups_count;
++    struct group_info *group_info = groups_alloc(ngroups);
++    if (!group_info) {
++        pr_warn("Failed to setgroups, ENOMEM for: %d\n", profile->uid);
++        return;
++    }
++
++    int i;
++    for (i = 0; i < ngroups; i++) {
++        gid_t gid = profile->groups[i];
++        kgid_t kgid = make_kgid(current_user_ns(), gid);
++        if (!gid_valid(kgid)) {
++            pr_warn("Failed to setgroups, invalid gid: %d\n", gid);
++            put_group_info(group_info);
++            return;
++        }
++        group_info->gid[i] = kgid;
++    }
++
++    groups_sort(group_info);
++    set_groups(cred, group_info);
++    put_group_info(group_info);
+ }
+ 
+ #if defined(__aarch64__)
+@@ -71,200 +73,204 @@ extern long __x64_sys_setns(const struct pt_regs *regs);
+ 
+ static long ksu_sys_setns(int fd, int flags)
+ {
+-	struct pt_regs regs;
+-	memset(&regs, 0, sizeof(regs));
++    struct pt_regs regs;
++    memset(&regs, 0, sizeof(regs));
+ 
+-	PT_REGS_PARM1(&regs) = fd;
+-	PT_REGS_PARM2(&regs) = flags;
++    PT_REGS_PARM1(&regs) = fd;
++    PT_REGS_PARM2(&regs) = flags;
+ 
+ #if defined(__aarch64__)
+-	return __arm64_sys_setns(&regs);
++    return __arm64_sys_setns(&regs);
+ #elif defined(__x86_64__)
+-	return __x64_sys_setns(&regs);
++    return __x64_sys_setns(&regs);
+ #else
+-	return -ENOSYS;
++    return -ENOSYS;
+ #endif
+ }
+ 
+ static void setup_mount_namespace(int32_t ns_mode) {
+-	pr_info("setup mount namespace for pid: %d\n", current->pid);
+-	// inherit mode
+-	if (ns_mode == 0) {
+-		pr_info("mount namespace mode: inherit\n");
+-		// do nothing
+-		return;
+-	}
+-
+-	if (ns_mode > 2) {
+-		pr_warn("unknown mount namespace mode: %d\n", ns_mode);
+-		return;
+-	}
+-	const struct cred *old_cred = NULL;
+-	struct cred *new_cred = NULL;
+-	if (!(capable(CAP_SYS_ADMIN) && capable(CAP_SYS_CHROOT))) {
+-		pr_info("process dont have CAP_SYS_ADMIN or CAP_SYS_CHROOT, adding it temporarily.\n");
+-		new_cred = prepare_creds();
+-		if (!new_cred) {
+-			pr_warn("failed to prepare new credentials\n");
+-			return;
+-		}
+-		cap_raise(new_cred->cap_effective, CAP_SYS_ADMIN);
+-		cap_raise(new_cred->cap_effective, CAP_SYS_CHROOT);
+-		old_cred = override_creds(new_cred);
+-	}
+-	// global mode , need CAP_SYS_ADMIN and CAP_SYS_CHROOT to perform setns
+-	if (ns_mode == 1) {
+-		pr_info("mount namespace mode: global\n");
+-		struct file *ns_file;
+-		struct path ns_path;
+-		struct task_struct *pid1_task = NULL;
+-		struct pid *pid_struct = NULL;
+-		rcu_read_lock();
+-		// find init
+-		pid_struct = find_pid_ns(1, &init_pid_ns);
+-		if (unlikely(!pid_struct)) {
+-			rcu_read_unlock();
+-			pr_warn("failed to find pid_struct for PID 1\n");
+-			goto try_drop_caps;
+-		}
+-
+-		pid1_task = get_pid_task(pid_struct, PIDTYPE_PID);
+-		rcu_read_unlock();
+-		if (unlikely(!pid1_task)) {
+-			pr_warn("failed to get task_struct for PID 1\n");
+-			goto try_drop_caps;
+-		}
+-		// mabe you can use &init_task for first stage init?
+-		long ret = ns_get_path(&ns_path, pid1_task, &mntns_operations);
+-		put_task_struct(pid1_task);
+-		if (ret) {
+-			pr_warn("failed to get path for init's mount namespace: %ld\n", ret);
+-			goto try_drop_caps;
+-		}
+-		ns_file = dentry_open(&ns_path, O_RDONLY, current_cred());
+-
+-		path_put(&ns_path);
+-		if (IS_ERR(ns_file)) {
+-			pr_warn("failed to open file for init's mount namespace: %ld\n", PTR_ERR(ns_file));
+-			goto try_drop_caps;
+-		}
+-
+-		int fd = get_unused_fd_flags(O_CLOEXEC);
+-		if (fd < 0) {
+-			pr_warn("failed to get an unused fd: %d\n", fd);
+-			fput(ns_file);
+-			goto try_drop_caps;
+-		}
+-
+-		fd_install(fd, ns_file);
+-		pr_info("calling sys_setns with fd : %d\n", fd);
+-
+-		ret = ksu_sys_setns(fd, CLONE_NEWNS);
+-		if (ret) {
+-			pr_warn("sys_setns failed: %ld\n", ret);
+-		}
++    pr_info("setup mount namespace for pid: %d\n", current->pid);
++    // inherit mode
++    if (ns_mode == 0) {
++        pr_info("mount namespace mode: inherit\n");
++        // do nothing
++        return;
++    }
++
++    if (ns_mode > 2) {
++        pr_warn("unknown mount namespace mode: %d\n", ns_mode);
++        return;
++    }
++    const struct cred *old_cred = NULL;
++    struct cred *new_cred = NULL;
++    if (!(capable(CAP_SYS_ADMIN) && capable(CAP_SYS_CHROOT))) {
++        pr_info("process dont have CAP_SYS_ADMIN or CAP_SYS_CHROOT, adding it temporarily.\n");
++        new_cred = prepare_creds();
++        if (!new_cred) {
++            pr_warn("failed to prepare new credentials\n");
++            return;
++        }
++        cap_raise(new_cred->cap_effective, CAP_SYS_ADMIN);
++        cap_raise(new_cred->cap_effective, CAP_SYS_CHROOT);
++        old_cred = override_creds(new_cred);
++    }
++    // global mode , need CAP_SYS_ADMIN and CAP_SYS_CHROOT to perform setns
++    if (ns_mode == 1) {
++        pr_info("mount namespace mode: global\n");
++        struct file *ns_file;
++        struct path ns_path;
++        struct task_struct *pid1_task = NULL;
++        struct pid *pid_struct = NULL;
++        rcu_read_lock();
++        // find init
++        pid_struct = find_pid_ns(1, &init_pid_ns);
++        if (unlikely(!pid_struct)) {
++            rcu_read_unlock();
++            pr_warn("failed to find pid_struct for PID 1\n");
++            goto try_drop_caps;
++        }
++
++        pid1_task = get_pid_task(pid_struct, PIDTYPE_PID);
++        rcu_read_unlock();
++        if (unlikely(!pid1_task)) {
++            pr_warn("failed to get task_struct for PID 1\n");
++            goto try_drop_caps;
++        }
++        // mabe you can use &init_task for first stage init?
++        long ret = ns_get_path(&ns_path, pid1_task, &mntns_operations);
++        put_task_struct(pid1_task);
++        if (ret) {
++            pr_warn("failed to get path for init's mount namespace: %ld\n", ret);
++            goto try_drop_caps;
++        }
++        ns_file = dentry_open(&ns_path, O_RDONLY, current_cred());
++
++        path_put(&ns_path);
++        if (IS_ERR(ns_file)) {
++            pr_warn("failed to open file for init's mount namespace: %ld\n", PTR_ERR(ns_file));
++            goto try_drop_caps;
++        }
++
++        int fd = get_unused_fd_flags(O_CLOEXEC);
++        if (fd < 0) {
++            pr_warn("failed to get an unused fd: %d\n", fd);
++            fput(ns_file);
++            goto try_drop_caps;
++        }
++
++        fd_install(fd, ns_file);
++        pr_info("calling sys_setns with fd : %d\n", fd);
++
++        ret = ksu_sys_setns(fd, CLONE_NEWNS);
++        if (ret) {
++            pr_warn("sys_setns failed: %ld\n", ret);
++        }
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+-		ksys_close(fd);
++        ksys_close(fd);
+ #else
+-		close_fd(fd);
++        close_fd(fd);
+ #endif
+-	}
+-	// independent mode , need CAP_SYS_ADMIN to perform unshare
+-	if (ns_mode == 2) {
+-		long ret;
+-		pr_info("mount namespace mode: independent\n");
+-
+-		ret = ksys_unshare(CLONE_NEWNS);
+-		if (ret) {
+-			pr_warn("call ksys_unshare failed: %ld\n", ret);
+-		}
+-	}
+-	// finally drop capability
+-	try_drop_caps:
+-	if (old_cred) {
+-		pr_info("dropping temporarily capability.\n");
+-		revert_creds(old_cred);
+-		put_cred(new_cred);
+-	}
+-	return;
++    }
++    // independent mode , need CAP_SYS_ADMIN to perform unshare
++    if (ns_mode == 2) {
++        long ret;
++        pr_info("mount namespace mode: independent\n");
++
++        ret = ksys_unshare(CLONE_NEWNS);
++        if (ret) {
++            pr_warn("call ksys_unshare failed: %ld\n", ret);
++        }
++    }
++    // finally drop capability
++    try_drop_caps:
++    if (old_cred) {
++        pr_info("dropping temporarily capability.\n");
++        revert_creds(old_cred);
++        put_cred(new_cred);
++    }
++    return;
+ }
+ 
+ static void disable_seccomp(void)
+ {
+-	assert_spin_locked(&current->sighand->siglock);
+-	// disable seccomp
++    assert_spin_locked(&current->sighand->siglock);
++    // disable seccomp
+ #if defined(CONFIG_GENERIC_ENTRY) &&                                           \
+-	LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+-	clear_syscall_work(SECCOMP);
++    LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
++    clear_syscall_work(SECCOMP);
+ #else
+-	clear_thread_flag(TIF_SECCOMP);
++    clear_thread_flag(TIF_SECCOMP);
+ #endif
+ 
+ #ifdef CONFIG_SECCOMP
+-	current->seccomp.mode = 0;
+-	current->seccomp.filter = NULL;
+-	atomic_set(&current->seccomp.filter_count, 0);
++    current->seccomp.mode = 0;
++    current->seccomp.filter = NULL;
++    atomic_set(&current->seccomp.filter_count, 0);
+ #else
+ #endif
+ }
+ 
  void escape_with_root_profile(void)
  {
- 	struct cred *cred;
+-	struct cred *cred;
+-	struct task_struct *p = current;
+-	struct task_struct *t;
+-
+-	cred = prepare_creds();
+-	if (!cred) {
+-		pr_warn("prepare_creds failed!\n");
+-		return;
+-	}
+-
+-	if (cred->euid.val == 0) {
+-		pr_warn("Already root, don't escape!\n");
+-		abort_creds(cred);
+-		return;
+-	}
+-
+-	struct root_profile *profile = ksu_get_root_profile(cred->uid.val);
+-
+-	cred->uid.val = profile->uid;
+-	cred->suid.val = profile->uid;
+-	cred->euid.val = profile->uid;
+-	cred->fsuid.val = profile->uid;
+-
+-	cred->gid.val = profile->gid;
+-	cred->fsgid.val = profile->gid;
+-	cred->sgid.val = profile->gid;
+-	cred->egid.val = profile->gid;
+-	cred->securebits = 0;
+-
+-	BUILD_BUG_ON(sizeof(profile->capabilities.effective) !=
+-		     sizeof(kernel_cap_t));
+-
+-	// setup capabilities
+-	// we need CAP_DAC_READ_SEARCH becuase `/data/adb/ksud` is not accessible for non root process
+-	// we add it here but don't add it to cap_inhertiable, it would be dropped automaticly after exec!
+-	u64 cap_for_ksud = profile->capabilities.effective | CAP_DAC_READ_SEARCH;
+-	memcpy(&cred->cap_effective, &cap_for_ksud, sizeof(cred->cap_effective));
+-	memcpy(&cred->cap_permitted, &profile->capabilities.effective,
+-	       sizeof(cred->cap_permitted));
+-	memcpy(&cred->cap_bset, &profile->capabilities.effective,
+-	       sizeof(cred->cap_bset));
+-
+-	setup_groups(profile, cred);
+-
+-	commit_creds(cred);
+-
+-	// Refer to kernel/seccomp.c: seccomp_set_mode_strict
+-	// When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
+-	spin_lock_irq(&current->sighand->siglock);
+-	disable_seccomp();
+-	spin_unlock_irq(&current->sighand->siglock);
+-
+-	setup_selinux(profile->selinux_domain);
+-	setup_mount_namespace(profile->namespaces);
+-	for_each_thread (p, t) {
+-		ksu_set_task_tracepoint_flag(t);
+-	}
+-}
++    struct cred *cred;
 +#ifndef CONFIG_KSU_SUSFS
- 	struct task_struct *p = current;
- 	struct task_struct *t;
++    struct task_struct *p = current;
++    struct task_struct *t;
 +#endif // #ifndef CONFIG_KSU_SUSFS
- 
- 	cred = prepare_creds();
- 	if (!cred) {
-@@ -264,7 +268,9 @@ void escape_with_root_profile(void)
- 
- 	setup_selinux(profile->selinux_domain);
- 	setup_mount_namespace(profile->namespaces);
++
++    cred = prepare_creds();
++    if (!cred) {
++        pr_warn("prepare_creds failed!\n");
++        return;
++    }
++
++    if (cred->euid.val == 0) {
++        pr_warn("Already root, don't escape!\n");
++        abort_creds(cred);
++        return;
++    }
++
++    struct root_profile *profile = ksu_get_root_profile(cred->uid.val);
++
++    cred->uid.val = profile->uid;
++    cred->suid.val = profile->uid;
++    cred->euid.val = profile->uid;
++    cred->fsuid.val = profile->uid;
++
++    cred->gid.val = profile->gid;
++    cred->fsgid.val = profile->gid;
++    cred->sgid.val = profile->gid;
++    cred->egid.val = profile->gid;
++    cred->securebits = 0;
++
++    BUILD_BUG_ON(sizeof(profile->capabilities.effective) !=
++             sizeof(kernel_cap_t));
++
++    // setup capabilities
++    // we need CAP_DAC_READ_SEARCH becuase `/data/adb/ksud` is not accessible for non root process
++    // we add it here but don't add it to cap_inhertiable, it would be dropped automaticly after exec!
++    u64 cap_for_ksud = profile->capabilities.effective | CAP_DAC_READ_SEARCH;
++    memcpy(&cred->cap_effective, &cap_for_ksud, sizeof(cred->cap_effective));
++    memcpy(&cred->cap_permitted, &profile->capabilities.effective,
++           sizeof(cred->cap_permitted));
++    memcpy(&cred->cap_bset, &profile->capabilities.effective,
++           sizeof(cred->cap_bset));
++
++    setup_groups(profile, cred);
++
++    commit_creds(cred);
++
++    // Refer to kernel/seccomp.c: seccomp_set_mode_strict
++    // When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
++    spin_lock_irq(&current->sighand->siglock);
++    disable_seccomp();
++    spin_unlock_irq(&current->sighand->siglock);
++
++    setup_selinux(profile->selinux_domain);
++    setup_mount_namespace(profile->namespaces);
 +#ifndef CONFIG_KSU_SUSFS
- 	for_each_thread (p, t) {
- 		ksu_set_task_tracepoint_flag(t);
- 	}
++    for_each_thread (p, t) {
++        ksu_set_task_tracepoint_flag(t);
++    }
 +#endif // #ifndef CONFIG_KSU_SUSFS
- }
++}
+\ No newline at end of file
 diff --git a/kernel/kernel_umount.c b/kernel/kernel_umount.c
 index 35be022f..cbb5ddfd 100644
 --- a/kernel/kernel_umount.c
@@ -249,7 +668,7 @@ index 35be022f..cbb5ddfd 100644
      pr_info("handle umount for uid: %d, pid: %d\n", new_uid, current->pid);
  
 diff --git a/kernel/ksu.c b/kernel/ksu.c
-index 8205e104..13af846d 100644
+index 8205e104..490377f2 100644
 --- a/kernel/ksu.c
 +++ b/kernel/ksu.c
 @@ -4,12 +4,17 @@
@@ -304,11 +723,14 @@ index 8205e104..13af846d 100644
  
      ksu_supercalls_exit();
  
-@@ -80,4 +95,3 @@ MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+@@ -79,5 +94,4 @@ MODULE_DESCRIPTION("Android KernelSU");
+ MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
  #else
  MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
- #endif
+-#endif
 -
++#endif
+\ No newline at end of file
 diff --git a/kernel/ksud.c b/kernel/ksud.c
 index e1f17319..9ad6823c 100644
 --- a/kernel/ksud.c
@@ -1008,20 +1430,20 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index b5054509..5ec2e194 100644
+index b5054509..265d6be0 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
-@@ -11,6 +11,10 @@
- #include <linux/task_work.h>
+@@ -12,6 +12,10 @@
  #include <linux/uaccess.h>
  #include <linux/version.h>
+ #include <linux/pid.h>
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/namei.h>
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
- #include <linux/pid.h>
  
  #include "supercalls.h"
+ #include "arch.h"
 @@ -25,7 +29,13 @@
  #include "selinux/selinux.h"
  #include "objsec.h"
@@ -1115,30 +1537,14 @@ index b5054509..5ec2e194 100644
          break;
      }
      default: {
-@@ -653,12 +689,13 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
-     kfree(tw);
+@@ -707,6 +743,7 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
+     return 0;
  }
  
 +#ifndef CONFIG_KSU_SUSFS
- // downstream: make sure to pass arg as reference, this can allow us to extend things.
- static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
+ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
- 
-     if (magic1 != KSU_INSTALL_MAGIC1)
--    	return 0;
-+        return 0;
- 
-     pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
- 
-@@ -698,7 +735,7 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
- 
-         if (cmd == ksu_get_manager_uid()) {
-             if (copy_to_user((void __user *)*arg, &reply, sizeof(reply)))
--            	pr_info("sys_reboot: reply fail\n");
-+                pr_info("sys_reboot: reply fail\n");
-         }
- 
-         return 0;
+     struct pt_regs *real_regs = PT_REAL_REGS(regs);
 @@ -723,7 +760,114 @@ static struct kprobe reboot_kp = {
      .symbol_name = REBOOT_SYMBOL,
      .pre_handler = reboot_handler_pre,
@@ -1277,13 +1683,6 @@ index b5054509..5ec2e194 100644
  }
  
  // IOCTL dispatcher
-@@ -816,4 +966,4 @@ int ksu_install_fd(void)
-     pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
- 
-     return fd;
--}
-+}
-\ No newline at end of file
 -- 
 2.52.0
 

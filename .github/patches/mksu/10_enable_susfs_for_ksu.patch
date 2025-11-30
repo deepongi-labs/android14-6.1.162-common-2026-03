@@ -27,7 +27,7 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  create mode 120000 kernel/kernel
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index 94bfdb90..bd5e85d1 100644
+index d98df1c3..ac7a98c3 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -38,6 +38,21 @@ index 94bfdb90..bd5e85d1 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
+@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
+ ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
++
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -145,24 +160,6 @@ index cc4dbb3a..393e16cd 100644
 +endmenu
 +
  endmenu
-diff --git a/kernel/Makefile b/kernel/Makefile
-index 0b8c8a10..ba9272ed 100644
---- a/kernel/Makefile
-+++ b/kernel/Makefile
-@@ -13,4 +13,13 @@ compdb:
- clean:
- 	make -C $(KDIR) M=$(MDIR) clean
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
 index b163eb3f..0fa5f8de 100644
 --- a/kernel/allowlist.c

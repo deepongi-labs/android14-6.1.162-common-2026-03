@@ -28,7 +28,6 @@ on:
         required: false
         default: true
         type: boolean
-      # ADD THIS NEW INPUT:
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
@@ -54,7 +53,6 @@ jobs:
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
-      # ADD THIS:
       create_release: ${{ steps.config.outputs.create_release }}
     steps:
       - name: Record Build Start Time
@@ -201,7 +199,6 @@ jobs:
           echo "📈 CCACHE stats BEFORE build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
-      # ✅ ADD THIS NEW STEP HERE (before Setup KernelSU)
       - name: Clean Kernel Directory
         run: |
           echo "🧹 Cleaning kernel directory for fresh patch application..."
@@ -547,9 +544,6 @@ jobs:
         run: |
           echo "📦 Setting up SuSFS..."
           
-          # ❌ REMOVE THE CLEANING LINES FROM HERE
-          # They were breaking KernelSU setup
-          
           # Copy SuSFS files
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
@@ -617,66 +611,35 @@ jobs:
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
           
-          # Base configuration
+          # Base configuration (Cleaned, sorted, and syntax fixed)
           cat >> out/.config << 'EOF'
-          CONFIG_ARM64_CORTEX_X3=y
-          CONFIG_ARM64_CORTEX_A715=y
-          CONFIG_ARM64_CORTEX_A510=y
-          CONFIG_ARM64_VA_BITS=48
-          CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_TAGGED_ADDR_ABI=y
-          CONFIG_ARM64_SVE=y
           CONFIG_ARM64_BTI=y
+          CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_ARM64_CORTEX_A715=y
+          CONFIG_ARM64_CORTEX_X3=y
+          CONFIG_ARM64_PA_BITS=48
           CONFIG_ARM64_PTR_AUTH=y
           CONFIG_ARM64_SME=y
-          CONFIG_SCHED_MC=y
-          CONFIG_SCHED_CORE=y
-          CONFIG_ENERGY_MODEL=y
-          CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y
-          CONFIG_CPU_FREQ=y
-          CONFIG_CPUFREQ_DT=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-          CONFIG_OPP=y
-          CONFIG_CPU_IDLE=y
+          CONFIG_ARM64_SVE=y
+          CONFIG_ARM64_TAGGED_ADDR_ABI=y
+          CONFIG_ARM64_VA_BITS=48
           CONFIG_ARM_PSCI_CPUIDLE=y
-          CONFIG_THERMAL=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_DEVFREQ_THERMAL=y
-          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-          CONFIG_THERMAL_GOV_STEP_WISE=y
-          CONFIG_THERMAL_GOV_FAIR_SHARE=y
-          CONFIG_THERMAL_EMULATION=y
-          CONFIG_THERMAL_WRITABLE_TRIPS=y
-          CONFIG_POWER_CAP=y
-          CONFIG_PERF_EVENTS=y
-          CONFIG_NUMA_BALANCING=y
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
           CONFIG_CMA=y
           CONFIG_CMA_AREAS=7
-          CONFIG_LOCALVERSION_AUTO=n
-          CONFIG_KSU=y
-          CONFIG_KSU_DEBUG=n
-          CONFIG_KPROBES=y
+          CONFIG_CPUFREQ_DT=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_DEVFREQ_THERMAL=y
+          CONFIG_ENERGY_MODEL=y
           CONFIG_HAVE_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
           CONFIG_IP6_NF_MATCH_HL=y
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_TCP_CONG_BIC=n
-          CONFIG_TCP_CONG_WESTWOOD=n
-          CONFIG_TCP_CONG_HTCP=n
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_LTO=y
-          CONFIG_LTO_CLANG=y
-          CONFIG_LTO_CLANG_THIN=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP_NF_TARGET_TTL=y
           CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=256
           CONFIG_IP_SET_BITMAP_IP=y
           CONFIG_IP_SET_BITMAP_IPMAC=y
           CONFIG_IP_SET_BITMAP_PORT=y
@@ -685,38 +648,76 @@ jobs:
           CONFIG_IP_SET_HASH_IPPORTIP=y
           CONFIG_IP_SET_HASH_IPPORTNET=y
           CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_IP_SET_HASH_NETNET=y
           CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_MAX=256
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_KSU=y
+          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
+          CONFIG_KSU_DEBUG=y
+          CONFIG_KSU_KPROBES_HOOK=n
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
+          CONFIG_LOCALVERSION_AUTO=n
+          CONFIG_LTO=y
+          CONFIG_LTO_CLANG=y
+          CONFIG_LTO_CLANG_THIN=y
           CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NUMA_BALANCING=y
+          CONFIG_OPP=y
+          CONFIG_PERF_EVENTS=y
+          CONFIG_POWER_CAP=y
+          CONFIG_SCHED_CORE=y
+          CONFIG_SCHED_MC=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_BIC=n
+          CONFIG_TCP_CONG_HTCP=n
+          CONFIG_TCP_CONG_WESTWOOD=n
+          CONFIG_THERMAL=y
+          CONFIG_THERMAL_EMULATION=y
+          CONFIG_THERMAL_GOV_FAIR_SHARE=y
+          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+          CONFIG_THERMAL_GOV_STEP_WISE=y
+          CONFIG_THERMAL_WRITABLE_TRIPS=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
           EOF
           
           # Variant-specific config
           case "${{ matrix.variant }}" in
             "tiann")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "kowsu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "mksu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
           esac
           
-          # SuSFS configuration
+          # SuSFS configuration (additional safety check, though base config has them enabled)
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
@@ -783,7 +784,6 @@ jobs:
           FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{print $4, $5, $6, $7}' | sed 's/^ *//;s/ *$//')
           
           # Extract hit rate - format has TWO "Hits:" lines, we want the FIRST one
-          # Format: "  Hits:            70522 /  71006 (99.32%)"
           HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | grep -oE '\([0-9]+\.[0-9]+%\)' | tr -d '()')
           
           # If extraction failed, try alternative method
@@ -885,7 +885,6 @@ jobs:
   create_release:
     needs: [setup, build]
     runs-on: [self-hosted, Linux, X64]
-    # ADD THIS CONDITION:
     if: needs.setup.outputs.create_release == 'true' && success()
     steps:
       - name: Checkout
@@ -1117,8 +1116,7 @@ jobs:
           - ✅ **Pixel 8** - Compatible (same Tensor G3)
           - ✅ **Pixel 8 Pro** - Compatible (same Tensor G3)
           
-          **Why "android14" in the branch name?**  
-          The branch name `android14-6.1-2025-09` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
+          **Why "android14" in the branch name?** The branch name `android14-6.1-2025-09` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
           
           **What this means:**
           - ✅ This kernel is for Android 16

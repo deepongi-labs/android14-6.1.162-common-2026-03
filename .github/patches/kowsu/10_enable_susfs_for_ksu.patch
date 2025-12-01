@@ -1,4 +1,4 @@
-From 8ee785bc8b3b777b7b17452fc90cd83654f02ebc Mon Sep 17 00:00:00 2001
+From 0e9182de5df42e43b18bb0e2bb20bdd1aa0d3345 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
 Date: Sun, 30 Nov 2025 19:01:40 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
@@ -20,11 +20,11 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/setuid_hook.c     | 116 +++++++++++
  kernel/sucompat.c        | 124 ++++++++++++
  kernel/sucompat.h        |  10 +-
- kernel/supercalls.c      | 150 ++++++++++++++
- 17 files changed, 931 insertions(+), 213 deletions(-)
+ kernel/supercalls.c      | 162 +++++++++++++--
+ 17 files changed, 928 insertions(+), 228 deletions(-)
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index d98df1c3..ac7a98c3 100644
+index 59565c96..988011e6 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -35,21 +35,6 @@ index d98df1c3..ac7a98c3 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
-@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
- ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
- ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
-+
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -157,6 +142,24 @@ index cc4dbb3a..393e16cd 100644
 +endmenu
 +
  endmenu
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 0b8c8a10..ba9272ed 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -13,4 +13,13 @@ compdb:
+ clean:
+ 	make -C $(KDIR) M=$(MDIR) clean
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
 index b163eb3f..0fa5f8de 100644
 --- a/kernel/allowlist.c
@@ -1430,7 +1433,7 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index b5054509..265d6be0 100644
+index b5054509..003bdf8d 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
 @@ -12,6 +12,10 @@
@@ -1537,25 +1540,34 @@ index b5054509..265d6be0 100644
          break;
      }
      default: {
-@@ -707,6 +743,7 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
+@@ -652,7 +688,7 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
+ 
+     kfree(tw);
+ }
+-
++#ifndef CONFIG_KSU_SUSFS
+ // downstream: make sure to pass arg as reference, this can allow us to extend things.
+ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
+ {
+@@ -706,24 +742,114 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
+ 
      return 0;
  }
- 
-+#ifndef CONFIG_KSU_SUSFS
- static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
- {
-     struct pt_regs *real_regs = PT_REAL_REGS(regs);
-@@ -723,7 +760,114 @@ static struct kprobe reboot_kp = {
-     .symbol_name = REBOOT_SYMBOL,
-     .pre_handler = reboot_handler_pre,
- };
+-
+-static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
 +#else
 +int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
-+{
+ {
+-    struct pt_regs *real_regs = PT_REAL_REGS(regs);
+-    int magic1 = (int)PT_REGS_PARM1(real_regs);
+-    int magic2 = (int)PT_REGS_PARM2(real_regs);
+-    int cmd = (int)PT_REGS_PARM3(real_regs);
+-    void __user **arg = (void __user **)&PT_REGS_SYSCALL_PARM4(real_regs);
 +    if (magic1 != KSU_INSTALL_MAGIC1) {
 +        return -EINVAL; 
 +    }
-+
+ 
+-    return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
 +    // If magic2 is susfs and current process is root
 +    if (magic2 == SUSFS_MAGIC && current_uid().val == 0) {
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
@@ -1655,12 +1667,18 @@ index b5054509..265d6be0 100644
 +        }
 +    }
 +    return 0;
-+}
+ }
+-
+-static struct kprobe reboot_kp = {
+-    .symbol_name = REBOOT_SYMBOL,
+-    .pre_handler = reboot_handler_pre,
+-};
+-
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
  void ksu_supercalls_init(void)
  {
-@@ -734,16 +878,22 @@ void ksu_supercalls_init(void)
+@@ -734,16 +860,22 @@ void ksu_supercalls_init(void)
          pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
      }
  

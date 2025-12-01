@@ -114,6 +114,7 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
+          clean: false  # ← Add this line
 
       - name: Initialize and Update Submodules
         run: |
@@ -127,6 +128,29 @@ jobs:
           git submodule update --init --recursive susfs4ksu
           
           echo "✅ All submodules initialized"
+
+      - name: Update Kernel to New Branch
+        run: |
+          echo "🔄 Updating kernel to android14-6.1-2025-12..."
+          cd kernel/
+          
+          # Get latest from new branch
+          git fetch origin android14-6.1-2025-12
+          git checkout -b android14-6.1-2025-12 FETCH_HEAD 2>/dev/null || git checkout android14-6.1-2025-12
+          git reset --hard FETCH_HEAD
+          
+          echo "📊 Kernel status:"
+          git branch -v
+          cd ..
+          
+          echo "✅ Kernel updated"
+
+      - name: Verify Submodules
+        run: |
+          echo "📋 Submodule status:"
+          git submodule status
+          echo "🎯 Kernel branch:"
+          cd kernel && git branch -v && cd ..
 
       - name: Clean Kernel Directory Properly
         run: |

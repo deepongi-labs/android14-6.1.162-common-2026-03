@@ -55,6 +55,10 @@ jobs:
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
       create_release: ${{ steps.config.outputs.create_release }}
     steps:
+      - name: Set Workflow Start Time
+        run: |
+          echo "WORKFLOW_START_TIME=$(date +%s)" >> $GITHUB_ENV
+          echo "::notice::Workflow started at $(date)"
       - name: Record Build Start Time
         id: timestamp
         run: |
@@ -1168,108 +1172,320 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify:
-    needs: [setup, create_release]
+    needs: [setup, create_release, build]
     runs-on: [self-hosted, Linux, X64]
     if: always()
     steps:
-      - name: Extract Variant Info
+      - name: Extract and Prepare Build Information
         if: always()
+        id: extract-info
         run: |
           # Get variant info from setup output
-          echo "VARIANTS_BUILT=${{ needs.setup.outputs.matrix }}" >> $GITHUB_ENV
+          VARIANTS_BUILT="${{ needs.setup.outputs.matrix || '' }}"
+          echo "VARIANTS_BUILT=${VARIANTS_BUILT}" >> $GITHUB_ENV
           
           # Get release creation status
-          echo "CREATE_RELEASE=${{ needs.setup.outputs.create_release }}" >> $GITHUB_ENV
+          CREATE_RELEASE="${{ needs.setup.outputs.create_release || 'false' }}"
+          echo "CREATE_RELEASE=${CREATE_RELEASE}" >> $GITHUB_ENV
           
           # Determine which variants were actually built
           BUILT_VARIANTS=""
-          [[ "${{ needs.setup.outputs.matrix }}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
-          [[ "${{ needs.setup.outputs.matrix }}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
-          [[ "${{ needs.setup.outputs.matrix }}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
-          echo "BUILT_VARIANTS_LIST=$BUILT_VARIANTS" >> $GITHUB_ENV
-
-      - name: Send Enhanced Success Notification
-        if: ${{ needs.create_release.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
-        run: |
-          # Determine release info
-          if [ "${{ env.CREATE_RELEASE }}" = "true" ]; then
-            RELEASE_INFO="📦 *Release:* [Build #${{ github.run_number }}](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
-            DOWNLOAD_LINKS="• [Download All Variants](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+          [[ "${VARIANTS_BUILT}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
+          [[ "${VARIANTS_BUILT}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
+          [[ "${VARIANTS_BUILT}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
+          
+          # Clean up and format variants
+          BUILT_VARIANTS=$(echo "${BUILT_VARIANTS}" | xargs)
+          echo "BUILT_VARIANTS_LIST=${BUILT_VARIANTS}" >> $GITHUB_ENV
+          
+          # Format variants with pipe separators for display
+          if [ -n "${BUILT_VARIANTS}" ]; then
+            VARIANTS_FORMATTED=$(echo "${BUILT_VARIANTS}" | sed 's/ / \| /g')
+            VARIANT_COUNT=$(echo "${BUILT_VARIANTS}" | wc -w)
           else
-            RELEASE_INFO="📦 *Release:* Not created (disabled in workflow)"
-            DOWNLOAD_LINKS="• [Download Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            VARIANTS_FORMATTED="none"
+            VARIANT_COUNT=0
+          fi
+          echo "VARIANTS_FORMATTED=${VARIANTS_FORMATTED}" >> $GITHUB_ENV
+          echo "VARIANT_COUNT=${VARIANT_COUNT}" >> $GITHUB_ENV
+          
+          # Determine SUSFS status
+          if [ "${{ github.event.inputs.disable_susfs }}" = "true" ]; then
+            SUSFS_STATUS="❌ Disabled"
+          else
+            SUSFS_STATUS="✅ Enabled"
+          fi
+          echo "SUSFS_STATUS=${SUSFS_STATUS}" >> $GITHUB_ENV
+
+      - name: Calculate Build Duration
+        if: always()
+        id: calculate-duration
+        run: |
+          # Try multiple methods to get build duration
+          DURATION="Unknown"
+          
+          # Method 1: Use GitHub API to get run duration
+          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              DURATION_MS=$(echo "$RESPONSE_BODY" | grep -o '"run_duration_ms":[0-9]*' | cut -d':' -f2)
+              
+              if [ -n "$DURATION_MS" ] && [ "$DURATION_MS" != "null" ] && [ "$DURATION_MS" -gt 0 ]; then
+                TOTAL_SECONDS=$((DURATION_MS / 1000))
+                
+                if [ $TOTAL_SECONDS -lt 60 ]; then
+                  DURATION="${TOTAL_SECONDS}s"
+                elif [ $TOTAL_SECONDS -lt 3600 ]; then
+                  MINUTES=$((TOTAL_SECONDS / 60))
+                  SECONDS=$((TOTAL_SECONDS % 60))
+                  DURATION="${MINUTES}m ${SECONDS}s"
+                else
+                  HOURS=$((TOTAL_SECONDS / 3600))
+                  MINUTES=$(( (TOTAL_SECONDS % 3600) / 60 ))
+                  SECONDS=$((TOTAL_SECONDS % 60))
+                  DURATION="${HOURS}h ${MINUTES}m ${SECONDS}s"
+                fi
+              fi
+            fi
           fi
           
-          # Get build duration if available
-          BUILD_DURATION="${{ env.BUILD_DURATION || 'Unknown' }}"
-          
-          # Get variant-specific info
-          VARIANT_COUNT=$(echo "${{ env.BUILT_VARIANTS_LIST }}" | wc -w)
-          
-          MESSAGE="🎊 *Build #${{ github.run_number }} Completed Successfully!*
+          echo "BUILD_DURATION=${DURATION}" >> $GITHUB_ENV
 
-          🏗️ *Built Variants:* $VARIANT_COUNT/3 (${{ env.BUILT_VARIANTS_LIST }})
-          ⚡ *Build Duration:* $BUILD_DURATION
-          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
-          $RELEASE_INFO
+      - name: Get Kernel and KSU Versions
+        if: always()
+        id: get-versions
+        run: |
+          # Initialize version variables
+          KERNEL_VERSION="Unknown"
+          
+          # Try to get KSU versions for each variant
+          for variant in tiann kowsu mksu; do
+            KSU_VERSION="Unknown"
+            
+            # Check if this variant was built
+            if [[ "${{ env.BUILT_VARIANTS_LIST }}" == *"${variant}"* ]]; then
+              # Method 1: Check build job outputs
+              VAR_NAME=$(echo "${variant}_ksu_version" | tr '[:lower:]' '[:upper:]')
+              if [ -n "${{ needs.build.outputs.${VAR_NAME} }}" ]; then
+                KSU_VERSION="${{ needs.build.outputs.${VAR_NAME} }}"
+              fi
+            fi
+            
+            echo "KSU_${variant^^}_VERSION=${KSU_VERSION}" >> $GITHUB_ENV
+          done
+          
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
 
-          📥 *Downloads:*
+      - name: Get CCache Statistics
+        if: always()
+        id: get-ccache-stats
+        run: |
+          # Initialize default values
+          CCACHE_HIT_RATE="0%"
+          CCACHE_HITS="0"
+          CCACHE_MISSES="0"
+          CCACHE_SIZE="0MB"
+          
+          # Try to get ccache stats if ccache command exists
+          if command -v ccache &> /dev/null; then
+            CCACHE_STATS=$(ccache -s 2>/dev/null || true)
+            
+            if [ -n "$CCACHE_STATS" ]; then
+              HIT_RATE=$(echo "$CCACHE_STATS" | grep -E "hit rate" | grep -o "[0-9]*\.[0-9]*%" || echo "0%")
+              CCACHE_HIT_RATE="$HIT_RATE"
+              
+              HITS=$(echo "$CCACHE_STATS" | grep -E "cache hit" | grep -o "[0-9]*" | head -n1 || echo "0")
+              MISSES=$(echo "$CCACHE_STATS" | grep -E "cache miss" | grep -o "[0-9]*" | head -n1 || echo "0")
+              CCACHE_HITS="${HITS}"
+              CCACHE_MISSES="${MISSES}"
+              
+              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -E "cache size" || echo "")
+              if [ -n "$SIZE_LINE" ]; then
+                SIZE=$(echo "$SIZE_LINE" | grep -o "[0-9]*\.[0-9]*" | head -n1)
+                UNIT=$(echo "$SIZE_LINE" | grep -o "[GM]B" || echo "MB")
+                CCACHE_SIZE="${SIZE}${UNIT}"
+              fi
+            fi
+          fi
+          
+          echo "CCACHE_HIT_RATE=${CCACHE_HIT_RATE}" >> $GITHUB_ENV
+          echo "CCACHE_HITS=${CCACHE_HITS}" >> $GITHUB_ENV
+          echo "CCACHE_MISSES=${CCACHE_MISSES}" >> $GITHUB_ENV
+          echo "CCACHE_SIZE=${CCACHE_SIZE}" >> $GITHUB_ENV
+          
+          # Calculate emoji for hit rate
+          if [[ "$CCACHE_HIT_RATE" =~ ([0-9]+) ]]; then
+            RATE_NUM="${BASH_REMATCH[1]}"
+            if [ "$RATE_NUM" -ge 90 ]; then
+              echo "CCACHE_EMOJI=🚀" >> $GITHUB_ENV
+            elif [ "$RATE_NUM" -ge 70 ]; then
+              echo "CCACHE_EMOJI=⚡" >> $GITHUB_ENV
+            elif [ "$RATE_NUM" -ge 50 ]; then
+              echo "CCACHE_EMOJI=📈" >> $GITHUB_ENV
+            elif [ "$RATE_NUM" -ge 20 ]; then
+              echo "CCACHE_EMOJI=🐢" >> $GITHUB_ENV
+            else
+              echo "CCACHE_EMOJI=🐌" >> $GITHUB_ENV
+            fi
+          else
+            echo "CCACHE_EMOJI=❓" >> $GITHUB_ENV
+          fi
+
+      - name: Get Commit Information
+        if: always()
+        id: get-commit-info
+        run: |
+          # Try to get commit information
+          COMMIT_HASH=""
+          COMMIT_AUTHOR=""
+          COMMIT_MESSAGE=""
+          
+          if command -v git &> /dev/null; then
+            COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an" 2>/dev/null || echo "unknown")
+            COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s" 2>/dev/null || echo "No commit message")
+            
+            if [ ${#COMMIT_MESSAGE} -gt 80 ]; then
+              COMMIT_MESSAGE="${COMMIT_MESSAGE:0:77}..."
+            fi
+            
+            COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/[_*`[]/\\&/g')
+          fi
+          
+          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
+          echo "COMMIT_AUTHOR=${COMMIT_AUTHOR}" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE=${COMMIT_MESSAGE}" >> $GITHUB_ENV
+
+      - name: Send Success Notification
+        if: ${{ needs.create_release.result == 'success' && needs.build.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
+        id: notify-success
+        run: |
+          CURRENT_TIME=$(date +"%H:%M")
+          
+          # Build download links
+          if [ "${{ env.CREATE_RELEASE }}" = "true" ]; then
+            RELEASE_LINK="[View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+            DOWNLOAD_ALL="[Download All](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
+            DOWNLOAD_LINKS="• [tiann-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/tiann-kernel.zip)
+          • [kowsu-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/kowsu-kernel.zip)
+          • [mksu-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/mksu-kernel.zip)"
+          else
+            RELEASE_LINK="No release created"
+            DOWNLOAD_ALL="[Download Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            DOWNLOAD_LINKS="• [Artifacts Page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          fi
+          
+          # Format KSU versions for each variant
+          KSU_INFO=""
+          for variant in tiann kowsu mksu; do
+            VAR_NAME="KSU_${variant^^}_VERSION"
+            KSU_VERSION="${!VAR_NAME}"
+            EMOJI="✅"
+            [[ "$KSU_VERSION" == "Unknown" ]] && EMOJI="❓"
+            KSU_INFO="${KSU_INFO}${EMOJI} *${variant}:* ${KSU_VERSION}\n"
+          done
+          
+          # Build the message
+          MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
+          ━━━━━━━━━━━━━━━━━━━━━
+
+          📦 *Variants:* 3/3 (${{ env.VARIANTS_FORMATTED }})
+          ⏱️ *Duration:* ${{ env.BUILD_DURATION }}
+          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
+          📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
+
+          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
+          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
+             Hits: ${{ env.CCACHE_HITS }} | Misses: ${{ env.CCACHE_MISSES }}
+             Size: ${{ env.CCACHE_SIZE }}
+
+          🔧 *KSU Versions:*
+          ${KSU_INFO}
+          ⬇️ *Downloads:*
           $DOWNLOAD_LINKS
 
-          📱 *Device:* Pixel 8a/8/8 Pro
-          🤖 *Android:* 16 (GKI)
+          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
+          💬 *Message:* \"${{ env.COMMIT_MESSAGE }}\"
 
-          🔍 *Details:* [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          🔗 *Links:*
+          ├─ $RELEASE_LINK
+          ├─ [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          └─ $DOWNLOAD_ALL
 
-          *Built with ❤️ using GitHub Actions*"
+          🕰️ ${CURRENT_TIME} | GitHub Actions"
+          
+          # Send with retry
+          for ATTEMPT in 1 2 3; do
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true && break
+            [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
+          done
 
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="$MESSAGE" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview=true
-
-      - name: Send Failure Notification with Metrics
+      - name: Send Failure Notification
         if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
+        id: notify-failure
         run: |
+          CURRENT_TIME=$(date +"%H:%M")
+          
+          # Determine failure stage
           if [ "${{ needs.build.result }}" = "failure" ]; then
-            FAILED_STAGE="Build"
+            FAILED_STAGE="Build Process"
+            EMOJI="🔨"
+          elif [ "${{ needs.create_release.result }}" = "failure" ]; then
+            FAILED_STAGE="Release Creation"
+            EMOJI="📦"
           else
-            FAILED_STAGE="Release"
+            FAILED_STAGE="Unknown Stage"
+            EMOJI="❓"
           fi
           
-          # Get build duration if available
-          BUILD_DURATION="${{ env.BUILD_DURATION || 'Unknown' }}"
+          # Add duration context if failed early
+          DURATION_CONTEXT="${{ env.BUILD_DURATION }}"
+          if [ "$DURATION_CONTEXT" != "Unknown" ] && [[ "$DURATION_CONTEXT" == *"s" ]] && ! [[ "$DURATION_CONTEXT" == *"m"* ]]; then
+            DURATION_CONTEXT="${DURATION_CONTEXT} (failed early)"
+          fi
           
-          MESSAGE="❌ *Build #${{ github.run_number }} Failed*
+          MESSAGE="❌ *Build #${{ github.run_number }} | FAILED*
+          ━━━━━━━━━━━━━━━━━━━━━
 
-          ⚠️ *Failed Stage:* $FAILED_STAGE
-          ⏱️ *Build Duration:* $BUILD_DURATION
-          📦 *Target Variants:* ${{ env.BUILT_VARIANTS_LIST }}
-          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
+          $EMOJI *Failed Stage:* ${FAILED_STAGE}
+          ⏱️ *Duration:* ${DURATION_CONTEXT}
+          📦 *Target Variants:* ${{ env.VARIANTS_FORMATTED }}
+          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
 
-          🔗 [View Detailed Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          📋 [Build Configuration](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/workflow)
+          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
+          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
 
-          *Need help? Check the logs above for detailed error information.*"
+          🚨 *Error Details:*
+          • Build process encountered an error
+          • Check specific variant logs below
+          • Last successful build: #$(({{ github.run_number }} - 1))
 
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="$MESSAGE" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview=true
+          🔗 *Quick Actions:*
+          ├─ [View Error Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          ├─ [Retry This Build](https://github.com/${{ github.repository }}/actions/workflows/build.yml)
+          └─ [Compare with #$(({{ github.run_number }} - 1))](https://github.com/${{ github.repository }}/compare/build-$(({{ github.run_number }} - 1))...build-${{ github.run_number }})
 
-      - name: Send Cancellation Notification
-        if: ${{ (needs.create_release.result == 'cancelled' || needs.build.result == 'cancelled') && github.event.inputs.enable_telegram == 'true' }}
-        run: |
-          MESSAGE="⚠️ *Build #${{ github.run_number }} Cancelled*
+          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
 
-          📦 *Target Variants:* ${{ env.BUILT_VARIANTS_LIST }}
-          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
-
-          🔗 [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="$MESSAGE" \
-            -d parse_mode="Markdown"
+          🕰️ ${CURRENT_TIME} | GitHub Actions"
+          
+          # Send with retry
+          for ATTEMPT in 1 2 3; do
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true && break
+            [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
+          done

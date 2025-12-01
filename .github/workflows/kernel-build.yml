@@ -726,11 +726,19 @@ jobs:
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-#      - name: Clean ABI Exports
-#        run: |
-#          cd kernel
-#          echo "🧹 Cleaning ABI protected exports..."
-#          rm -vf android/abi_gki_protected_exports_* || true
+      - name: Handle ABI File Changes
+        run: |
+          cd kernel
+          
+          # Remove ABI files as per KernelSU guide
+          echo "🧹 Removing ABI protected exports..."
+          rm -vf android/abi_gki_protected_exports_* || true
+          
+          # Clean kernel build to ensure everything rebuilds
+          echo "🧹 Cleaning kernel build..."
+          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
+          
+          echo "✅ Ready for fresh build with modified ABI files"
 
       - name: Build Kernel
         run: |

@@ -697,10 +697,8 @@ jobs:
             "CONFIG_TMPFS_POSIX_ACL=y" \
             "CONFIG_TMPFS_XATTR=y" \
             "CONFIG_UCLAMP_TASK=y" \
-            "CONFIG_UCLAMP_TASK_GROUP=y" \
-            "CONFIG_MODVERSIONS=n" \
-            "CONFIG_SCMVERSION=n" >> out/.config
-          
+            "CONFIG_UCLAMP_TASK_GROUP=y" >> out/.config
+                      
           # SuSFS configuration
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             printf '%s\n' \

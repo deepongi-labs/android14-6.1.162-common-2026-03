@@ -851,6 +851,10 @@ jobs:
 
       - name: Package Kernel
         run: |
+
+          # Clean up any previous AnyKernel3 directory
+          rm -rfv AnyKernel3 || true
+
           # Get kernel version from Makefile
           echo "📋 Extracting kernel version..."
           cd kernel

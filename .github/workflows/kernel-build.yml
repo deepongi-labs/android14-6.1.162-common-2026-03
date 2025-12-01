@@ -128,6 +128,20 @@ jobs:
           
           echo "✅ All submodules initialized"
 
+      - name: Clean Kernel Directory Properly
+        run: |
+          echo "🧹 Properly cleaning kernel directory..."
+          if [ -d "kernel" ]; then
+            cd kernel
+            # Remove any KernelSU and patches
+            rm -rf KernelSU drivers/kernelsu
+            # Hard reset to remove all changes
+            git reset --hard HEAD
+            git clean -fdx
+            cd ..
+          fi
+          echo "✅ Kernel directory fully reset"
+
       - name: Store Workflow Commit Info
         run: |
           WORKFLOW_COMMIT=$(git rev-parse HEAD)
@@ -198,15 +212,6 @@ jobs:
           echo "📂 CCACHE directory: $CCACHE_DIR"
           echo "📈 CCACHE stats BEFORE build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
-
-      - name: Clean Kernel Directory
-        run: |
-          echo "🧹 Cleaning kernel directory for fresh patch application..."
-          cd kernel
-          git checkout -- .
-          git clean -fd
-          cd ..
-          echo "✅ Kernel directory reset to clean state"
 
       - name: Setup KernelSU Variant
         run: |
@@ -616,116 +621,103 @@ jobs:
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
           
-          # Base configuration (Cleaned, sorted, and syntax fixed)
-          cat >> out/.config << 'EOF'
-          CONFIG_ARM64_BTI=y
-          CONFIG_ARM64_CORTEX_A510=y
-          CONFIG_ARM64_CORTEX_A715=y
-          CONFIG_ARM64_CORTEX_X3=y
-          CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_PTR_AUTH=y
-          CONFIG_ARM64_SME=y
-          CONFIG_ARM64_SVE=y
-          CONFIG_ARM64_TAGGED_ADDR_ABI=y
-          CONFIG_ARM64_VA_BITS=48
-          CONFIG_ARM_PSCI_CPUIDLE=y
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CMA=y
-          CONFIG_CMA_AREAS=7
-          CONFIG_CPUFREQ_DT=y
-          CONFIG_CPU_FREQ=y
-          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-          CONFIG_CPU_IDLE=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_DEVFREQ_THERMAL=y
-          CONFIG_ENERGY_MODEL=y
-          CONFIG_HAVE_KPROBES=y
-          CONFIG_IP6_NF_MATCH_HL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_MAX=256
-          CONFIG_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
-          CONFIG_KSU=y
-          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
-          CONFIG_KSU_DEBUG=y
-          CONFIG_KSU_KPROBES_HOOK=n
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
-          CONFIG_LOCALVERSION_AUTO=n
-          CONFIG_LTO=y
-          CONFIG_LTO_CLANG=y
-          CONFIG_LTO_CLANG_THIN=y
-          CONFIG_NET_SCH_CAKE=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NUMA_BALANCING=y
-          CONFIG_OPP=y
-          CONFIG_PERF_EVENTS=y
-          CONFIG_POWER_CAP=y
-          CONFIG_SCHED_CORE=y
-          CONFIG_SCHED_MC=y
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_TCP_CONG_BIC=n
-          CONFIG_TCP_CONG_HTCP=n
-          CONFIG_TCP_CONG_WESTWOOD=n
-          CONFIG_THERMAL=y
-          CONFIG_THERMAL_EMULATION=y
-          CONFIG_THERMAL_GOV_FAIR_SHARE=y
-          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-          CONFIG_THERMAL_GOV_STEP_WISE=y
-          CONFIG_THERMAL_WRITABLE_TRIPS=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y
-          EOF
+          # Base configuration
+          # Note: We use printf to avoid the Heredoc indentation issue entirely
+          printf '%s\n' \
+            "CONFIG_ARM64_BTI=y" \
+            "CONFIG_ARM64_CORTEX_A510=y" \
+            "CONFIG_ARM64_CORTEX_A715=y" \
+            "CONFIG_ARM64_CORTEX_X3=y" \
+            "CONFIG_ARM64_PA_BITS=48" \
+            "CONFIG_ARM64_PTR_AUTH=y" \
+            "CONFIG_ARM64_SME=y" \
+            "CONFIG_ARM64_SVE=y" \
+            "CONFIG_ARM64_TAGGED_ADDR_ABI=y" \
+            "CONFIG_ARM64_VA_BITS=48" \
+            "CONFIG_ARM_PSCI_CPUIDLE=y" \
+            "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" \
+            "CONFIG_CMA=y" \
+            "CONFIG_CMA_AREAS=7" \
+            "CONFIG_CPUFREQ_DT=y" \
+            "CONFIG_CPU_FREQ=y" \
+            "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" \
+            "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" \
+            "CONFIG_CPU_IDLE=y" \
+            "CONFIG_CPU_THERMAL=y" \
+            "CONFIG_DEVFREQ_THERMAL=y" \
+            "CONFIG_ENERGY_MODEL=y" \
+            "CONFIG_HAVE_KPROBES=y" \
+            "CONFIG_IP6_NF_MATCH_HL=y" \
+            "CONFIG_IP6_NF_TARGET_HL=y" \
+            "CONFIG_IP_NF_TARGET_TTL=y" \
+            "CONFIG_IP_SET=y" \
+            "CONFIG_IP_SET_BITMAP_IP=y" \
+            "CONFIG_IP_SET_BITMAP_IPMAC=y" \
+            "CONFIG_IP_SET_BITMAP_PORT=y" \
+            "CONFIG_IP_SET_HASH_IP=y" \
+            "CONFIG_IP_SET_HASH_IPPORT=y" \
+            "CONFIG_IP_SET_HASH_IPPORTIP=y" \
+            "CONFIG_IP_SET_HASH_IPPORTNET=y" \
+            "CONFIG_IP_SET_HASH_NET=y" \
+            "CONFIG_IP_SET_HASH_NETIFACE=y" \
+            "CONFIG_IP_SET_HASH_NETNET=y" \
+            "CONFIG_IP_SET_HASH_NETPORT=y" \
+            "CONFIG_IP_SET_MAX=256" \
+            "CONFIG_KPROBES=y" \
+            "CONFIG_KPROBE_EVENTS=y" \
+            "CONFIG_KSU=y" \
+            "CONFIG_KSU_ALLOWLIST_WORKAROUND=n" \
+            "CONFIG_KSU_DEBUG=y" \
+            "CONFIG_KSU_KPROBES_HOOK=n" \
+            "CONFIG_KSU_LSM_SECURITY_HOOKS=y" \
+            "CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y" \
+            "CONFIG_LOCALVERSION_AUTO=n" \
+            "CONFIG_LTO=y" \
+            "CONFIG_LTO_CLANG=y" \
+            "CONFIG_LTO_CLANG_THIN=y" \
+            "CONFIG_NET_SCH_CAKE=y" \
+            "CONFIG_NET_SCH_FQ=y" \
+            "CONFIG_NUMA_BALANCING=y" \
+            "CONFIG_OPP=y" \
+            "CONFIG_PERF_EVENTS=y" \
+            "CONFIG_POWER_CAP=y" \
+            "CONFIG_SCHED_CORE=y" \
+            "CONFIG_SCHED_MC=y" \
+            "CONFIG_TCP_CONG_ADVANCED=y" \
+            "CONFIG_TCP_CONG_BBR=y" \
+            "CONFIG_TCP_CONG_BIC=n" \
+            "CONFIG_TCP_CONG_HTCP=n" \
+            "CONFIG_TCP_CONG_WESTWOOD=n" \
+            "CONFIG_THERMAL=y" \
+            "CONFIG_THERMAL_EMULATION=y" \
+            "CONFIG_THERMAL_GOV_FAIR_SHARE=y" \
+            "CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y" \
+            "CONFIG_THERMAL_GOV_STEP_WISE=y" \
+            "CONFIG_THERMAL_WRITABLE_TRIPS=y" \
+            "CONFIG_TMPFS_POSIX_ACL=y" \
+            "CONFIG_TMPFS_XATTR=y" \
+            "CONFIG_UCLAMP_TASK=y" \
+            "CONFIG_UCLAMP_TASK_GROUP=y" \
+            "CONFIG_MODVERSIONS=n" \
+            "CONFIG_SCMVERSION=n" >> out/.config
           
-          # Variant-specific config
-          case "${{ matrix.variant }}" in
-            "tiann")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              ;;
-            "kowsu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              ;;
-            "mksu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              ;;
-          esac
-          
-          # SuSFS configuration (additional safety check, though base config has them enabled)
+          # SuSFS configuration
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            cat >> out/.config << 'EOF'
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          EOF
+            printf '%s\n' \
+              "CONFIG_KSU_SUSFS=y" \
+              "CONFIG_KSU_SUSFS_SUS_PATH=y" \
+              "CONFIG_KSU_SUSFS_SUS_MOUNT=y" \
+              "CONFIG_KSU_SUSFS_SUS_KSTAT=y" \
+              "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" \
+              "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" \
+              "CONFIG_KSU_SUSFS_ENABLE_LOG=y" \
+              "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" \
+              "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" \
+              "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" \
+              "CONFIG_KSU_SUSFS_SUS_MAP=y" >> out/.config
           fi
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
-
       - name: Handle ABI File Changes
         run: |
           cd kernel

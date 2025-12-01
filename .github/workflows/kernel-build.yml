@@ -394,7 +394,7 @@ jobs:
           TABLE_HEADER
           
           echo "| **KernelSU (${{ matrix.variant }})** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
-          echo "| **Kernel (android14-6.1-2025-09)** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
+          echo "| **Kernel (android14-6.1-2025-12)** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
           echo "| **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
           echo "| **Build Workflow** | \`${{ env.WORKFLOW_COMMIT_SHORT }}\` | ${{ env.WORKFLOW_COMMIT_DATE }} | ${{ env.WORKFLOW_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
           
@@ -429,10 +429,10 @@ jobs:
             
             # Kernel Recent Changes
             cd ../../kernel
-            echo "### 🧬 Kernel - android14-6.1-2025-09 (Last 10 commits)" >> "../$CHANGELOG_FILE"
+            echo "### 🧬 Kernel - android14-6.1-2025-12 (Last 10 commits)" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
             echo "**Repository:** https://github.com/aosp-mirror/kernel_common" >> "../$CHANGELOG_FILE"
-            echo "**Branch:** android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
+            echo "**Branch:** android14-6.1-2025-12" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
             git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
@@ -502,7 +502,7 @@ jobs:
             # Note: For kernel, SuSFS, and workflow - we'll show current state since we don't have previous tracking
             
             cd ../../kernel
-            echo "### 🧬 Kernel - android14-6.1-2025-09" >> "../$CHANGELOG_FILE"
+            echo "### 🧬 Kernel - android14-6.1-2025-12" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
             echo "**Current State:** \`${{ env.KERNEL_COMMIT_SHORT }}\` - ${{ env.KERNEL_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
             echo "" >> "../$CHANGELOG_FILE"
@@ -541,7 +541,7 @@ jobs:
           echo "" >> "$CHANGELOG_FILE"
           echo "### Kernel" >> "$CHANGELOG_FILE"
           echo "- **Repository:** https://github.com/aosp-mirror/kernel_common" >> "$CHANGELOG_FILE"
-          echo "- **Branch:** android14-6.1-2025-09" >> "$CHANGELOG_FILE"
+          echo "- **Branch:** android14-6.1-2025-12" >> "$CHANGELOG_FILE"
           echo "- **Commit:** https://github.com/aosp-mirror/kernel_common/commit/${{ env.KERNEL_COMMIT }}" >> "$CHANGELOG_FILE"
           echo "" >> "$CHANGELOG_FILE"
           echo "### SuSFS4KSU" >> "$CHANGELOG_FILE"
@@ -1161,7 +1161,7 @@ jobs:
           - ✅ **Pixel 8** - Compatible (same Tensor G3)
           - ✅ **Pixel 8 Pro** - Compatible (same Tensor G3)
           
-          **Why "android14" in the branch name?** The branch name `android14-6.1-2025-09` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
+          **Why "android14" in the branch name?** The branch name `android14-6.1-2025-12` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
           
           **What this means:**
           - ✅ This kernel is for Android 16

@@ -715,8 +715,21 @@ jobs:
               "CONFIG_KSU_SUSFS_SUS_MAP=y" >> out/.config
           fi
           
+          # Variant-specific config
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              ;;
+            "kowsu")
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              ;;
+            "mksu")
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              ;;
+          esac
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
-          
+
       - name: Handle ABI File Changes
         run: |
           cd kernel

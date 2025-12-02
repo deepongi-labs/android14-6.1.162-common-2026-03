@@ -1076,9 +1076,8 @@ jobs:
           COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
           [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
           
-          # Create release notes
-          cat > RELEASE_NOTES.md << EOF
-          **Build Info:** #${{ github.run_number }} • ${{ env.BUILD_DATE }}  
+          # Start building the release notes
+          RELEASE_NOTES="**Build Info:** #${{ github.run_number }} • ${{ env.BUILD_DATE }}  
           **Build Time:** ${{ env.BUILD_DURATION }} • **CCache:** ${{ env.CCACHE_HIT_RATE || 'N/A' }} hit rate  
           **Kernel Version:** $COMMON_KERNEL_VERSION • **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
           **Commit:** \`${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}\`
@@ -1088,31 +1087,31 @@ jobs:
           ## ⚡ Quick Download
           
           | Variant | KSU Version | File | Size |
-          |---------|-------------|------|------|
-          EOF
+          |---------|-------------|------|------|"
           
           # Add tiann row if built
           if [ -n "$TIANN_ZIP" ]; then
-            cat >> RELEASE_NOTES.md << EOF
-            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [\`$TIANN_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$TIANN_ZIP)<br>\`md5sum: $TIANN_MD5\` | $TIANN_SIZE |
-            EOF
+            RELEASE_NOTES="${RELEASE_NOTES}
+            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [\`$TIANN_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$TIANN_ZIP)<br>\`md5sum: $TIANN_MD5\` | $TIANN_SIZE |"
           fi
           
           # Add kowsu row if built
           if [ -n "$KOWSU_ZIP" ]; then
-            cat >> RELEASE_NOTES.md << EOF
-            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [\`$KOWSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$KOWSU_ZIP)<br>\`md5sum: $KOWSU_MD5\` | $KOWSU_SIZE |
-            EOF
+            RELEASE_NOTES="${RELEASE_NOTES}
+            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [\`$KOWSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$KOWSU_ZIP)<br>\`md5sum: $KOWSU_MD5\` | $KOWSU_SIZE |"
           fi
           
           # Add mksu row if built
           if [ -n "$MKSU_ZIP" ]; then
-            cat >> RELEASE_NOTES.md << EOF
-            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [\`$MKSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$MKSU_ZIP)<br>\`md5sum: $MKSU_MD5\` | $MKSU_SIZE |
-            EOF
+            RELEASE_NOTES="${RELEASE_NOTES}
+            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [\`$MKSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$MKSU_ZIP)<br>\`md5sum: $MKSU_MD5\` | $MKSU_SIZE |"
           fi
           
-          cat >> RELEASE_NOTES.md << EOF
+          # Get recent commits (handle git command failure)
+          RECENT_COMMITS=$(git log --oneline -10 2>/dev/null || echo "No changes found")
+          
+          # Continue building release notes
+          RELEASE_NOTES="${RELEASE_NOTES}
           
           **All variants work on:** Pixel 8, Pixel 8a, Pixel 8 Pro
           
@@ -1142,13 +1141,15 @@ jobs:
           ## 📝 What's New (Since Build #$(({{ github.run_number }} - 1)))
           
           \`\`\`
-          $(git log --oneline -10 2>/dev/null || echo "No changes found")
+          $RECENT_COMMITS
           \`\`\`
           
           ---
           
-          **Support:** [GitHub Issues](https://github.com/${{ github.repository }}/issues) • [Telegram](https://t.me/deepongi_labs)
-          EOF
+          **Support:** [GitHub Issues](https://github.com/${{ github.repository }}/issues) • [Telegram](https://t.me/deepongi_labs)"
+          
+          # Write to file
+          echo "$RELEASE_NOTES" > RELEASE_NOTES.md
           
           echo "✅ Release notes generated with actual file data"
 

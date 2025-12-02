@@ -1,30 +1,5 @@
-From 4bf2841d7480506d39791b5960b1fdd592fea560 Mon Sep 17 00:00:00 2001
-From: deepongi <infectedmushi@gmail.com>
-Date: Sun, 30 Nov 2025 18:06:59 +0000
-Subject: [PATCH] 10_enable_susfs_for_ksu
-
----
- kernel/Kbuild            |  11 ++-
- kernel/Kconfig           |  91 ++++++++++++++++-
- kernel/allowlist.c       |   4 +
- kernel/apk_sign.c        |   5 +
- kernel/app_profile.c     | 206 ++++++++++++++++++++-------------------
- kernel/kernel_umount.c   |   3 +
- kernel/ksu.c             |  15 +++
- kernel/ksud.c            |  52 ++++++++++
- kernel/ksud.h            |  19 ++++
- kernel/manager.h         |  14 +++
- kernel/selinux/rules.c   |   9 ++
- kernel/selinux/selinux.c |  93 ++++++++++++++++++
- kernel/selinux/selinux.h |  13 +++
- kernel/setuid_hook.c     | 116 ++++++++++++++++++++++
- kernel/sucompat.c        | 124 +++++++++++++++++++++++
- kernel/sucompat.h        |  10 +-
- kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 17 files changed, 830 insertions(+), 105 deletions(-)
-
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index d98df1c3..ac7a98c3 100644
+index d98df1c3..a8bfc148 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -3,7 +3,6 @@ kernelsu-objs += allowlist.o
@@ -35,21 +10,6 @@ index d98df1c3..ac7a98c3 100644
  kernelsu-objs += throne_tracker.o
  kernelsu-objs += pkg_observer.o
  kernelsu-objs += setuid_hook.o
-@@ -76,4 +75,14 @@ ccflags-y += -DEXPECTED_HASH=\"$(KSU_EXPECTED_HASH)\"
- ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
- ccflags-y += -Wno-declaration-after-statement -Wno-unused-function
- 
-+## For susfs stuff ##
-+ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
-+$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
-+$(info )
-+$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
-+else
-+$(info -- You have not integrated susfs in your kernel yet.)
-+$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
-+endif
-+
- # Keep a new line here!! Because someone may append config
 diff --git a/kernel/Kconfig b/kernel/Kconfig
 index cc4dbb3a..393e16cd 100644
 --- a/kernel/Kconfig
@@ -157,6 +117,24 @@ index cc4dbb3a..393e16cd 100644
 +endmenu
 +
  endmenu
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 0b8c8a10..ba9272ed 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -13,4 +13,13 @@ compdb:
+ clean:
+ 	make -C $(KDIR) M=$(MDIR) clean
+ 
++## For susfs stuff ##
++ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
++$(eval SUSFS_VERSION=$(shell cat $(srctree)/include/linux/susfs.h | grep -E '^#define SUSFS_VERSION' | cut -d' ' -f3 | sed 's/"//g'))
++$(info )
++$(info -- SUSFS_VERSION: $(SUSFS_VERSION))
++else
++$(info -- You have not integrated susfs in your kernel yet.)
++$(info -- Read: https://gitlab.com/simonpunk/susfs4ksu)
++endif
+ # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
 index 4fa59133..de729dff 100644
 --- a/kernel/allowlist.c
@@ -512,7 +490,7 @@ index df36c912..7ba50a25 100644
      ksu_supercalls_exit();
  
 diff --git a/kernel/ksud.c b/kernel/ksud.c
-index a8b4edb0..94c6ca93 100644
+index 2e9ac09c..0673ea01 100644
 --- a/kernel/ksud.c
 +++ b/kernel/ksud.c
 @@ -56,9 +56,15 @@ static void stop_vfs_read_hook();
@@ -560,7 +538,7 @@ index a8b4edb0..94c6ca93 100644
      struct filename *filename;
  
      static const char app_process[] = "/system/bin/app_process";
-@@ -342,6 +356,12 @@ static ssize_t read_iter_proxy(struct kiocb *iocb, struct iov_iter *to)
+@@ -288,6 +302,12 @@ static ssize_t read_iter_proxy(struct kiocb *iocb, struct iov_iter *to)
  static int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
                                 size_t *count_ptr, loff_t **pos)
  {
@@ -573,7 +551,7 @@ index a8b4edb0..94c6ca93 100644
      struct file *file;
      char __user *buf;
      size_t count;
-@@ -428,8 +448,13 @@ static int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
+@@ -374,8 +394,13 @@ static int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
      return 0;
  }
  
@@ -587,7 +565,7 @@ index a8b4edb0..94c6ca93 100644
  {
      struct file *file = fget(fd);
      if (!file) {
-@@ -450,6 +475,12 @@ static bool is_volumedown_enough(unsigned int count)
+@@ -396,6 +421,12 @@ static bool is_volumedown_enough(unsigned int count)
  int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
                                    int *value)
  {
@@ -600,7 +578,7 @@ index a8b4edb0..94c6ca93 100644
      if (*type == EV_KEY && *code == KEY_VOLUMEDOWN) {
          int val = *value;
          pr_info("KEY_VOLUMEDOWN val: %d\n", val);
-@@ -487,6 +518,7 @@ bool ksu_is_safe_mode()
+@@ -433,6 +464,7 @@ bool ksu_is_safe_mode()
      return false;
  }
  
@@ -608,7 +586,7 @@ index a8b4edb0..94c6ca93 100644
  static int sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
      struct pt_regs *real_regs = PT_REAL_REGS(regs);
-@@ -570,17 +602,28 @@ static void do_stop_input_hook(struct work_struct *work)
+@@ -516,17 +548,28 @@ static void do_stop_input_hook(struct work_struct *work)
  {
      unregister_kprobe(&input_event_kp);
  }
@@ -637,7 +615,7 @@ index a8b4edb0..94c6ca93 100644
  }
  
  static void stop_input_hook()
-@@ -590,13 +633,19 @@ static void stop_input_hook()
+@@ -536,13 +579,19 @@ static void stop_input_hook()
          return;
      }
      input_hook_stopped = true;
@@ -657,7 +635,7 @@ index a8b4edb0..94c6ca93 100644
      int ret;
  
      ret = register_kprobe(&execve_kp);
-@@ -611,12 +660,15 @@ void ksu_ksud_init()
+@@ -557,12 +606,15 @@ void ksu_ksud_init()
      INIT_WORK(&stop_vfs_read_work, do_stop_vfs_read_hook);
      INIT_WORK(&stop_execve_hook_work, do_stop_execve_hook);
      INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
@@ -1460,6 +1438,3 @@ index 5ce9280b..c04654ce 100644
  }
  
  // IOCTL dispatcher
--- 
-2.52.0
-

@@ -661,6 +661,10 @@ jobs:
           
           # Base configuration
           cat >> out/.config << 'EOF'
+          CONFIG_ARCH_GOOGLE=y
+          CONFIG_GOOGLE_BMS=y
+          CONFIG_GOOGLE_CHARGER=y
+          CONFIG_GOOGLE_THERMAL=y
           CONFIG_ARM64_BTI=y
           CONFIG_ARM64_CORTEX_A510=y
           CONFIG_ARM64_CORTEX_A715=y
@@ -700,14 +704,7 @@ jobs:
           CONFIG_IP_SET_HASH_NETNET=y
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_MAX=256
-          CONFIG_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
-          CONFIG_KSU=y
-          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
-          CONFIG_KSU_DEBUG=y
-          CONFIG_KSU_KPROBES_HOOK=n
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
           CONFIG_LOCALVERSION_AUTO=n
           CONFIG_LTO=y
           CONFIG_LTO_CLANG=y
@@ -734,22 +731,80 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y 
+          CONFIG_UCLAMP_TASK_GROUP=y
+          CONFIG_CFI_CLANG=y
+          CONFIG_CFI_PERMISSIVE=y
+          CONFIG_SHADOW_CALL_STACK=y
+          CONFIG_SCS=y
+          CONFIG_PM=y
+          CONFIG_PM_SLEEP=y
+          CONFIG_PM_WAKELOCKS=y
+          CONFIG_PM_WAKELOCKS_LIMIT=0
+          CONFIG_INET=y
+          CONFIG_IPV6=y
+          CONFIG_NET=y
+          CONFIG_NETFILTER=y
+          CONFIG_NF_CONNTRACK=y
+          CONFIG_NF_CONNTRACK_SECMARK=y
+          CONFIG_WIREGUARD=y
+          CONFIG_TCP_CONG_BBR2=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_NS=y
+          CONFIG_NET_FLOW_LIMIT=y
+          CONFIG_TCP_CONG_BBR2=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_F2FS_FS_COMPRESSION=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_LOCALVERSION_AUTO=n
+          CONFIG_KSU=y
+          CONFIG_KSU_DEBUG=n
           EOF
-                      
+          
+          # Variant-specific config
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              ;;
+            "kowsu")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              ;;
+            "mksu")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              ;;
+          esac
+          
           # SuSFS configuration
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
           CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_OVERLAYFS_AUTO_KSTAT_SUPPORT=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
           fi

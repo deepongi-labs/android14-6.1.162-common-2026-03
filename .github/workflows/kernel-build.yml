@@ -144,18 +144,20 @@ jobs:
           fetch-depth: 0
           clean: false
 
-      - name: Initialize and Update Submodules
+      - name: Initialize and Update Submodules with Correct Branches
         run: |
           echo "📦 Initializing submodules..."
           git submodule init
           
-          echo "📥 Updating kernel submodule (GitHub)..."
-          git submodule update --init --recursive kernel
+          echo "📥 Updating kernel submodule..."
+          # Use --remote to fetch the branch specified in .gitmodules
+          git submodule update --init --recursive --remote kernel
           
-          echo "📥 Updating susfs4ksu submodule (GitLab)..."
-          git submodule update --init --recursive susfs4ksu
+          echo "📥 Updating susfs4ksu submodule..."
+          # Use --remote to fetch the branch specified in .gitmodules
+          git submodule update --init --recursive --remote susfs4ksu
           
-          echo "✅ All submodules initialized"
+          echo "✅ All submodules initialized with correct branches"
 
       - name: Verify Submodules
         run: |

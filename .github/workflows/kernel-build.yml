@@ -111,6 +111,30 @@ jobs:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       KSU_VARIANT: ${{ matrix.variant }}
+    
+    outputs:
+      tiann_zip: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
+      tiann_size: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
+      tiann_md5: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.MD5_HASH || '' }}
+      tiann_sha256: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
+      tiann_kernel_version: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
+      tiann_ksu_version: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
+      
+      kowsu_zip: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
+      kowsu_size: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
+      kowsu_md5: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
+      kowsu_sha256: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
+      kowsu_kernel_version: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
+      kowsu_ksu_version: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
+      
+      mksu_zip: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
+      mksu_size: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
+      mksu_md5: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
+      mksu_sha256: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
+      mksu_kernel_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
+      mksu_ksu_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
+      
+      duration: ${{ steps.build-duration.outputs.duration || env.BUILD_TIME || 'Unknown' }}
 
     steps:
       - name: Checkout with Submodules
@@ -118,7 +142,7 @@ jobs:
         with:
           submodules: false
           fetch-depth: 0
-          clean: false  # ← Add this line
+          clean: false
 
       - name: Initialize and Update Submodules
         run: |
@@ -634,71 +658,72 @@ jobs:
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
           
           # Base configuration
-          # Note: We use printf to avoid the Heredoc indentation issue entirely
-          printf '%s\n' \
-            # Keep these - they're not in gki_defconfig
-            "CONFIG_ARM64_BTI=y" \
-            "CONFIG_ARM64_CORTEX_A510=y" \
-            "CONFIG_ARM64_CORTEX_A715=y" \
-            "CONFIG_ARM64_CORTEX_X3=y" \
-            "CONFIG_ARM64_PTR_AUTH=y" \
-            "CONFIG_ARM64_SME=y" \
-            "CONFIG_ARM64_SVE=y" \
-            "CONFIG_ARM64_TAGGED_ADDR_ABI=y" \
-            "CONFIG_ARM64_VA_BITS=48" \
-            "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" \
-            "CONFIG_CPUFREQ_DT=y" \
-            "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" \
-            "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" \
-            "CONFIG_DEVFREQ_THERMAL=y" \
-            "CONFIG_IP6_NF_MATCH_HL=y" \
-            "CONFIG_IP6_NF_TARGET_HL=y" \
-            "CONFIG_IP_NF_TARGET_TTL=y" \
-            "CONFIG_IP_SET=y" \
-            "CONFIG_IP_SET_BITMAP_IP=y" \
-            "CONFIG_IP_SET_BITMAP_IPMAC=y" \
-            "CONFIG_IP_SET_BITMAP_PORT=y" \
-            "CONFIG_IP_SET_HASH_IP=y" \
-            "CONFIG_IP_SET_HASH_IPPORT=y" \
-            "CONFIG_IP_SET_HASH_IPPORTIP=y" \
-            "CONFIG_IP_SET_HASH_IPPORTNET=y" \
-            "CONFIG_IP_SET_HASH_NET=y" \
-            "CONFIG_IP_SET_HASH_NETIFACE=y" \
-            "CONFIG_IP_SET_HASH_NETNET=y" \
-            "CONFIG_IP_SET_HASH_NETPORT=y" \
-            "CONFIG_IP_SET_MAX=256" \
-            "CONFIG_KPROBE_EVENTS=y" \
-            "CONFIG_KSU=y" \
-            "CONFIG_KSU_ALLOWLIST_WORKAROUND=n" \
-            "CONFIG_KSU_DEBUG=y" \
-            "CONFIG_KSU_KPROBES_HOOK=n" \
-            "CONFIG_KSU_LSM_SECURITY_HOOKS=y" \
-            "CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y" \
-            "CONFIG_LOCALVERSION_AUTO=n" \
-            "CONFIG_NET_SCH_CAKE=y" \
-            "CONFIG_NET_SCH_FQ=y" \
-            "CONFIG_SCHED_MC=y" \
-            "CONFIG_TCP_CONG_ADVANCED=y" \
-            "CONFIG_TCP_CONG_BIC=n" \
-            "CONFIG_TCP_CONG_HTCP=n" \
-            "CONFIG_TCP_CONG_WESTWOOD=n" \
-            "CONFIG_TCP_CONG_BBR=y" \
-            "CONFIG_CMA_AREAS=7"  >> out/.config
+          cat >> out/.config << 'EOF'
+          # Keep these - they're not in gki_defconfig
+          CONFIG_ARM64_BTI=y
+          CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_ARM64_CORTEX_A715=y
+          CONFIG_ARM64_CORTEX_X3=y
+          CONFIG_ARM64_PTR_AUTH=y
+          CONFIG_ARM64_SME=y
+          CONFIG_ARM64_SVE=y
+          CONFIG_ARM64_TAGGED_ADDR_ABI=y
+          CONFIG_ARM64_VA_BITS=48
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_CPUFREQ_DT=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_DEVFREQ_THERMAL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_MAX=256
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_KSU=y
+          CONFIG_KSU_ALLOWLIST_WORKAROUND=n
+          CONFIG_KSU_DEBUG=y
+          CONFIG_KSU_KPROBES_HOOK=n
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
+          CONFIG_LOCALVERSION_AUTO=n
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_SCHED_MC=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BIC=n
+          CONFIG_TCP_CONG_HTCP=n
+          CONFIG_TCP_CONG_WESTWOOD=n
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_CMA_AREAS=7
+          EOF
                       
           # SuSFS configuration
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            printf '%s\n' \
-              "CONFIG_KSU_SUSFS=y" \
-              "CONFIG_KSU_SUSFS_SUS_PATH=y" \
-              "CONFIG_KSU_SUSFS_SUS_MOUNT=y" \
-              "CONFIG_KSU_SUSFS_SUS_KSTAT=y" \
-              "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" \
-              "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" \
-              "CONFIG_KSU_SUSFS_ENABLE_LOG=y" \
-              "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" \
-              "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" \
-              "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" \
-              "CONFIG_KSU_SUSFS_SUS_MAP=y" >> out/.config
+            cat >> out/.config << 'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
           fi
           
           # Variant-specific config
@@ -756,6 +781,11 @@ jobs:
           BUILD_MINS=$((BUILD_TIME / 60))
           BUILD_SECS=$((BUILD_TIME % 60))
           echo "BUILD_TIME=${BUILD_MINS}m ${BUILD_SECS}s" >> $GITHUB_ENV
+
+      - name: Record Build Duration
+        id: build-duration
+        run: |
+          echo "duration=${{ env.BUILD_MINS || 'Unknown' }}m ${{ env.BUILD_SECS || 'Unknown' }}s" >> $GITHUB_OUTPUT
 
       - name: Check CCACHE Performance
         run: |
@@ -881,6 +911,28 @@ jobs:
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
           echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
+      - name: Generate File Info for Release
+        id: generate-file-info
+        run: |
+          # Get actual file size and MD5
+          ACTUAL_SIZE=$(du -h "${{ env.KERNEL_ZIP }}" | cut -f1)
+          MD5_HASH=$(md5sum "${{ env.KERNEL_ZIP }}" | awk '{print $1}')
+          SHA256_HASH=$(sha256sum "${{ env.KERNEL_ZIP }}" | awk '{print $1}')
+          
+          # Set outputs
+          echo "FILE_SIZE=${ACTUAL_SIZE}" >> $GITHUB_OUTPUT
+          echo "MD5_HASH=${MD5_HASH}" >> $GITHUB_OUTPUT
+          echo "SHA256_HASH=${SHA256_HASH}" >> $GITHUB_OUTPUT
+          echo "VARIANT=${{ matrix.variant }}" >> $GITHUB_OUTPUT
+          echo "ZIP_NAME=${{ env.KERNEL_ZIP }}" >> $GITHUB_OUTPUT
+          echo "KSU_VERSION=r${{ env.KSU_VERSION }}" >> $GITHUB_OUTPUT
+          echo "KERNEL_VERSION=${{ env.KERNEL_VERSION }}" >> $GITHUB_OUTPUT
+          
+          echo "📊 File info for ${{ matrix.variant }}:"
+          echo "   Size: ${ACTUAL_SIZE}"
+          echo "   MD5: ${MD5_HASH}"
+          echo "   SHA256: ${SHA256_HASH}"
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -930,16 +982,8 @@ jobs:
           VARIANT_COUNT=$(ls -1 CHANGELOG-*.md 2>/dev/null | wc -l)
           echo "VARIANT_COUNT=$VARIANT_COUNT" >> $GITHUB_ENV
           
-          # Get build date from any changelog (they're all from same run)
-          if [ -f "CHANGELOG-tiann.md" ]; then
-            BUILD_DATE=$(grep "Build Date:" CHANGELOG-tiann.md | head -1 | cut -d':' -f2- | xargs)
-          elif [ -f "CHANGELOG-kowsu.md" ]; then
-            BUILD_DATE=$(grep "Build Date:" CHANGELOG-kowsu.md | head -1 | cut -d':' -f2- | xargs)
-          elif [ -f "CHANGELOG-mksu.md" ]; then
-            BUILD_DATE=$(grep "Build Date:" CHANGELOG-mksu.md | head -1 | cut -d':' -f2- | xargs)
-          else
-            BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          fi
+          # Get build date
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           
           # Determine which variants were built
@@ -947,217 +991,129 @@ jobs:
           [ -f "CHANGELOG-tiann.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}tiann "
           [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
           [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
+          VARIANTS_BUILT=$(echo "$VARIANTS_BUILT" | xargs)
           echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
           
-          # Extract CCACHE hit rate and cache size from first available build log
-          if [ -f "build-tiann.log" ]; then
-            BUILD_LOG="build-tiann.log"
-          elif [ -f "build-kowsu.log" ]; then
-            BUILD_LOG="build-kowsu.log"
-          elif [ -f "build-mksu.log" ]; then
-            BUILD_LOG="build-mksu.log"
-          fi
-          
-          if [ -n "$BUILD_LOG" ]; then
-            CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$BUILD_LOG" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
-            CACHE_SIZE=$(grep "💾 Cache Size:" "$BUILD_LOG" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
-            echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
-            echo "CACHE_SIZE=$CACHE_SIZE" >> $GITHUB_ENV
-          fi
+          # Get CCache hit rate from any build log
+          CCACHE_HIT_RATE="N/A"
+          for log in build-*.log; do
+            if [ -f "$log" ]; then
+              CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
+              [ "$CCACHE_HIT_RATE" != "N/A" ] && break
+            fi
+          done
+          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
 
-      - name: Generate Enhanced Release Notes
+      - name: Generate Enhanced Release Notes with Actual Data
         run: |
           cd release-assets
           
-          # Start building the release notes
-          cat > RELEASE_NOTES.md << 'HEADER_EOF'
-          # 🚀 Android 16 GKI Kernel Build #
-          HEADER_EOF
+          # Get actual file data from job outputs
+          TIANN_SIZE="${{ needs.build.outputs.tiann_size || 'Unknown' }}"
+          TIANN_MD5="${{ needs.build.outputs.tiann_md5 || 'Unknown' }}"
+          TIANN_SHA256="${{ needs.build.outputs.tiann_sha256 || 'Unknown' }}"
+          TIANN_KSU_VERSION="${{ needs.build.outputs.tiann_ksu_version || 'Unknown' }}"
+          TIANN_KERNEL_VERSION="${{ needs.build.outputs.tiann_kernel_version || '6.1.x' }}"
+          TIANN_ZIP="${{ needs.build.outputs.tiann_zip || '' }}"
           
-          # Add build number
-          echo "${{ github.run_number }}" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
+          KOWSU_SIZE="${{ needs.build.outputs.kowsu_size || 'Unknown' }}"
+          KOWSU_MD5="${{ needs.build.outputs.kowsu_md5 || 'Unknown' }}"
+          KOWSU_SHA256="${{ needs.build.outputs.kowsu_sha256 || 'Unknown' }}"
+          KOWSU_KSU_VERSION="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
+          KOWSU_KERNEL_VERSION="${{ needs.build.outputs.kowsu_kernel_version || '6.1.x' }}"
+          KOWSU_ZIP="${{ needs.build.outputs.kowsu_zip || '' }}"
           
-          # Build info card
-          cat >> RELEASE_NOTES.md << INFO_CARD
-          <div align="center">
+          MKSU_SIZE="${{ needs.build.outputs.mksu_size || 'Unknown' }}"
+          MKSU_MD5="${{ needs.build.outputs.mksu_md5 || 'Unknown' }}"
+          MKSU_SHA256="${{ needs.build.outputs.mksu_sha256 || 'Unknown' }}"
+          MKSU_KSU_VERSION="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
+          MKSU_KERNEL_VERSION="${{ needs.build.outputs.mksu_kernel_version || '6.1.x' }}"
+          MKSU_ZIP="${{ needs.build.outputs.mksu_zip || '' }}"
           
-          | 🏗️ Build Info | 📊 Details |
-          |--------------|-----------|
-          | **Build Number** | #${{ github.run_number }} |
-          | **Build Date** | ${{ env.BUILD_DATE }} |
-          | **Build Duration** | ${{ env.BUILD_DURATION }} |
-          | **Target Android** | Android 16 |
-          | **Primary Device** | Google Pixel 8a |
-          | **Compatible** | Pixel 8, 8 Pro |
-          | **Variants Built** | ${{ env.VARIANT_COUNT }}/3 (${{ env.VARIANTS_BUILT }}) |
-          | **SuSFS** | ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }} |
-          | **CCACHE Hit Rate** | ${{ env.CCACHE_HIT_RATE }} |
-          | **Cache Size** | ${{ env.CACHE_SIZE }} |
+          # Find actual ZIP files if not from outputs
+          [ -z "$TIANN_ZIP" ] && TIANN_ZIP=$(ls AK3-*-TIANN-*.zip 2>/dev/null | head -1 || echo "")
+          [ -z "$KOWSU_ZIP" ] && KOWSU_ZIP=$(ls AK3-*-KowSU-*.zip 2>/dev/null | head -1 || echo "")
+          [ -z "$MKSU_ZIP" ] && MKSU_ZIP=$(ls AK3-*-MKSU-*.zip 2>/dev/null | head -1 || echo "")
           
-          </div>
+          # Use common kernel version if variants have different
+          COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
+          [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
           
-          ---
-          
-          INFO_CARD
-          
-          # Add download section for each variant
-          echo "## 📦 Download Packages" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          
-          # Function to add variant section
-          add_variant_section() {
-            local variant=$1
-            local variant_upper=$2
-            local variant_name=$3
-            
-            if [ -f "CHANGELOG-${variant}.md" ]; then
-              KSU_VERSION=$(grep "KernelSU Version:" "CHANGELOG-${variant}.md" | head -1 | cut -d':' -f2 | xargs)
-              SUSFS_STATUS=$(grep "SuSFS:" "CHANGELOG-${variant}.md" | head -1 | cut -d':' -f2 | xargs)
-              KSU_COMMIT=$(grep "| \*\*KernelSU" "CHANGELOG-${variant}.md" | head -1 | grep -oE '\`[a-f0-9]+\`' | tr -d '\`')
-              KSU_COMMIT_MSG=$(grep "| \*\*KernelSU" "CHANGELOG-${variant}.md" | head -1 | cut -d'|' -f5 | xargs)
-              
-              ZIP_FILE=$(ls AK3-*-${variant_upper}-*.zip 2>/dev/null | head -1)
-              if [ -n "$ZIP_FILE" ]; then
-                FILE_SIZE=$(du -h "$ZIP_FILE" | cut -f1)
-                SHA256_FILE="${ZIP_FILE}.sha256"
-                MD5_FILE="${ZIP_FILE}.md5"
-                
-                cat >> RELEASE_NOTES.md << VARIANT_SECTION
-          ### 🔧 ${variant_name}
-          **Version:** \`${KSU_VERSION}\` | **Updated:** Just now | **Size:** ${FILE_SIZE}
-          
-          <details>
-          <summary>📥 <b>Download & Details</b></summary>
-          
-          | Component | Value |
-          |-----------|-------|
-          | **File** | \`${ZIP_FILE}\` |
-          | **Size** | ${FILE_SIZE} |
-          | **SHA256** | [View Checksum](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${SHA256_FILE}) |
-          | **MD5** | [View Checksum](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${MD5_FILE}) |
-          | **KernelSU Commit** | \`${KSU_COMMIT}\` - ${KSU_COMMIT_MSG} |
-          | **SuSFS** | ${SUSFS_STATUS} |
-          
-          **📋 Downloads:**
-          - 📦 **[Download Kernel ZIP](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${ZIP_FILE})**
-          - 🔐 [SHA256](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${SHA256_FILE})
-          - 🔑 [MD5](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/${MD5_FILE})
-          - 📄 [Full Changelog](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/CHANGELOG-${variant}.md)
-          
-          </details>
-          
-          VARIANT_SECTION
-              fi
-            fi
-          }
-          
-          # Add sections for each variant
-          add_variant_section "tiann" "TIANN" "Official KernelSU (tiann)"
-          add_variant_section "kowsu" "KOWSU" "KowSU Fork (kowsu)"
-          add_variant_section "mksu" "MKSU" "MKSU Fork (mksu)"
-          
-          # Add comparison table
-          cat >> RELEASE_NOTES.md << 'COMPARISON_EOF'
-          ---
-          
-          ## 🔍 Variant Comparison
-          
-          | Feature | Official (tiann) | KowSU (kowsu) | MKSU (mksu) |
-          |---------|------------------|---------------|-------------|
-          | **Base Source** | Official | Fork | Fork |
-          | **SuSFS** | ✅ | ✅ | ✅ |
-          | **LSM Hooks** | ✅ | ✅ | ✅ |
-          | **Custom Features** | Standard | Enhanced | Specialized |
-          | **Update Frequency** | Daily | Weekly | As needed |
-          | **Stability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-          | **Recommended For** | Daily driver | Power users | Compatibility |
+          # Create release notes
+          cat > RELEASE_NOTES.md << EOF
+          **Build Info:** #${{ github.run_number }} • ${{ env.BUILD_DATE }}  
+          **Build Time:** ${{ env.BUILD_DURATION }} • **CCache:** ${{ env.CCACHE_HIT_RATE || 'N/A' }} hit rate  
+          **Kernel Version:** $COMMON_KERNEL_VERSION • **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
+          **Commit:** \`${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}\`
           
           ---
           
-          ## 📱 Compatibility
+          ## ⚡ Quick Download
           
-          ### Devices
-          - ✅ **Google Pixel 8a** - Primary target, fully tested
-          - ✅ **Google Pixel 8** - Compatible (same Tensor G3)
-          - ✅ **Google Pixel 8 Pro** - Compatible (same Tensor G3)
+          | Variant | KSU Version | File | Size |
+          |---------|-------------|------|------|
+          EOF
           
-          **Note:** All Pixel 8 series devices share the Tensor G3 chipset.
+          # Add tiann row if built
+          if [ -n "$TIANN_ZIP" ]; then
+            cat >> RELEASE_NOTES.md << EOF
+            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [\`$TIANN_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$TIANN_ZIP)<br>\`md5sum: $TIANN_MD5\` | $TIANN_SIZE |
+            EOF
+          fi
           
-          ### Android Version
-          - ✅ **Android 16** - Target version
+          # Add kowsu row if built
+          if [ -n "$KOWSU_ZIP" ]; then
+            cat >> RELEASE_NOTES.md << EOF
+            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [\`$KOWSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$KOWSU_ZIP)<br>\`md5sum: $KOWSU_MD5\` | $KOWSU_SIZE |
+            EOF
+          fi
           
-          ### Requirements
-          - Unlocked bootloader
-          - [Kernel Flasher v1.6](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) (recommended) or custom recovery
-          - Backup recommended
+          # Add mksu row if built
+          if [ -n "$MKSU_ZIP" ]; then
+            cat >> RELEASE_NOTES.md << EOF
+            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [\`$MKSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$MKSU_ZIP)<br>\`md5sum: $MKSU_MD5\` | $MKSU_SIZE |
+            EOF
+          fi
           
-          ---
+          cat >> RELEASE_NOTES.md << EOF
           
-          ## 🛠️ Installation
+          **All variants work on:** Pixel 8, Pixel 8a, Pixel 8 Pro
           
-          ### Method 1: Kernel Flasher (Recommended) ⭐
-          1. **Download & Install** [Kernel Flasher v1.6](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) by fatalcoder524
-          2. **Download** your preferred variant ZIP
-          3. **Open** Kernel Flasher app
-          4. **Select** the downloaded ZIP
-          5. **Flash** and wait for completion
-          6. **Reboot**
+          ## 🚀 Install
           
-          **Why Kernel Flasher?**
-          - ✅ No recovery needed
-          - ✅ Flash from Android directly
-          - ✅ Easier and faster
-          - ✅ User-friendly interface
+          ### **Method 1: Kernel Flasher (Recommended)**
+          Download [Kernel Flasher v1.6.0 by fatalcoder524](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) and flash the AK3 zip directly from the app.
           
-          ### Method 2: Custom Recovery (Alternative)
-          1. **Download** your preferred variant ZIP
-          2. **Boot** into recovery (TWRP/OrangeFox)
-          3. **Flash** the ZIP
-          4. **Reboot**
+          ### **Method 2: Manual Flash (Magiskboot)**
+          1. Extract the AK3 zip and get the \`Image\` (kernel) file
+          2. Extract \`boot.img\` from Pixel 8 factory images zip
+          3. Use magiskboot to repack:
+          \`\`\`bash
+          # Unpack stock boot image
+          magiskboot unpack boot.img
           
-          ---
+          # Replace kernel
+          mv -v Image kernel
           
-          ## ℹ️ About This Kernel
+          # Repack boot image
+          magiskboot repack boot.img
           
-          This is a **GKI (Generic Kernel Image)** kernel built for **Android 16** on **Google Pixel 8a**.
+          # Flash to device
+          fastboot flash boot new-boot.img
+          \`\`\`
           
-          **Device Compatibility:**
-          - ✅ **Pixel 8a** - Primary target
-          - ✅ **Pixel 8** - Compatible (same Tensor G3)
-          - ✅ **Pixel 8 Pro** - Compatible (same Tensor G3)
+          ## 📝 What's New (Since Build #$(({{ github.run_number }} - 1)))
           
-          **Why "android14" in the branch name?** The branch name `android14-6.1-2025-12` refers to Google's GKI kernel branch naming scheme, based on when the Pixel 8 series launched with Android 14. This is NOT the target Android version.
-          
-          **What this means:**
-          - ✅ This kernel is for Android 16
-          - ✅ Built from Google's GKI android14-6.1 branch
-          - ✅ Compatible with all Pixel 8 series devices
-          
-          **Chipset:** Google Tensor G3 | **Architecture:** ARM64
-          
-          ---
-          
-          ## 🔗 Resources
-          
-          - **Repository:** https://github.com/${{ github.repository }}
-          - **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          - **Kernel Flasher:** https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0
-          - **Issues:** https://github.com/${{ github.repository }}/issues
+          \`\`\`
+          $(git log --oneline -10 2>/dev/null || echo "No changes found")
+          \`\`\`
           
           ---
           
-          <div align="center">
+          **Support:** [GitHub Issues](https://github.com/${{ github.repository }}/issues) • [Telegram](https://t.me/deepongi_labs)
+          EOF
           
-          **Built with ❤️ for the Pixel 8 series community**
-          
-          *All variants built from the same kernel base with variant-specific KernelSU implementations*
-          
-          </div>
-          COMPARISON_EOF
-          
-          echo "✅ Enhanced release notes generated"
-          cat RELEASE_NOTES.md
+          echo "✅ Release notes generated with actual file data"
 
       - name: Create Unified Release
         uses: softprops/action-gh-release@v1
@@ -1263,25 +1219,18 @@ jobs:
         id: get-versions
         run: |
           # Initialize version variables
-          KERNEL_VERSION="Unknown"
+          KERNEL_VERSION="${{ needs.build.outputs.tiann_kernel_version || '6.1.x' }}"
           
-          # Try to get KSU versions for each variant
-          for variant in tiann kowsu mksu; do
-            KSU_VERSION="Unknown"
-            
-            # Check if this variant was built
-            if [[ "${{ env.BUILT_VARIANTS_LIST }}" == *"${variant}"* ]]; then
-              # Method 1: Check build job outputs
-              VAR_NAME=$(echo "${variant}_ksu_version" | tr '[:lower:]' '[:upper:]')
-              if [ -n "${{ needs.build.outputs.${VAR_NAME} }}" ]; then
-                KSU_VERSION="${{ needs.build.outputs.${VAR_NAME} }}"
-              fi
-            fi
-            
-            echo "KSU_${variant^^}_VERSION=${KSU_VERSION}" >> $GITHUB_ENV
-          done
+          # Get KSU versions from build outputs
+          TIANN_KSU="${{ needs.build.outputs.tiann_ksu_version || 'Unknown' }}"
+          KOWSU_KSU="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
+          MKSU_KSU="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
           
+          # Set environment variables
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+          echo "TIANN_KSU_VERSION=${TIANN_KSU}" >> $GITHUB_ENV
+          echo "KOWSU_KSU_VERSION=${KOWSU_KSU}" >> $GITHUB_ENV
+          echo "MKSU_KSU_VERSION=${MKSU_KSU}" >> $GITHUB_ENV
 
       - name: Get CCache Statistics
         if: always()
@@ -1356,7 +1305,7 @@ jobs:
               COMMIT_MESSAGE="${COMMIT_MESSAGE:0:77}..."
             fi
             
-            COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/[_*`[]/\\&/g')
+            COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[_*`[]/\\&/g')
           fi
           
           echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
@@ -1369,55 +1318,41 @@ jobs:
         run: |
           CURRENT_TIME=$(date +"%H:%M")
           
-          # Build download links
-          if [ "${{ env.CREATE_RELEASE }}" = "true" ]; then
-            RELEASE_LINK="[View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
-            DOWNLOAD_ALL="[Download All](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})"
-            DOWNLOAD_LINKS="• [tiann-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/tiann-kernel.zip)
-          • [kowsu-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/kowsu-kernel.zip)
-          • [mksu-variant.zip](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/mksu-kernel.zip)"
-          else
-            RELEASE_LINK="No release created"
-            DOWNLOAD_ALL="[Download Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-            DOWNLOAD_LINKS="• [Artifacts Page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          # Build KSU info from actual versions
+          KSU_INFO=""
+          if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
+            KSU_INFO="${KSU_INFO}✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}\n"
+          fi
+          if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
+            KSU_INFO="${KSU_INFO}✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}\n"
+          fi
+          if [ -n "${{ env.MKSU_KSU_VERSION }}" ] && [ "${{ env.MKSU_KSU_VERSION }}" != "Unknown" ]; then
+            KSU_INFO="${KSU_INFO}✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}\n"
           fi
           
-          # Format KSU versions for each variant
-          KSU_INFO=""
-          for variant in tiann kowsu mksu; do
-            VAR_NAME="KSU_${variant^^}_VERSION"
-            KSU_VERSION="${!VAR_NAME}"
-            EMOJI="✅"
-            [[ "$KSU_VERSION" == "Unknown" ]] && EMOJI="❓"
-            KSU_INFO="${KSU_INFO}${EMOJI} *${variant}:* ${KSU_VERSION}\n"
-          done
-          
-          # Build the message
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
           ━━━━━━━━━━━━━━━━━━━━━
 
-          📦 *Variants:* 3/3 (${{ env.VARIANTS_FORMATTED }})
+          📦 *Variants:* ${{ env.VARIANT_COUNT }}/3 (${{ env.VARIANTS_FORMATTED }})
           ⏱️ *Duration:* ${{ env.BUILD_DURATION }}
           🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
 
           🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
           ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
-             Hits: ${{ env.CCACHE_HITS }} | Misses: ${{ env.CCACHE_MISSES }}
-             Size: ${{ env.CCACHE_SIZE }}
 
           🔧 *KSU Versions:*
-          ${KSU_INFO}
+          $KSU_INFO
           ⬇️ *Downloads:*
-          $DOWNLOAD_LINKS
+          [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
 
           📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
           💬 *Message:* \"${{ env.COMMIT_MESSAGE }}\"
 
           🔗 *Links:*
-          ├─ $RELEASE_LINK
+          ├─ [Release Page](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
           ├─ [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          └─ $DOWNLOAD_ALL
+          └─ [Download All](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
 
           🕰️ ${CURRENT_TIME} | GitHub Actions"
           

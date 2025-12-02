@@ -830,29 +830,38 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # Save ccache output to variable
-          CCACHE_OUTPUT=$(ccache -s)
+          CCACHE_OUTPUT=$(ccache -s 2>&1)
           
-          # Extract cache size from the last line that mentions "cache size"
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{print $4, $5, $6, $7}' | sed 's/^ *//;s/ *$//')
+          # Extract cache size (CCache 4.x format)
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{for(i=4;i<=NF;i++) printf "%s ", $i}' | sed 's/ $//')
           
-          # Extract hit rate - format has TWO "Hits:" lines, we want the FIRST one
-          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | grep -oE '\([0-9]+\.[0-9]+%\)' | tr -d '()')
+          # Extract hit rate for CCache 4.x
+          # CCache 4.x format: "cache hit rate" line
+          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "cache hit rate" | awk '{print $4}')
           
           # If extraction failed, try alternative method
-          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
+          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ] || [ "$HIT_RATE" = "N/A" ]; then
             echo "⚠️  Primary extraction failed, trying calculation method..."
             
-            # Get hits and total from first "Hits:" line
-            HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $2}')
-            TOTAL=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $4}')
+            # Get hits and misses directly
+            HITS=$(echo "$CCACHE_OUTPUT" | grep -i "cache hit (direct)" | awk '{print $4}')
+            MISSES=$(echo "$CCACHE_OUTPUT" | grep -i "cache miss" | awk '{print $4}')
             
-            if [ -n "$HITS" ] && [ -n "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
-              HIT_RATE=$(awk "BEGIN {printf \"%.2f%%\", ($HITS / $TOTAL) * 100}")
-              echo "✅ Calculated: $HIT_RATE"
+            if [ -n "$HITS" ] && [ -n "$MISSES" ]; then
+              HITS=${HITS:-0}
+              MISSES=${MISSES:-0}
+              TOTAL=$((HITS + MISSES))
+              
+              if [ "$TOTAL" -gt 0 ]; then
+                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($HITS / $TOTAL) * 100}")
+                echo "✅ Calculated: $HIT_RATE (Hits: $HITS, Misses: $MISSES)"
+              else
+                HIT_RATE="N/A"
+                echo "❌ No cacheable calls made"
+              fi
             else
               HIT_RATE="N/A"
-              echo "❌ Could not extract hit rate"
-              echo "   HITS=$HITS, TOTAL=$TOTAL"
+              echo "❌ Could not extract hit/miss counts"
             fi
           else
             echo "✅ Hit rate extracted: $HIT_RATE"
@@ -861,12 +870,12 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 Final Results:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "💾 Cache Size: $FINAL_CACHE_SIZE"
+          echo "💾 Cache Size: ${FINAL_CACHE_SIZE:-N/A}"
           echo "🎯 Hit Rate: $HIT_RATE"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # Export to environment
-          echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
+          echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
 
       - name: Package Kernel
@@ -1272,21 +1281,25 @@ jobs:
           
           # Try to get ccache stats if ccache command exists
           if command -v ccache &> /dev/null; then
-            CCACHE_STATS=$(ccache -s 2>/dev/null || true)
+            CCACHE_STATS=$(ccache -s 2>&1 || true)
             
             if [ -n "$CCACHE_STATS" ]; then
-              HIT_RATE=$(echo "$CCACHE_STATS" | grep -E "hit rate" | grep -o "[0-9]*\.[0-9]*%" || echo "0%")
+              # CCache 4.x format: "cache hit rate: X.X%"
+              HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "cache hit rate" | awk '{print $4}' || echo "0%")
               CCACHE_HIT_RATE="$HIT_RATE"
               
-              HITS=$(echo "$CCACHE_STATS" | grep -E "cache hit" | grep -o "[0-9]*" | head -n1 || echo "0")
-              MISSES=$(echo "$CCACHE_STATS" | grep -E "cache miss" | grep -o "[0-9]*" | head -n1 || echo "0")
-              CCACHE_HITS="${HITS}"
-              CCACHE_MISSES="${MISSES}"
+              # Get hits and misses for calculation if needed
+              HITS=$(echo "$CCACHE_STATS" | grep -i "cache hit (direct)" | awk '{print $4}' || echo "0")
+              MISSES=$(echo "$CCACHE_STATS" | grep -i "cache miss" | awk '{print $4}' || echo "0")
+              CCACHE_HITS="${HITS:-0}"
+              CCACHE_MISSES="${MISSES:-0}"
               
-              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -E "cache size" || echo "")
+              # Get cache size (CCache 4.x format)
+              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -i "cache size" || echo "")
               if [ -n "$SIZE_LINE" ]; then
-                SIZE=$(echo "$SIZE_LINE" | grep -o "[0-9]*\.[0-9]*" | head -n1)
-                UNIT=$(echo "$SIZE_LINE" | grep -o "[GM]B" || echo "MB")
+                # Extract size and unit: "cache size: 123.4 MB"
+                SIZE=$(echo "$SIZE_LINE" | awk '{print $3}')
+                UNIT=$(echo "$SIZE_LINE" | awk '{print $4}')
                 CCACHE_SIZE="${SIZE}${UNIT}"
               fi
             fi
@@ -1298,8 +1311,9 @@ jobs:
           echo "CCACHE_SIZE=${CCACHE_SIZE}" >> $GITHUB_ENV
           
           # Calculate emoji for hit rate
-          if [[ "$CCACHE_HIT_RATE" =~ ([0-9]+) ]]; then
-            RATE_NUM="${BASH_REMATCH[1]}"
+          # Remove % sign and convert to integer
+          RATE_NUM=$(echo "$CCACHE_HIT_RATE" | sed 's/%//g' | awk '{print int($1+0.5)}')
+          if [ -n "$RATE_NUM" ] && [ "$RATE_NUM" -eq "$RATE_NUM" ] 2>/dev/null; then
             if [ "$RATE_NUM" -ge 90 ]; then
               echo "CCACHE_EMOJI=🚀" >> $GITHUB_ENV
             elif [ "$RATE_NUM" -ge 70 ]; then
@@ -1314,6 +1328,15 @@ jobs:
           else
             echo "CCACHE_EMOJI=❓" >> $GITHUB_ENV
           fi
+
+      - name: Debug CCache Output
+        run: |
+          echo "🔍 Raw CCache output:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          ccache -s
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 CCache version:"
+          ccache --version
 
       - name: Get Commit Information
         if: always()

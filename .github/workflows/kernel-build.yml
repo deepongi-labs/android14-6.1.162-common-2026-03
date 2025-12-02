@@ -729,13 +729,13 @@ jobs:
           # Variant-specific config
           case "${{ matrix.variant }}" in
             "tiann")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
               ;;
             "kowsu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
               ;;
             "mksu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
               ;;
           esac
 

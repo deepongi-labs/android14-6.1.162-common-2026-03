@@ -1,4 +1,4 @@
-From d733e7d076d7642112b95220f47f3b772c22a8e0 Mon Sep 17 00:00:00 2001
+From 4d319e920a54e44571f27157aed27a1a1413a27f Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
 Date: Wed, 3 Dec 2025 22:48:34 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
@@ -199,7 +199,7 @@ index c7e23089..6d0bfc84 100644
  }
 \ No newline at end of file
 diff --git a/kernel/app_profile.c b/kernel/app_profile.c
-index 201b8bea..3f70d4e8 100644
+index 201b8bea..66b57be9 100644
 --- a/kernel/app_profile.c
 +++ b/kernel/app_profile.c
 @@ -20,47 +20,49 @@
@@ -270,7 +270,7 @@ index 201b8bea..3f70d4e8 100644
 +    }
 +
 +    int i;
-+    for (i = 0; i < ngroups; i) {
++    for (i = 0; i < ngroups; i++) {
 +        gid_t gid = profile->groups[i];
 +        kgid_t kgid = make_kgid(current_user_ns(), gid);
 +        if (!gid_valid(kgid)) {

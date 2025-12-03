@@ -881,39 +881,45 @@ jobs:
           # Save ccache output to variable
           CCACHE_OUTPUT=$(ccache -s 2>&1)
           
-          # Extract cache size (CCache 4.x format)
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "cache size" | tail -1 | awk '{for(i=4;i<=NF;i++) printf "%s ", $i}' | sed 's/ $//')
+          # Extract cache size - CCache 4.12.1 format
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//')
           
-          # Extract hit rate for CCache 4.x
-          # CCache 4.x format: "cache hit rate" line
-          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "cache hit rate" | awk '{print $4}')
+          # Extract hit rate from "Hits" line for CCache 4.12.1
+          # Format: "Hits:            422225 / 473053 (89.26%)"
+          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
           
-          # If extraction failed, try alternative method
-          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ] || [ "$HIT_RATE" = "N/A" ]; then
-            echo "⚠️  Primary extraction failed, trying calculation method..."
+          # If not found, try alternative extraction
+          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
+            HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
+          fi
+          
+          # Get cache hits and misses for detailed info
+          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -i "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          
+          echo "✅ CCache v4.12.1 detected"
+          echo "✅ Cache hits: ${CACHE_HITS:-0}"
+          echo "✅ Cache misses: ${CACHE_MISSES:-0}"
+          
+          if [ -n "$HIT_RATE" ] && [ "$HIT_RATE" != "" ]; then
+            echo "✅ Hit rate extracted: $HIT_RATE"
+          else
+            echo "⚠️  Could not extract hit rate, trying calculation method..."
             
-            # Get hits and misses directly
-            HITS=$(echo "$CCACHE_OUTPUT" | grep -i "cache hit (direct)" | awk '{print $4}')
-            MISSES=$(echo "$CCACHE_OUTPUT" | grep -i "cache miss" | awk '{print $4}')
-            
-            if [ -n "$HITS" ] && [ -n "$MISSES" ]; then
-              HITS=${HITS:-0}
-              MISSES=${MISSES:-0}
-              TOTAL=$((HITS + MISSES))
-              
+            # Calculate manually if needed
+            if [ -n "$CACHE_HITS" ] && [ -n "$CACHE_MISSES" ]; then
+              TOTAL=$((CACHE_HITS + CACHE_MISSES))
               if [ "$TOTAL" -gt 0 ]; then
-                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($HITS / $TOTAL) * 100}")
-                echo "✅ Calculated: $HIT_RATE (Hits: $HITS, Misses: $MISSES)"
+                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($CACHE_HITS / $TOTAL) * 100}")
+                echo "✅ Calculated hit rate: $HIT_RATE"
               else
-                HIT_RATE="N/A"
-                echo "❌ No cacheable calls made"
+                HIT_RATE="0%"
+                echo "⚠️  No cacheable calls made"
               fi
             else
               HIT_RATE="N/A"
               echo "❌ Could not extract hit/miss counts"
             fi
-          else
-            echo "✅ Hit rate extracted: $HIT_RATE"
           fi
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -921,11 +927,14 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "💾 Cache Size: ${FINAL_CACHE_SIZE:-N/A}"
           echo "🎯 Hit Rate: $HIT_RATE"
+          echo "📊 Hit/Miss: ${CACHE_HITS:-0}/${CACHE_MISSES:-0}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # Export to environment
           echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
+          echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
+          echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
 
       - name: Package Kernel
         run: |
@@ -1035,19 +1044,42 @@ jobs:
     needs: [setup, build]
     runs-on: [self-hosted, Linux, X64]
     if: needs.setup.outputs.create_release == 'true' && success()
+    outputs:
+      duration: ${{ env.BUILD_DURATION }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Calculate Build Duration
         run: |
+          echo "🕐 Calculating build duration..."
+          
+          # Get start time from setup job output
           START_TIME="${{ needs.setup.outputs.build_start_time }}"
+          echo "Start time from setup: $START_TIME"
+          
+          # Get current time
           END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          DURATION_MINS=$((DURATION / 60))
-          DURATION_SECS=$((DURATION % 60))
-          echo "BUILD_DURATION=${DURATION_MINS}m ${DURATION_SECS}s" >> $GITHUB_ENV
-          echo "🕐 Total build duration: ${DURATION_MINS}m ${DURATION_SECS}s"
+          echo "End time: $END_TIME"
+          
+          if [ -n "$START_TIME" ] && [ "$START_TIME" != "null" ] && [ "$START_TIME" -gt 0 ]; then
+            DURATION=$((END_TIME - START_TIME))
+            DURATION_MINS=$((DURATION / 60))
+            DURATION_SECS=$((DURATION % 60))
+            
+            if [ $DURATION_MINS -eq 0 ]; then
+              BUILD_DURATION="${DURATION_SECS}s"
+            else
+              BUILD_DURATION="${DURATION_MINS}m ${DURATION_SECS}s"
+            fi
+            
+            echo "✅ Build duration: $BUILD_DURATION"
+          else
+            BUILD_DURATION="Unknown"
+            echo "⚠️ Could not calculate duration (start time: $START_TIME)"
+          fi
+          
+          echo "BUILD_DURATION=$BUILD_DURATION" >> $GITHUB_ENV
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -1231,6 +1263,10 @@ jobs:
           CREATE_RELEASE="${{ needs.setup.outputs.create_release || 'false' }}"
           echo "CREATE_RELEASE=${CREATE_RELEASE}" >> $GITHUB_ENV
           
+          # Get duration from create_release job
+          BUILD_DURATION="${{ needs.create_release.outputs.duration || 'Unknown' }}"
+          echo "BUILD_DURATION=${BUILD_DURATION}" >> $GITHUB_ENV
+          
           # Determine which variants were actually built
           BUILT_VARIANTS=""
           [[ "${VARIANTS_BUILT}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
@@ -1334,23 +1370,28 @@ jobs:
             CCACHE_STATS=$(ccache -s 2>&1 || true)
             
             if [ -n "$CCACHE_STATS" ]; then
-              # CCache 4.x format: "cache hit rate: X.X%"
-              HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "cache hit rate" | awk '{print $4}' || echo "0%")
+              # CCache 4.12.1 format: "Hits:  ... (89.26%)"
+              HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
+              
+              # If not found, try alternative extraction
+              if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
+                HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
+              fi
+              
               CCACHE_HIT_RATE="$HIT_RATE"
               
-              # Get hits and misses for calculation if needed
-              HITS=$(echo "$CCACHE_STATS" | grep -i "cache hit (direct)" | awk '{print $4}' || echo "0")
-              MISSES=$(echo "$CCACHE_STATS" | grep -i "cache miss" | awk '{print $4}' || echo "0")
+              # Get hits and misses
+              HITS=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
+              MISSES=$(echo "$CCACHE_STATS" | grep -i "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
               CCACHE_HITS="${HITS:-0}"
               CCACHE_MISSES="${MISSES:-0}"
               
-              # Get cache size (CCache 4.x format)
-              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -i "cache size" || echo "")
+              # Get cache size (CCache 4.12.1 format)
+              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -i "^  Cache size" || echo "")
               if [ -n "$SIZE_LINE" ]; then
-                # Extract size and unit: "cache size: 123.4 MB"
-                SIZE=$(echo "$SIZE_LINE" | awk '{print $3}')
-                UNIT=$(echo "$SIZE_LINE" | awk '{print $4}')
-                CCACHE_SIZE="${SIZE}${UNIT}"
+                # Extract size: "Cache size (GB):   26.2 /   50.0 (52.36%)"
+                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1 "GB"}')
+                CCACHE_SIZE="$SIZE"
               fi
             fi
           fi
@@ -1362,7 +1403,7 @@ jobs:
           
           # Calculate emoji for hit rate
           # Remove % sign and convert to integer
-          RATE_NUM=$(echo "$CCACHE_HIT_RATE" | sed 's/%//g' | awk '{print int($1+0.5)}')
+          RATE_NUM=$(echo "$CCACHE_HIT_RATE" | sed 's/%//g' | awk '{print int($1+0.5)}' 2>/dev/null)
           if [ -n "$RATE_NUM" ] && [ "$RATE_NUM" -eq "$RATE_NUM" ] 2>/dev/null; then
             if [ "$RATE_NUM" -ge 90 ]; then
               echo "CCACHE_EMOJI=🚀" >> $GITHUB_ENV
@@ -1419,31 +1460,37 @@ jobs:
         run: |
           CURRENT_TIME=$(date +"%H:%M")
           
-          # Build KSU info from actual versions
+          # Build KSU info from actual versions - FIXED: Remove extra newlines
           KSU_INFO=""
           if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}\n"
+            KSU_INFO="${KSU_INFO}✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
           fi
           if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}\n"
+            KSU_INFO="${KSU_INFO}✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
           fi
           if [ -n "${{ env.MKSU_KSU_VERSION }}" ] && [ "${{ env.MKSU_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}\n"
+            KSU_INFO="${KSU_INFO}✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
           fi
+          
+          # Remove trailing newline if exists
+          KSU_INFO=$(echo -n "$KSU_INFO" | sed 's/\\n$//')
+          
+          # Also fix the duration to use the calculated value from create_release job
+          BUILD_DURATION="${{ needs.create_release.outputs.duration || env.BUILD_DURATION || 'Unknown' }}"
           
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
           ━━━━━━━━━━━━━━━━━━━━━
 
           📦 *Variants:* ${{ env.VARIANT_COUNT }}/3 (${{ env.VARIANTS_FORMATTED }})
-          ⏱️ *Duration:* ${{ env.BUILD_DURATION }}
+          ⏱️ *Duration:* ${BUILD_DURATION}
           🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
 
           🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
-          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
+          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE || 'N/A' }}
 
           🔧 *KSU Versions:*
-          $KSU_INFO
+          ${KSU_INFO}
           ⬇️ *Downloads:*
           [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
 
@@ -1457,6 +1504,11 @@ jobs:
 
           🕰️ ${CURRENT_TIME} | GitHub Actions"
           
+          echo "Generated message preview:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "$MESSAGE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           # Send with retry
           for ATTEMPT in 1 2 3; do
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
@@ -1466,7 +1518,6 @@ jobs:
               -d disable_web_page_preview=true && break
             [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
           done
-
       - name: Send Failure Notification
         if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
         id: notify-failure

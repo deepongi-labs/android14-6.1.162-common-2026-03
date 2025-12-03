@@ -1,29 +1,14 @@
-From bfeaa7e62b3c8cc23c5f74ca69b1a81362fb7b2d Mon Sep 17 00:00:00 2001
-From: "Adam W. Willis" <return.of.octobot@gmail.com>
-Date: Sat, 29 Nov 2025 13:11:35 -0500
-Subject: [PATCH] KernelSU: Spoof LKM mode flag to suppress manager warning
+From 2b7c1320bcaeeb6f3cf6843aa313254cd8b61d1d Mon Sep 17 00:00:00 2001
+From: deepongi <infectedmushi@gmail.com>
+Date: Wed, 3 Dec 2025 01:34:05 +0000
+Subject: [PATCH] 20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning
 
-Starting from manager version 30000+, a warning card is displayed when
-KernelSU is not detected as running in LKM mode. This detection is based
-on bit 0 of the flags field returned by KSU_IOCTL_GET_INFO.
-
-The original implementation only sets this bit when compiled with MODULE
-defined meaning that it remains unset for direct kernel integration,
-this triggers an unnecessary and frankly irrelevant warning as we are
-not truly operating in either GKI or LKM mode.
-
-Thus we will set the LKM bit at compile time to suppress this warning.
-The flag is purely informational and used only by the manager for UI
-display and debug logging, this change has no functional impact on
-KernelSU operation.
-
-Signed-off-by: Adam W. Willis <return.of.octobot@gmail.com>
 ---
- kernel/supercalls.c | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ kernel/supercalls.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index 265d6be0..93cae512 100644
+index 64405ea4..fa4c3746 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
 @@ -78,7 +78,7 @@ static int do_get_info(void __user *arg)
@@ -35,6 +20,13 @@ index 265d6be0..93cae512 100644
      cmd.flags |= 0x1;
  #endif
  
+@@ -950,4 +950,4 @@ int ksu_install_fd(void)
+     pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
+ 
+     return fd;
+-}
+\ No newline at end of file
++}
 -- 
 2.52.0
 

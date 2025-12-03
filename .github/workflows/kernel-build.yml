@@ -1365,70 +1365,87 @@ jobs:
         if: always()
         id: get-ccache-stats
         run: |
+          echo "🔍 Starting CCache statistics extraction..."
+          
           # Initialize default values
-          CCACHE_HIT_RATE="0%"
+          CCACHE_HIT_RATE="N/A"
           CCACHE_HITS="0"
           CCACHE_MISSES="0"
-          CCACHE_SIZE="0MB"
+          CCACHE_SIZE="N/A"
           
           # Try to get ccache stats if ccache command exists
           if command -v ccache &> /dev/null; then
             CCACHE_STATS=$(ccache -s 2>&1 || true)
             
             if [ -n "$CCACHE_STATS" ]; then
+              echo "✅ CCache output received"
+              
               # CCache 4.12.1 format - get only first match with -m1
-              HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
+              HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p' | head -1)
               
               # If not found, try alternative extraction
               if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-                HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
+                HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1 | head -1)
               fi
               
-              # Clean up the value
-              HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n' | xargs)
-              CCACHE_HIT_RATE="$HIT_RATE"
+              # Clean up the value - ensure it's a single line
+              HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n\r' | xargs)
+              CCACHE_HIT_RATE="${HIT_RATE:-N/A}"
+              echo "Extracted HIT_RATE: '$CCACHE_HIT_RATE'"
               
               # Get hits and misses - first match only
-              HITS=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
-              MISSES=$(echo "$CCACHE_STATS" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
+              HITS=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' | head -1 || echo "0")
+              MISSES=$(echo "$CCACHE_STATS" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' | head -1 || echo "0")
               
               # Clean up values
-              CCACHE_HITS=$(echo "${HITS:-0}" | tr -d '\n' | xargs)
-              CCACHE_MISSES=$(echo "${MISSES:-0}" | tr -d '\n' | xargs)
+              CCACHE_HITS=$(echo "${HITS:-0}" | tr -d '\n\r' | xargs)
+              CCACHE_MISSES=$(echo "${MISSES:-0}" | tr -d '\n\r' | xargs)
+              echo "Extracted HITS: '$CCACHE_HITS', MISSES: '$CCACHE_MISSES'"
               
               # Get cache size (CCache 4.12.1 format) - first match only
               SIZE_LINE=$(echo "$CCACHE_STATS" | grep -m1 "^  Cache size" || echo "")
               if [ -n "$SIZE_LINE" ]; then
                 # Extract size: "Cache size (GB):   26.2 /   50.0 (52.36%)"
-                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1 "GB"}' | tr -d '\n' | xargs)
-                CCACHE_SIZE="$SIZE"
+                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1}' | head -1)
+                CCACHE_SIZE=$(echo "${SIZE:-N/A}" | tr -d '\n\r' | xargs)
+                echo "Extracted SIZE: '$CCACHE_SIZE'"
               fi
+            else
+              echo "⚠️ No CCache stats available"
             fi
+          else
+            echo "⚠️ CCache command not found"
           fi
           
-          echo "CCACHE_HIT_RATE=${CCACHE_HIT_RATE}" >> $GITHUB_ENV
-          echo "CCACHE_HITS=${CCACHE_HITS}" >> $GITHUB_ENV
-          echo "CCACHE_MISSES=${CCACHE_MISSES}" >> $GITHUB_ENV
-          echo "CCACHE_SIZE=${CCACHE_SIZE}" >> $GITHUB_ENV
+          # Export to environment with clean values
+          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
+          echo "CCACHE_HITS=$CCACHE_HITS" >> $GITHUB_ENV
+          echo "CCACHE_MISSES=$CCACHE_MISSES" >> $GITHUB_ENV
+          echo "CCACHE_SIZE=$CCACHE_SIZE" >> $GITHUB_ENV
           
           # Calculate emoji for hit rate
           # Remove % sign and convert to integer
           RATE_NUM=$(echo "$CCACHE_HIT_RATE" | sed 's/%//g' | awk '{print int($1+0.5)}' 2>/dev/null)
+          echo "Parsed RATE_NUM: $RATE_NUM from '$CCACHE_HIT_RATE'"
+          
           if [ -n "$RATE_NUM" ] && [ "$RATE_NUM" -eq "$RATE_NUM" ] 2>/dev/null; then
             if [ "$RATE_NUM" -ge 90 ]; then
-              echo "CCACHE_EMOJI=🚀" >> $GITHUB_ENV
+              CCACHE_EMOJI="🚀"
             elif [ "$RATE_NUM" -ge 70 ]; then
-              echo "CCACHE_EMOJI=⚡" >> $GITHUB_ENV
+              CCACHE_EMOJI="⚡"
             elif [ "$RATE_NUM" -ge 50 ]; then
-              echo "CCACHE_EMOJI=📈" >> $GITHUB_ENV
+              CCACHE_EMOJI="📈"
             elif [ "$RATE_NUM" -ge 20 ]; then
-              echo "CCACHE_EMOJI=🐢" >> $GITHUB_ENV
+              CCACHE_EMOJI="🐢"
             else
-              echo "CCACHE_EMOJI=🐌" >> $GITHUB_ENV
+              CCACHE_EMOJI="🐌"
             fi
           else
-            echo "CCACHE_EMOJI=❓" >> $GITHUB_ENV
+            CCACHE_EMOJI="❓"
           fi
+          
+          echo "CCACHE_EMOJI=$CCACHE_EMOJI" >> $GITHUB_ENV
+          echo "Selected emoji: $CCACHE_EMOJI"
 
       - name: Debug CCache Output
         run: |
@@ -1470,22 +1487,41 @@ jobs:
         run: |
           CURRENT_TIME=$(date +"%H:%M")
           
-          # Build KSU info from actual versions - FIXED: Remove extra newlines
+          # Build KSU info from actual versions - CORRECTED with proper newlines
           KSU_INFO=""
           if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
+            KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
           fi
           if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+              ✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+            fi
           fi
           if [ -n "${{ env.MKSU_KSU_VERSION }}" ] && [ "${{ env.MKSU_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="${KSU_INFO}✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+              ✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+            fi
           fi
           
-          # Remove trailing newline if exists
-          KSU_INFO=$(echo -n "$KSU_INFO" | sed 's/\\n$//')
+          # Get CCache hits and misses for more detailed info
+          CCACHE_HITS="${{ env.CCACHE_HITS || '0' }}"
+          CCACHE_MISSES="${{ env.CCACHE_MISSES || '0' }}"
+          CCACHE_SIZE="${{ env.CCACHE_SIZE || 'N/A' }}"
           
-          # Also fix the duration to use the calculated value from create_release job
+          # Calculate total calls and format with descriptive text
+          if [ "$CCACHE_HITS" -gt 0 ] || [ "$CCACHE_MISSES" -gt 0 ]; then
+            TOTAL_CALLS=$((CCACHE_HITS + CCACHE_MISSES))
+            CCACHE_DETAILS="${{ env.CCACHE_HIT_RATE || 'N/A' }} (${CCACHE_HITS} hits, ${CCACHE_MISSES} misses)"
+          else
+            CCACHE_DETAILS="${{ env.CCACHE_HIT_RATE || 'N/A' }}"
+          fi
+          
           BUILD_DURATION="${{ needs.create_release.outputs.duration || env.BUILD_DURATION || 'Unknown' }}"
           
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
@@ -1497,10 +1533,12 @@ jobs:
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
 
           🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
-          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE || 'N/A' }}
+          🎯 *CCache:* ${CCACHE_DETAILS} ${{ env.CCACHE_EMOJI }}
+          💾 *Cache Size:* ${CCACHE_SIZE}
 
           🔧 *KSU Versions:*
           ${KSU_INFO}
+
           ⬇️ *Downloads:*
           [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
 
@@ -1528,6 +1566,7 @@ jobs:
               -d disable_web_page_preview=true && break
             [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
           done
+
       - name: Send Failure Notification
         if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
         id: notify-failure

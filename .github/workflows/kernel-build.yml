@@ -881,21 +881,21 @@ jobs:
           # Save ccache output to variable
           CCACHE_OUTPUT=$(ccache -s 2>&1)
           
-          # Extract cache size - CCache 4.12.1 format
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//')
+          # Extract cache size - CCache 4.12.1 format - get ONLY first match
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//')
           
-          # Extract hit rate from "Hits" line for CCache 4.12.1
-          # Format: "Hits:            422225 / 473053 (89.26%)"
-          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
+          # Extract hit rate from FIRST "Hits:" line only (skip Local storage section)
+          # Use -m1 to get only the first match
+          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
           
           # If not found, try alternative extraction
           if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-            HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
+            HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
           fi
           
-          # Get cache hits and misses for detailed info
-          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -i "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
-          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -i "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          # Get cache hits and misses for detailed info - FIRST match only
+          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
           
           echo "✅ CCache v4.12.1 detected"
           echo "✅ Cache hits: ${CACHE_HITS:-0}"
@@ -922,6 +922,12 @@ jobs:
             fi
           fi
           
+          # Clean up the HIT_RATE - remove any newlines or extra whitespace
+          HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n' | xargs)
+          FINAL_CACHE_SIZE=$(echo "$FINAL_CACHE_SIZE" | tr -d '\n' | xargs)
+          CACHE_HITS=$(echo "$CACHE_HITS" | tr -d '\n' | xargs)
+          CACHE_MISSES=$(echo "$CACHE_MISSES" | tr -d '\n' | xargs)
+          
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 Final Results:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -930,7 +936,7 @@ jobs:
           echo "📊 Hit/Miss: ${CACHE_HITS:-0}/${CACHE_MISSES:-0}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Export to environment
+          # Export to environment - ensure clean values
           echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
           echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
@@ -1370,27 +1376,31 @@ jobs:
             CCACHE_STATS=$(ccache -s 2>&1 || true)
             
             if [ -n "$CCACHE_STATS" ]; then
-              # CCache 4.12.1 format: "Hits:  ... (89.26%)"
-              HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
+              # CCache 4.12.1 format - get only first match with -m1
+              HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
               
               # If not found, try alternative extraction
               if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-                HIT_RATE=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
+                HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
               fi
               
+              # Clean up the value
+              HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n' | xargs)
               CCACHE_HIT_RATE="$HIT_RATE"
               
-              # Get hits and misses
-              HITS=$(echo "$CCACHE_STATS" | grep -i "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
-              MISSES=$(echo "$CCACHE_STATS" | grep -i "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
-              CCACHE_HITS="${HITS:-0}"
-              CCACHE_MISSES="${MISSES:-0}"
+              # Get hits and misses - first match only
+              HITS=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
+              MISSES=$(echo "$CCACHE_STATS" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' || echo "0")
               
-              # Get cache size (CCache 4.12.1 format)
-              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -i "^  Cache size" || echo "")
+              # Clean up values
+              CCACHE_HITS=$(echo "${HITS:-0}" | tr -d '\n' | xargs)
+              CCACHE_MISSES=$(echo "${MISSES:-0}" | tr -d '\n' | xargs)
+              
+              # Get cache size (CCache 4.12.1 format) - first match only
+              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -m1 "^  Cache size" || echo "")
               if [ -n "$SIZE_LINE" ]; then
                 # Extract size: "Cache size (GB):   26.2 /   50.0 (52.36%)"
-                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1 "GB"}')
+                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1 "GB"}' | tr -d '\n' | xargs)
                 CCACHE_SIZE="$SIZE"
               fi
             fi

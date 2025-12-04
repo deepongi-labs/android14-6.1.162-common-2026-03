@@ -849,12 +849,15 @@ jobs:
           
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             echo "🧹 Performing clean build..."
-            make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
+            make -j$(nproc) O=out clean
           fi
           
           echo "🗿️ Building kernel for ${{ matrix.variant }}..."
           echo "📂 Using CCACHE at: $CCACHE_DIR"
-          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out CC="ccache clang" 2>&1 | tee build.log
+          echo "🔧 Configuration: Clang compiler + LLVM IAS + GCC linker"
+          
+          # Use Clang compiler, LLVM integrated assembler, but GCC linker
+          make -j$(nproc) CC="ccache clang" LLVM_IAS=1 O=out 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           BUILD_MINS=$((BUILD_TIME / 60))
@@ -1492,7 +1495,7 @@ jobs:
           # Build KSU info from actual versions - CORRECTED with proper newlines
           KSU_INFO=""
           if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
-            KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
+              KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
           fi
           if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
             if [ -n "$KSU_INFO" ]; then
@@ -1535,8 +1538,8 @@ jobs:
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
 
           🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
-          🎯 *CCache:* ${CCACHE_DETAILS} ${{ env.CCACHE_EMOJI }}
-          💾 *Cache Size:* ${CCACHE_SIZE}
+          🎯 *CCache Hit-Rate:* ${CCACHE_DETAILS} ${{ env.CCACHE_EMOJI }}
+          💾 *Cache Size:* ${CCACHE_SIZE} GB
 
           🔧 *KSU Versions:*
           ${KSU_INFO}

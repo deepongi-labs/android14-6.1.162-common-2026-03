@@ -670,8 +670,6 @@ jobs:
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_4K_PAGES=y
-          CONFIG_ARM64_PAN=y
           CONFIG_ARM64_PTR_AUTH=y
           CONFIG_ARM64_SME=y
           CONFIG_ARM64_SVE=y
@@ -681,7 +679,6 @@ jobs:
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
           CONFIG_CMA=y
           CONFIG_CMA_AREAS=7
-          CONFIG_COMPACTION=y
           CONFIG_CPUFREQ_DT=y
           CONFIG_CPU_FREQ=y
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
@@ -690,7 +687,6 @@ jobs:
           CONFIG_CPU_THERMAL=y
           CONFIG_DEVFREQ_THERMAL=y
           CONFIG_ENERGY_MODEL=y
-          CONFIG_FAIR_GROUP_SCHED=y
           CONFIG_HAVE_KPROBES=y
           CONFIG_IP6_NF_MATCH_HL=y
           CONFIG_IP6_NF_TARGET_HL=y
@@ -708,17 +704,13 @@ jobs:
           CONFIG_IP_SET_HASH_NETNET=y
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_MAX=256
-          CONFIG_IOSCHED_BFQ=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_LOCALVERSION_AUTO=n
           CONFIG_LTO=y
           CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
-          CONFIG_MQ_IOSCHED_DEADLINE=y
           CONFIG_NET_SCH_CAKE=y
           CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_DEFAULT_FQ_CODEL=y
           CONFIG_NUMA_BALANCING=y
           CONFIG_OPP=y
           CONFIG_PERF_EVENTS=y
@@ -728,10 +720,8 @@ jobs:
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_TCP_CONG_BIC=n
-          CONFIG_TCP_CONG_CUBIC=y
           CONFIG_TCP_CONG_HTCP=n
           CONFIG_TCP_CONG_WESTWOOD=n
-          CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_THERMAL=y
           CONFIG_THERMAL_EMULATION=y
           CONFIG_THERMAL_GOV_FAIR_SHARE=y
@@ -740,8 +730,6 @@ jobs:
           CONFIG_THERMAL_WRITABLE_TRIPS=y
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_TMPFS_XATTR=y
-          CONFIG_TRANSPARENT_HUGEPAGE=y
-          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
           CONFIG_UCLAMP_TASK=y
           CONFIG_UCLAMP_TASK_GROUP=y
           CONFIG_CFI_CLANG=y
@@ -765,11 +753,7 @@ jobs:
           CONFIG_NET_FLOW_LIMIT=y
           CONFIG_TCP_CONG_BBR2=y
           CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_F2FS_FS=y
           CONFIG_F2FS_FS_COMPRESSION=y
-          CONFIG_F2FS_FS_XATTR=y
-          CONFIG_F2FS_FS_POSIX_ACL=y
-          CONFIG_F2FS_FS_SECURITY=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_LOCALVERSION_AUTO=n
@@ -777,7 +761,6 @@ jobs:
           CONFIG_DEBUG_INFO_BTF_MODULES=n
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
-          CONFIG_CCACHE=y
           EOF
           
           # Variant-specific config
@@ -822,6 +805,19 @@ jobs:
           EOF
           fi
           
+          # Variant-specific config
+          case "${{ matrix.variant }}" in
+            "tiann")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              ;;
+            "kowsu")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              ;;
+            "mksu")
+              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
+              ;;
+          esac
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
       - name: Handle ABI File Changes

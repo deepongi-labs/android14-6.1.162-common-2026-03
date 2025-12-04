@@ -834,7 +834,7 @@ jobs:
           
           # Clean kernel build to ensure everything rebuilds
           echo "🧹 Cleaning kernel build..."
-          make -j$(nproc) LLVM_IAS=1 LLVM=1 O=out clean
+          make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean  # ⬅️ Update this line
           
           echo "✅ Ready for fresh build with modified ABI files"
 
@@ -848,29 +848,26 @@ jobs:
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CC="ccache clang"
           export CXX="ccache clang++"
-          export AS="${{ env.ARM64_TOOLCHAIN }}as"
-          export LD="${{ env.ARM64_TOOLCHAIN }}ld"
-          export AR="${{ env.ARM64_TOOLCHAIN }}ar"
-          export NM="${{ env.ARM64_TOOLCHAIN }}nm"
-          export STRIP="${{ env.ARM64_TOOLCHAIN }}strip"
-          export OBJCOPY="${{ env.ARM64_TOOLCHAIN }}objcopy"
-          export OBJDUMP="${{ env.ARM64_TOOLCHAIN }}objdump"
           
           START_TIME=$SECONDS
           
+          # ⬇️ THIS IS WHERE YOU ADD THE CLEAN COMMAND ⬇️
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             echo "🧹 Performing clean build..."
-            make -j$(nproc) O=out clean
+            make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean
           fi
           
           echo "🗿️ Building kernel for ${{ matrix.variant }}..."
           echo "📂 Using CCACHE at: $CCACHE_DIR"
-          echo "🔧 Compiler: Clang"
-          echo "🔧 Assembler/Linker: GCC binutils"
-          echo "🔧 CROSS_COMPILE: ${{ env.ARM64_TOOLCHAIN }}"
+          echo "🔧 Build configuration:"
+          echo "  - ARCH: $ARCH"
+          echo "  - CC: $CC"
+          echo "  - LLVM: 1 (full LLVM toolchain for LTO)"
+          echo "  - LLVM_IAS: 1 (LLVM integrated assembler)"
+          echo "  - LD: ld.lld (LLVM linker)"
           
-          # Build with Clang but GCC binutils
-          make -j$(nproc) CC="ccache clang" O=out 2>&1 | tee build.log
+          # Build with full LLVM toolchain for LTO support
+          make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld O=out CC="$CC" 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           BUILD_MINS=$((BUILD_TIME / 60))

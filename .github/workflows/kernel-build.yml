@@ -844,6 +844,13 @@ jobs:
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CC="ccache clang"
           export CXX="ccache clang++"
+          export AS="${{ env.ARM64_TOOLCHAIN }}as"
+          export LD="${{ env.ARM64_TOOLCHAIN }}ld"
+          export AR="${{ env.ARM64_TOOLCHAIN }}ar"
+          export NM="${{ env.ARM64_TOOLCHAIN }}nm"
+          export STRIP="${{ env.ARM64_TOOLCHAIN }}strip"
+          export OBJCOPY="${{ env.ARM64_TOOLCHAIN }}objcopy"
+          export OBJDUMP="${{ env.ARM64_TOOLCHAIN }}objdump"
           
           START_TIME=$SECONDS
           
@@ -854,10 +861,12 @@ jobs:
           
           echo "🗿️ Building kernel for ${{ matrix.variant }}..."
           echo "📂 Using CCACHE at: $CCACHE_DIR"
-          echo "🔧 Configuration: Clang compiler + LLVM IAS + GCC linker"
+          echo "🔧 Compiler: Clang"
+          echo "🔧 Assembler/Linker: GCC binutils"
+          echo "🔧 CROSS_COMPILE: ${{ env.ARM64_TOOLCHAIN }}"
           
-          # Use Clang compiler, LLVM integrated assembler, but GCC linker
-          make -j$(nproc) CC="ccache clang" LLVM_IAS=1 O=out 2>&1 | tee build.log
+          # Build with Clang but GCC binutils
+          make -j$(nproc) CC="ccache clang" O=out 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           BUILD_MINS=$((BUILD_TIME / 60))
@@ -902,9 +911,13 @@ jobs:
           CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
           CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
           
+          # Calculate total calls
+          CACHE_TOTAL=$((CACHE_HITS + CACHE_MISSES))
+          
           echo "✅ CCache v4.12.1 detected"
           echo "✅ Cache hits: ${CACHE_HITS:-0}"
           echo "✅ Cache misses: ${CACHE_MISSES:-0}"
+          echo "✅ Total calls: ${CACHE_TOTAL:-0}"
           
           if [ -n "$HIT_RATE" ] && [ "$HIT_RATE" != "" ]; then
             echo "✅ Hit rate extracted: $HIT_RATE"
@@ -913,9 +926,8 @@ jobs:
             
             # Calculate manually if needed
             if [ -n "$CACHE_HITS" ] && [ -n "$CACHE_MISSES" ]; then
-              TOTAL=$((CACHE_HITS + CACHE_MISSES))
-              if [ "$TOTAL" -gt 0 ]; then
-                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($CACHE_HITS / $TOTAL) * 100}")
+              if [ "$CACHE_TOTAL" -gt 0 ]; then
+                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($CACHE_HITS / $CACHE_TOTAL) * 100}")
                 echo "✅ Calculated hit rate: $HIT_RATE"
               else
                 HIT_RATE="0%"
@@ -932,13 +944,18 @@ jobs:
           FINAL_CACHE_SIZE=$(echo "$FINAL_CACHE_SIZE" | tr -d '\n' | xargs)
           CACHE_HITS=$(echo "$CACHE_HITS" | tr -d '\n' | xargs)
           CACHE_MISSES=$(echo "$CACHE_MISSES" | tr -d '\n' | xargs)
+          CACHE_TOTAL=$(echo "$CACHE_TOTAL" | tr -d '\n' | xargs)
+          
+          # Format for display in your desired format
+          CCACHE_FORMATTED="${HIT_RATE} (Hits: ${CACHE_HITS}/Misses: ${CACHE_MISSES})"
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 Final Results:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "💾 Cache Size: ${FINAL_CACHE_SIZE:-N/A}"
-          echo "🎯 Hit Rate: $HIT_RATE"
+          echo "🎯 Total Hits: ${CCACHE_FORMATTED}"
           echo "📊 Hit/Miss: ${CACHE_HITS:-0}/${CACHE_MISSES:-0}"
+          echo "📈 Total Calls: ${CACHE_TOTAL:-0}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           # Export to environment - ensure clean values
@@ -946,6 +963,8 @@ jobs:
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
           echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
           echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
+          echo "CCACHE_TOTAL=${CACHE_TOTAL:-0}" >> $GITHUB_ENV
+          echo "CCACHE_FORMATTED=${CCACHE_FORMATTED}" >> $GITHUB_ENV
 
       - name: Package Kernel
         run: |
@@ -1105,7 +1124,11 @@ jobs:
           find . -type f -exec mv {} . \; 2>/dev/null || true
           find . -type d -empty -delete
           
+          echo "📦 Release assets:"
           ls -lh
+          
+          # Remove any old RELEASE_NOTES.md file (we'll generate fresh in the release step)
+          rm -f RELEASE_NOTES.md 2>/dev/null || true
           
           # Count variants built
           VARIANT_COUNT=$(ls -1 CHANGELOG-*.md 2>/dev/null | wc -l)
@@ -1122,20 +1145,13 @@ jobs:
           [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
           VARIANTS_BUILT=$(echo "$VARIANTS_BUILT" | xargs)
           echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
-          
-          # Get CCache hit rate from any build log
-          CCACHE_HIT_RATE="N/A"
-          for log in build-*.log; do
-            if [ -f "$log" ]; then
-              CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
-              [ "$CCACHE_HIT_RATE" != "N/A" ] && break
-            fi
-          done
-          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
 
-      - name: Generate Enhanced Release Notes with Actual Data
+      - name: Create Release with Enhanced Notes
+        id: create_release
         run: |
           cd release-assets
+          
+          echo "📝 Generating enhanced release notes for GitHub Releases page..."
           
           # Get actual file data from job outputs
           TIANN_SIZE="${{ needs.build.outputs.tiann_size || 'Unknown' }}"
@@ -1159,64 +1175,102 @@ jobs:
           MKSU_KERNEL_VERSION="${{ needs.build.outputs.mksu_kernel_version || '6.1.x' }}"
           MKSU_ZIP="${{ needs.build.outputs.mksu_zip || '' }}"
           
-          # Find actual ZIP files if not from outputs
+          # Find actual ZIP files
           [ -z "$TIANN_ZIP" ] && TIANN_ZIP=$(ls AK3-*-TIANN-*.zip 2>/dev/null | head -1 || echo "")
           [ -z "$KOWSU_ZIP" ] && KOWSU_ZIP=$(ls AK3-*-KowSU-*.zip 2>/dev/null | head -1 || echo "")
           [ -z "$MKSU_ZIP" ] && MKSU_ZIP=$(ls AK3-*-MKSU-*.zip 2>/dev/null | head -1 || echo "")
           
-          # Use common kernel version if variants have different
+          # Use common kernel version
           COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
           [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
           
-          # Start building the release notes
-          RELEASE_NOTES="**Build Info:** #${{ github.run_number }} • ${{ env.BUILD_DATE }}  
-          **Build Time:** ${{ env.BUILD_DURATION }} • **CCache:** ${{ env.CCACHE_HIT_RATE || 'N/A' }} hit rate  
-          **Kernel Version:** $COMMON_KERNEL_VERSION • **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
-          **Commit:** \`${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}\`
+          # Extract CCache stats from build logs
+          CCACHE_FORMATTED="N/A"
+          for log in build-*.log; do
+            if [ -f "$log" ]; then
+              # Look for the new formatted CCache line
+              CCACHE_LINE=$(grep "🎯 Total Hits:" "$log" | tail -1)
+              if [ -n "$CCACHE_LINE" ]; then
+                # Extract: "🎯 Total Hits: 89.47% (Hits: 432500/Misses: 481000)"
+                CCACHE_FORMATTED=$(echo "$CCACHE_LINE" | sed 's/.*🎯 Total Hits: //' | xargs)
+                break
+              fi
+              
+              # Fallback: Try old format
+              if [ -z "$CCACHE_FORMATTED" ] || [ "$CCACHE_FORMATTED" = "" ]; then
+                HIT_RATE_LINE=$(grep "🎯 Hit Rate:" "$log" | tail -1)
+                HIT_MISS_LINE=$(grep "📊 Hit/Miss:" "$log" | tail -1)
+                
+                if [ -n "$HIT_RATE_LINE" ] && [ -n "$HIT_MISS_LINE" ]; then
+                  HIT_RATE=$(echo "$HIT_RATE_LINE" | cut -d':' -f2 | xargs)
+                  HIT_MISS=$(echo "$HIT_MISS_LINE" | cut -d':' -f2 | xargs)
+                  HITS=$(echo "$HIT_MISS" | cut -d'/' -f1 | xargs)
+                  MISSES=$(echo "$HIT_MISS" | cut -d'/' -f2 | xargs)
+                  CCACHE_FORMATTED="${HIT_RATE} (Hits: ${HITS}/Misses: ${MISSES})"
+                  break
+                fi
+              fi
+            fi
+          done
+          
+          # Get last commit information
+          LAST_COMMIT_HASH="${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}"
+          LAST_COMMIT_MESSAGE="${{ env.WORKFLOW_COMMIT_MSG || 'No commit message' }}"
+          
+          # Build the release notes
+          RELEASE_NOTES="# 🚀 Android 16 Kernel Build #${{ github.run_number }}
+          
+          **Build Date:** ${{ env.BUILD_DATE }}  
+          **Build Time:** ${{ env.BUILD_DURATION }}  
+          **CCache:** $CCACHE_FORMATTED  
+          **Kernel Version:** $COMMON_KERNEL_VERSION  
+          **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
+          **Last Commit:** \`$LAST_COMMIT_HASH\` - \"$LAST_COMMIT_MESSAGE\"
           
           ---
           
-          ## ⚡ Quick Download
+          ## 📦 Available Builds
           
-          | Variant | KSU Version | File | Size |
-          |---------|-------------|------|------|"
+          | Variant | KSU Version | File | Size | Checksums |
+          |---------|-------------|------|------|-----------|"
           
           # Add tiann row if built
           if [ -n "$TIANN_ZIP" ]; then
             RELEASE_NOTES="${RELEASE_NOTES}
-            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [\`$TIANN_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$TIANN_ZIP)<br>\`md5sum: $TIANN_MD5\` | $TIANN_SIZE |"
+            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [$TIANN_ZIP]($TIANN_ZIP) | $TIANN_SIZE | **MD5:** $TIANN_MD5<br>**SHA256:** $TIANN_SHA256 |"
           fi
           
           # Add kowsu row if built
           if [ -n "$KOWSU_ZIP" ]; then
             RELEASE_NOTES="${RELEASE_NOTES}
-            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [\`$KOWSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$KOWSU_ZIP)<br>\`md5sum: $KOWSU_MD5\` | $KOWSU_SIZE |"
+            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [$KOWSU_ZIP]($KOWSU_ZIP) | $KOWSU_SIZE | **MD5:** $KOWSU_MD5<br>**SHA256:** $KOWSU_SHA256 |"
           fi
           
           # Add mksu row if built
           if [ -n "$MKSU_ZIP" ]; then
             RELEASE_NOTES="${RELEASE_NOTES}
-            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [\`$MKSU_ZIP\`](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/$MKSU_ZIP)<br>\`md5sum: $MKSU_MD5\` | $MKSU_SIZE |"
+            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [$MKSU_ZIP]($MKSU_ZIP) | $MKSU_SIZE | **MD5:** $MKSU_MD5<br>**SHA256:** $MKSU_SHA256 |"
           fi
           
-          # Get recent commits (handle git command failure)
-          RECENT_COMMITS=$(git log --oneline -10 2>/dev/null || echo "No changes found")
-          
-          # Continue building release notes
           RELEASE_NOTES="${RELEASE_NOTES}
           
-          **All variants work on:** Pixel 8, Pixel 8a, Pixel 8 Pro
+          ---
           
-          ## 🚀 Install
+          ## 📱 Supported Devices
+          - Pixel 8
+          - Pixel 8a  
+          - Pixel 8 Pro
+          
+          ## 🚀 Installation Methods
           
           ### **Method 1: Kernel Flasher (Recommended)**
-          Download [Kernel Flasher v1.6.0 by fatalcoder524](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) and flash the AK3 zip directly from the app.
+          Download [Kernel Flasher v1.6.0](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) and flash the AK3 zip directly.
           
           ### **Method 2: Manual Flash (Magiskboot)**
-          1. Extract the AK3 zip and get the \`Image\` (kernel) file
-          2. Extract \`boot.img\` from Pixel 8 factory images zip
-          3. Use magiskboot to repack:
           \`\`\`bash
+          # Extract kernel from AK3 zip
+          unzip AK3-*.zip Image
+          
           # Unpack stock boot image
           magiskboot unpack boot.img
           
@@ -1230,30 +1284,26 @@ jobs:
           fastboot flash boot new-boot.img
           \`\`\`
           
-          ## 📝 What's New (Since Build #$(({{ github.run_number }} - 1)))
-          
-          \`\`\`
-          $RECENT_COMMITS
-          \`\`\`
-          
           ---
           
-          **Support:** [GitHub Issues](https://github.com/${{ github.repository }}/issues) • [Telegram](https://t.me/deepongi_labs)"
+          **📖 Changelogs:** [View detailed changelogs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **🐛 Report Issues:** [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues)
+          **📢 Telegram:** [@deepongi_labs](https://t.me/deepongi_labs)
           
-          # Write to file
-          echo "$RELEASE_NOTES" > RELEASE_NOTES.md
+          *Built with ❤️ by GitHub Actions*"
           
-          echo "✅ Release notes generated with actual file data"
-
-      - name: Create Unified Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: "Android 16 Kernel Build #${{ github.run_number }}"
-          body_path: release-assets/RELEASE_NOTES.md
-          files: release-assets/*
-          draft: false
-          prerelease: false
+          echo "✅ Generated release notes with CCache: $CCACHE_FORMATTED"
+          
+          # Create the release using GitHub CLI
+          gh release create "build-${{ github.run_number }}" \
+            --title "Android 16 Kernel Build #${{ github.run_number }}" \
+            --notes "$RELEASE_NOTES" \
+            --repo "${{ github.repository }}" \
+            --draft=false \
+            --prerelease=false \
+            ./*
+          
+          echo "✅ Release created: build-${{ github.run_number }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -1092,75 +1092,121 @@ jobs:
           COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
           [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
           
-          # Extract CCache stats from build logs
-          CCACHE_FORMATTED="N/A"
+          # Extract CCache stats from build logs - using same method as Telegram
+          CCACHE_HIT_RATE="N/A"
+          CCACHE_HITS="0"
+          CCACHE_MISSES="0"
+          CCACHE_SIZE="N/A"
+          
           for log in build-*.log; do
             if [ -f "$log" ]; then
-              # Look for the new formatted CCache line
-              CCACHE_LINE=$(grep "🎯 Total Hits:" "$log" | tail -1)
-              if [ -n "$CCACHE_LINE" ]; then
-                # Extract: "🎯 Total Hits: 89.47% (Hits: 432500/Misses: 481000)"
-                CCACHE_FORMATTED=$(echo "$CCACHE_LINE" | sed 's/.*🎯 Total Hits: //' | xargs)
-                break
-              fi
+              # Extract individual components like Telegram does
+              CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
+              CCACHE_HITS=$(grep "✅ Cache hits:" "$log" | tail -1 | awk '{print $4}' | xargs || echo "0")
+              CCACHE_MISSES=$(grep "✅ Cache misses:" "$log" | tail -1 | awk '{print $4}' | xargs || echo "0")
+              CCACHE_SIZE=$(grep "💾 Cache Size:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
               
-              # Fallback: Try old format
-              if [ -z "$CCACHE_FORMATTED" ] || [ "$CCACHE_FORMATTED" = "" ]; then
-                HIT_RATE_LINE=$(grep "🎯 Hit Rate:" "$log" | tail -1)
-                HIT_MISS_LINE=$(grep "📊 Hit/Miss:" "$log" | tail -1)
-                
-                if [ -n "$HIT_RATE_LINE" ] && [ -n "$HIT_MISS_LINE" ]; then
-                  HIT_RATE=$(echo "$HIT_RATE_LINE" | cut -d':' -f2 | xargs)
-                  HIT_MISS=$(echo "$HIT_MISS_LINE" | cut -d':' -f2 | xargs)
-                  HITS=$(echo "$HIT_MISS" | cut -d'/' -f1 | xargs)
-                  MISSES=$(echo "$HIT_MISS" | cut -d'/' -f2 | xargs)
-                  CCACHE_FORMATTED="${HIT_RATE} (Hits: ${HITS}/Misses: ${MISSES})"
-                  break
-                fi
+              # Break if we found data
+              if [ "$CCACHE_HIT_RATE" != "N/A" ] || [ "$CCACHE_HITS" != "0" ]; then
+                break
               fi
             fi
           done
+          
+          # Format CCache details like Telegram does
+          if [ "$CCACHE_HITS" != "0" ] || [ "$CCACHE_MISSES" != "0" ]; then
+            CCACHE_FORMATTED="${CCACHE_HIT_RATE} (${CCACHE_HITS} hits, ${CCACHE_MISSES} misses)"
+          else
+            CCACHE_FORMATTED="${CCACHE_HIT_RATE}"
+          fi
           
           # Get last commit information
           LAST_COMMIT_HASH="${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}"
           LAST_COMMIT_MESSAGE="${{ env.WORKFLOW_COMMIT_MSG || 'No commit message' }}"
           
-          # Build the release notes
-          RELEASE_NOTES="# 🚀 Android 16 Kernel Build #${{ github.run_number }}
+          # Extract variant commit information from changelogs
+          echo "📋 Extracting variant commit history from changelogs..."
           
-          **Build Date:** ${{ env.BUILD_DATE }}  
+          VARIANT_COMMITS=""
+          
+          # Function to extract commits from changelog
+          extract_variant_commits() {
+            local variant=$1
+            local changelog="CHANGELOG-${variant}.md"
+            
+            if [ ! -f "$changelog" ]; then
+              return
+            fi
+            
+            # Check if this is an initial build or has changes
+            if grep -q "## 🎉 Initial Build" "$changelog"; then
+              # Initial build - show last 5 commits
+              COMMITS=$(grep -A 50 "### 🔧 KernelSU - ${variant}" "$changelog" | grep "^- \*\*" | head -5)
+              if [ -n "$COMMITS" ]; then
+                VARIANT_COMMITS="${VARIANT_COMMITS}
+          
+          ### ${variant} (tiann/KernelSU)
+          *Initial build - showing last 5 commits:*
+          ${COMMITS}"
+              fi
+            elif grep -q "## 📄 Changes Since Last Build" "$changelog"; then
+              # Has changes - extract the commit details
+              CHANGE_COUNT=$(grep "**Changes:**" "$changelog" | grep -oE '[0-9]+ commit' | grep -oE '[0-9]+')
+              
+              if [ -n "$CHANGE_COUNT" ] && [ "$CHANGE_COUNT" != "0" ]; then
+                # Extract commits between the KernelSU section and next ###
+                COMMITS=$(sed -n '/### 🔧 KernelSU/,/^### /p' "$changelog" | grep -A 200 "#### " | grep -B 1 "^----$" | grep -v "^----$" | head -20)
+                
+                if [ -n "$COMMITS" ]; then
+                  # Format variant name properly
+                  VARIANT_NAME=""
+                  case "$variant" in
+                    "tiann") VARIANT_NAME="tiann (Official KernelSU)" ;;
+                    "kowsu") VARIANT_NAME="kowsu (KOWX712/KernelSU)" ;;
+                    "mksu") VARIANT_NAME="mksu (5ec1cff/KernelSU)" ;;
+                  esac
+                  
+                  VARIANT_COMMITS="${VARIANT_COMMITS}
+          
+          ### ${VARIANT_NAME}
+          *${CHANGE_COUNT} commit(s) since last build:*
+          
+          ${COMMITS}"
+                fi
+              else
+                # No changes
+                VARIANT_NAME=""
+                case "$variant" in
+                  "tiann") VARIANT_NAME="tiann (Official KernelSU)" ;;
+                  "kowsu") VARIANT_NAME="kowsu (KOWX712/KernelSU)" ;;
+                  "mksu") VARIANT_NAME="mksu (5ec1cff/KernelSU)" ;;
+                esac
+                
+                VARIANT_COMMITS="${VARIANT_COMMITS}
+          
+          ### ${VARIANT_NAME}
+          *No changes since last build*"
+              fi
+            fi
+          }
+          
+          # Extract commits for each built variant
+          [ -f "CHANGELOG-tiann.md" ] && extract_variant_commits "tiann"
+          [ -f "CHANGELOG-kowsu.md" ] && extract_variant_commits "kowsu"
+          [ -f "CHANGELOG-mksu.md" ] && extract_variant_commits "mksu"
+          
+          # Build the release notes (no duplicate title, no build table)
+          RELEASE_NOTES="**Build Date:** ${{ env.BUILD_DATE }}  
           **Build Time:** ${{ env.BUILD_DURATION }}  
           **CCache:** $CCACHE_FORMATTED  
+          **Cache Size:** $CCACHE_SIZE GB  
           **Kernel Version:** $COMMON_KERNEL_VERSION  
           **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
           **Last Commit:** \`$LAST_COMMIT_HASH\` - \"$LAST_COMMIT_MESSAGE\"
           
           ---
           
-          ## 📦 Available Builds
-          
-          | Variant | KSU Version | File | Size | Checksums |
-          |---------|-------------|------|------|-----------|"
-          
-          # Add tiann row if built
-          if [ -n "$TIANN_ZIP" ]; then
-            RELEASE_NOTES="${RELEASE_NOTES}
-            | **tiann** ([KernelSU](https://github.com/tiann/KernelSU)) | $TIANN_KSU_VERSION | [$TIANN_ZIP]($TIANN_ZIP) | $TIANN_SIZE | **MD5:** $TIANN_MD5<br>**SHA256:** $TIANN_SHA256 |"
-          fi
-          
-          # Add kowsu row if built
-          if [ -n "$KOWSU_ZIP" ]; then
-            RELEASE_NOTES="${RELEASE_NOTES}
-            | **KOWX712** ([KowSU](https://github.com/KOWX712/KernelSU)) | $KOWSU_KSU_VERSION | [$KOWSU_ZIP]($KOWSU_ZIP) | $KOWSU_SIZE | **MD5:** $KOWSU_MD5<br>**SHA256:** $KOWSU_SHA256 |"
-          fi
-          
-          # Add mksu row if built
-          if [ -n "$MKSU_ZIP" ]; then
-            RELEASE_NOTES="${RELEASE_NOTES}
-            | **5ec1cff** ([MKSU](https://github.com/5ec1cff/KernelSU)) | $MKSU_KSU_VERSION | [$MKSU_ZIP]($MKSU_ZIP) | $MKSU_SIZE | **MD5:** $MKSU_MD5<br>**SHA256:** $MKSU_SHA256 |"
-          fi
-          
-          RELEASE_NOTES="${RELEASE_NOTES}
+          ## 📝 Variant Updates${VARIANT_COMMITS}
           
           ---
           
@@ -1201,6 +1247,15 @@ jobs:
           *Built with ❤️ by GitHub Actions*"
           
           echo "✅ Generated release notes with CCache: $CCACHE_FORMATTED"
+          
+          # Prepare files for release (exclude changelogs and build logs)
+          echo "📦 Preparing release assets..."
+          
+          # Remove files we don't want in the release
+          rm -f CHANGELOG-*.md build-*.log
+          
+          echo "📋 Files to be uploaded:"
+          ls -lh
           
           # Create the release using GitHub CLI
           gh release create "build-${{ github.run_number }}" \

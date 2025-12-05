@@ -672,6 +672,7 @@ jobs:
           # Filesystem
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_OVERLAY_FS=y
 
           # Compilation
           CONFIG_LTO=y

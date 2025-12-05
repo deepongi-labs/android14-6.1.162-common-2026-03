@@ -31,7 +31,7 @@ index c04654ce..25eea2e3 100644
      struct ksu_get_info_cmd cmd = {.version = KERNEL_SU_VERSION, .flags = 0};
  
 -#ifdef MODULE
-+#if defined(MODULE) || defined(CONFIG_KSU_SUSFS)
++#if defined(MODULE) || defined(CONFIG_KSU)
      cmd.flags |= 0x1;
  #endif
  

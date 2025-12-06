@@ -1527,7 +1527,7 @@ jobs:
         run: |
           CURRENT_TIME=$(date +"%H:%M")
           
-          # Build KSU info from actual versions - CORRECTED with proper newlines
+          # Build KSU info from actual versions - CORRECTED with proper alignment
           KSU_INFO=""
           if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
               KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
@@ -1535,7 +1535,7 @@ jobs:
           if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
             if [ -n "$KSU_INFO" ]; then
               KSU_INFO="$KSU_INFO
-              ✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+          ✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
             else
               KSU_INFO="✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
             fi
@@ -1543,7 +1543,7 @@ jobs:
           if [ -n "${{ env.MKSU_KSU_VERSION }}" ] && [ "${{ env.MKSU_KSU_VERSION }}" != "Unknown" ]; then
             if [ -n "$KSU_INFO" ]; then
               KSU_INFO="$KSU_INFO
-              ✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+          ✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
             else
               KSU_INFO="✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
             fi

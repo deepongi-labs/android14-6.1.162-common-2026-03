@@ -1,6 +1,6 @@
-From 9c56a33d250ded7886bfddc64b9c70ca144125ab Mon Sep 17 00:00:00 2001
+From 5bae11b5ed0a58784b961a674c149c7c295ea856 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Sat, 6 Dec 2025 00:53:00 +0000
+Date: Sat, 6 Dec 2025 17:04:56 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
@@ -14,7 +14,7 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/ksu.c             |  18 ++++-
  kernel/ksud.c            |  58 +++++++++++++++
  kernel/ksud.h            |  19 +++++
- kernel/manager.h         |  14 ++++
+ kernel/manager.h         |  16 ++++-
  kernel/selinux/rules.c   |   9 +++
  kernel/selinux/selinux.c |  91 ++++++++++++++++++++++++
  kernel/selinux/selinux.h |  13 ++++
@@ -22,7 +22,7 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/sucompat.c        | 144 +++++++++++++++++++++++++++++++++++++
  kernel/sucompat.h        |  10 ++-
  kernel/supercalls.c      | 148 ++++++++++++++++++++++++++++++++++++---
- 18 files changed, 746 insertions(+), 16 deletions(-)
+ 18 files changed, 747 insertions(+), 17 deletions(-)
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
 index d93e5cc6..18bb408b 100644
@@ -162,7 +162,7 @@ index 7752836b..7f0b2f2d 100644
 +endif
  # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
-index 4fb54870..71796568 100644
+index 5f4e43cf..7d970d47 100644
 --- a/kernel/allowlist.c
 +++ b/kernel/allowlist.c
 @@ -17,7 +17,9 @@
@@ -187,10 +187,10 @@ index 4fb54870..71796568 100644
  
      return result;
 diff --git a/kernel/apk_sign.c b/kernel/apk_sign.c
-index c7e23089..6d0bfc84 100644
+index 326466f2..3dc5f35f 100644
 --- a/kernel/apk_sign.c
 +++ b/kernel/apk_sign.c
-@@ -314,5 +314,10 @@ module_param_cb(ksu_debug_manager_uid, &expected_size_ops,
+@@ -314,5 +314,10 @@ module_param_cb(ksu_debug_manager_appid, &expected_size_ops,
  
  bool is_manager_apk(char *path)
  {
@@ -533,44 +533,51 @@ index d789d4de..14a43592 100644
 +
  #endif
 diff --git a/kernel/manager.h b/kernel/manager.h
-index 6e7002b0..f408edc8 100644
+index ac81c133..e9675367 100644
 --- a/kernel/manager.h
 +++ b/kernel/manager.h
-@@ -13,20 +13,34 @@ static inline bool ksu_is_manager_uid_valid()
-     return ksu_manager_uid != KSU_INVALID_UID;
+@@ -14,20 +14,34 @@ static inline bool ksu_is_manager_appid_valid()
+     return ksu_manager_appid != KSU_INVALID_APPID;
  }
  
 +#ifndef CONFIG_KSU_SUSFS
  static inline bool is_manager()
  {
-     return unlikely(ksu_manager_uid == current_uid().val);
+     return unlikely(ksu_manager_appid == current_uid().val % PER_USER_RANGE);
  }
 +#else
 +static inline bool is_manager()
 +{
-+    return unlikely(ksu_manager_uid == current_uid().val % 100000);
++    return unlikely(ksu_manager_appid == current_uid().val % 100000);
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
- static inline uid_t ksu_get_manager_uid()
+ static inline uid_t ksu_get_manager_appid()
  {
-     return ksu_manager_uid;
+     return ksu_manager_appid;
  }
  
 +#ifndef CONFIG_KSU_SUSFS
- static inline void ksu_set_manager_uid(uid_t uid)
+ static inline void ksu_set_manager_appid(uid_t appid)
  {
-     ksu_manager_uid = uid;
+     ksu_manager_appid = appid;
  }
 +#else
-+static inline void ksu_set_manager_uid(uid_t uid)
++static inline void ksu_set_manager_appid(uid_t appid)
 +{
-+    ksu_manager_uid = uid % 100000;
++    ksu_manager_appid = appid % 100000;
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
  static inline void ksu_invalidate_manager_uid()
  {
+@@ -35,4 +49,4 @@ static inline void ksu_invalidate_manager_uid()
+ }
+ 
+ int ksu_observer_init(void);
+-#endif
++#endif
+\ No newline at end of file
 diff --git a/kernel/selinux/rules.c b/kernel/selinux/rules.c
 index 99d8325e..9517f2ae 100644
 --- a/kernel/selinux/rules.c
@@ -713,7 +720,7 @@ index 400e9877..91796b55 100644
 +
  #endif
 diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
-index 016ac058..15e6f912 100644
+index 779ebfad..c03a99ec 100644
 --- a/kernel/setuid_hook.c
 +++ b/kernel/setuid_hook.c
 @@ -27,6 +27,9 @@
@@ -768,7 +775,7 @@ index 016ac058..15e6f912 100644
  int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  {
      // we rely on the fact that zygote always call setresuid(3) with same uids
-@@ -135,6 +163,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
+@@ -130,6 +158,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  
      return 0;
  }
@@ -1056,7 +1063,7 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index 348a0285..a7a491e2 100644
+index e1bcfe98..bd625154 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
 @@ -12,6 +12,10 @@
@@ -1163,7 +1170,7 @@ index 348a0285..a7a491e2 100644
          break;
      }
      default: {
-@@ -651,12 +687,11 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
+@@ -704,12 +740,11 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
      kfree(tw);
  }
  
@@ -1179,9 +1186,9 @@ index 348a0285..a7a491e2 100644
  
      pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
  
-@@ -696,15 +731,107 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
+@@ -749,15 +784,107 @@ static int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void
  
-         if (cmd == ksu_get_manager_uid()) {
+         if (cmd == ksu_get_manager_appid()) {
              if (copy_to_user((void __user *)*arg, &reply, sizeof(reply)))
 -            	pr_info("sys_reboot: reply fail\n");
 +                pr_info("sys_reboot: reply fail\n");
@@ -1288,7 +1295,7 @@ index 348a0285..a7a491e2 100644
  static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
  {
      struct pt_regs *real_regs = PT_REAL_REGS(regs);
-@@ -714,14 +841,13 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
+@@ -767,14 +894,13 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
      void __user **arg = (void __user **)&PT_REGS_SYSCALL_PARM4(real_regs);
  
      return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
@@ -1304,7 +1311,7 @@ index 348a0285..a7a491e2 100644
  
  void ksu_supercalls_init(void)
  {
-@@ -732,16 +858,22 @@ void ksu_supercalls_init(void)
+@@ -785,16 +911,22 @@ void ksu_supercalls_init(void)
          pr_info("  %-18s = 0x%08x\n", ksu_ioctl_handlers[i].name, ksu_ioctl_handlers[i].cmd);
      }
  
@@ -1327,7 +1334,7 @@ index 348a0285..a7a491e2 100644
  }
  
  // IOCTL dispatcher
-@@ -814,4 +946,4 @@ int ksu_install_fd(void)
+@@ -867,4 +999,4 @@ int ksu_install_fd(void)
      pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
  
      return fd;

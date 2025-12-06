@@ -136,6 +136,16 @@ jobs:
       
       duration: ${{ steps.build-duration.outputs.duration || env.BUILD_TIME || 'Unknown' }}
 
+      # CCache stats (FIX: from job outputs, not logs)
+      ccache_hit_rate: ${{ steps.export-build-info.outputs.ccache_hit_rate || '' }}
+      ccache_hits: ${{ steps.export-build-info.outputs.ccache_hits || '' }}
+      ccache_misses: ${{ steps.export-build-info.outputs.ccache_misses || '' }}
+      ccache_size: ${{ steps.export-build-info.outputs.ccache_size || '' }}
+      
+      # Commit info (FIX: from job outputs, not hardcoded)
+      workflow_commit_hash: ${{ steps.export-build-info.outputs.commit_hash || '' }}
+      workflow_commit_message: ${{ steps.export-build-info.outputs.commit_message || '' }}
+
     steps:
       - name: Checkout with Submodules
         uses: actions/checkout@v4
@@ -846,6 +856,21 @@ jobs:
               echo "❌ Could not extract hit/miss counts"
             fi
           fi
+
+      - name: Export Build Information
+        id: export-build-info
+        run: |
+          # Export CCache stats from environment
+          echo "ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}" >> $GITHUB_OUTPUT
+          echo "ccache_hits=${{ env.CCACHE_HITS }}" >> $GITHUB_OUTPUT
+          echo "ccache_misses=${{ env.CCACHE_MISSES }}" >> $GITHUB_OUTPUT
+          echo "ccache_size=${{ env.FINAL_CACHE_SIZE }}" >> $GITHUB_OUTPUT
+          
+          # Export commit info from environment
+          echo "commit_hash=${{ env.WORKFLOW_COMMIT_SHORT }}" >> $GITHUB_OUTPUT
+          echo "commit_message=${{ env.WORKFLOW_COMMIT_MSG }}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Build information exported to job outputs"
           
           # Clean up the HIT_RATE - remove any newlines or extra whitespace
           HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n' | xargs)
@@ -860,14 +885,16 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📊 Final Results:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "💾 Cache Size: ${FINAL_CACHE_SIZE:-N/A}"
-          echo "🎯 Total Hits: ${CCACHE_FORMATTED}"
-          echo "📊 Hit/Miss: ${CACHE_HITS:-0}/${CACHE_MISSES:-0}"
-          echo "📈 Total Calls: ${CACHE_TOTAL:-0}"
+          echo "💾 Cache Size: $FINAL_CACHE_SIZE"
+          echo "🎯 Hit Rate: $HIT_RATE"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Export to environment - ensure clean values
-          echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
+          # Get hits and misses for export (FIX)
+          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -m1 "Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
+          
+          # Export to environment
+          echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
           echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
           echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
           echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
@@ -1092,26 +1119,17 @@ jobs:
           COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
           [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
           
-          # Extract CCache stats from build logs - using same method as Telegram
-          CCACHE_HIT_RATE="N/A"
-          CCACHE_HITS="0"
-          CCACHE_MISSES="0"
-          CCACHE_SIZE="N/A"
+          # Get CCache stats from build job outputs (FIX)
+          CCACHE_HIT_RATE="${{ needs.build.outputs.ccache_hit_rate }}"
+          CCACHE_HITS="${{ needs.build.outputs.ccache_hits }}"
+          CCACHE_MISSES="${{ needs.build.outputs.ccache_misses }}"
+          CACHE_SIZE="${{ needs.build.outputs.ccache_size }}"
           
-          for log in build-*.log; do
-            if [ -f "$log" ]; then
-              # Extract individual components like Telegram does
-              CCACHE_HIT_RATE=$(grep "🎯 Hit Rate:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
-              CCACHE_HITS=$(grep "✅ Cache hits:" "$log" | tail -1 | awk '{print $4}' | xargs || echo "0")
-              CCACHE_MISSES=$(grep "✅ Cache misses:" "$log" | tail -1 | awk '{print $4}' | xargs || echo "0")
-              CCACHE_SIZE=$(grep "💾 Cache Size:" "$log" | tail -1 | cut -d':' -f2 | xargs || echo "N/A")
-              
-              # Break if we found data
-              if [ "$CCACHE_HIT_RATE" != "N/A" ] || [ "$CCACHE_HITS" != "0" ]; then
-                break
-              fi
-            fi
-          done
+          # If empty, set to N/A
+          CCACHE_HIT_RATE="${CCACHE_HIT_RATE:-N/A}"
+          CCACHE_HITS="${CCACHE_HITS:-0}"
+          CCACHE_MISSES="${CCACHE_MISSES:-0}"
+          CACHE_SIZE="${CACHE_SIZE:-N/A}"
           
           # Format CCache details like Telegram does
           if [ "$CCACHE_HITS" != "0" ] || [ "$CCACHE_MISSES" != "0" ]; then
@@ -1120,9 +1138,13 @@ jobs:
             CCACHE_FORMATTED="${CCACHE_HIT_RATE}"
           fi
           
-          # Get last commit information
-          LAST_COMMIT_HASH="${{ env.WORKFLOW_COMMIT_SHORT || 'unknown' }}"
-          LAST_COMMIT_MESSAGE="${{ env.WORKFLOW_COMMIT_MSG || 'No commit message' }}"
+          # Get commit information from build job outputs (FIX)
+          LAST_COMMIT_HASH="${{ needs.build.outputs.workflow_commit_hash }}"
+          LAST_COMMIT_MESSAGE="${{ needs.build.outputs.workflow_commit_message }}"
+          
+          # If empty, set defaults
+          LAST_COMMIT_HASH="${LAST_COMMIT_HASH:-unknown}"
+          LAST_COMMIT_MESSAGE="${LAST_COMMIT_MESSAGE:-No commit message}"
           
           # Extract variant commit information from changelogs
           echo "📋 Extracting variant commit history from changelogs..."

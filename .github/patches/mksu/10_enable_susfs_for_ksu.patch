@@ -1,6 +1,6 @@
-From f319c8c81cb73130af85abacffe8d43ff826854b Mon Sep 17 00:00:00 2001
+From cfbcbd92468d9eff2f51ca623c90a333408589f0 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Sat, 6 Dec 2025 00:10:29 +0000
+Date: Sat, 6 Dec 2025 22:23:50 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
 
 ---
@@ -10,19 +10,21 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/allowlist.c       |   4 +
  kernel/apk_sign.c        |   5 +
  kernel/app_profile.c     | 206 ++++++++++++++++++++-------------------
+ kernel/kernel            |   1 +
  kernel/kernel_umount.c   |   3 +
  kernel/ksu.c             |  18 +++-
  kernel/ksud.c            |  58 +++++++++++
  kernel/ksud.h            |  19 ++++
- kernel/manager.h         |  14 +++
+ kernel/manager.h         |  16 ++-
  kernel/selinux/rules.c   |   9 ++
  kernel/selinux/selinux.c |  91 +++++++++++++++++
  kernel/selinux/selinux.h |  13 +++
- kernel/setuid_hook.c     | 116 ++++++++++++++++++++++
+ kernel/setuid_hook.c     | 118 +++++++++++++++++++++-
  kernel/sucompat.c        | 144 +++++++++++++++++++++++++++
  kernel/sucompat.h        |  10 +-
- kernel/supercalls.c      | 150 ++++++++++++++++++++++++++++
- 18 files changed, 854 insertions(+), 107 deletions(-)
+ kernel/supercalls.c      | 152 ++++++++++++++++++++++++++++-
+ 19 files changed, 858 insertions(+), 110 deletions(-)
+ create mode 120000 kernel/kernel
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
 index 94bfdb90..bd5e85d1 100644
@@ -162,7 +164,7 @@ index 7752836b..7f0b2f2d 100644
 +endif
  # Keep a new line here!! Because someone may append config
 diff --git a/kernel/allowlist.c b/kernel/allowlist.c
-index 4fb54870..71796568 100644
+index 5f4e43cf..7d970d47 100644
 --- a/kernel/allowlist.c
 +++ b/kernel/allowlist.c
 @@ -17,7 +17,9 @@
@@ -187,10 +189,10 @@ index 4fb54870..71796568 100644
  
      return result;
 diff --git a/kernel/apk_sign.c b/kernel/apk_sign.c
-index c7e23089..6d0bfc84 100644
+index 326466f2..3dc5f35f 100644
 --- a/kernel/apk_sign.c
 +++ b/kernel/apk_sign.c
-@@ -314,5 +314,10 @@ module_param_cb(ksu_debug_manager_uid, &expected_size_ops,
+@@ -314,5 +314,10 @@ module_param_cb(ksu_debug_manager_appid, &expected_size_ops,
  
  bool is_manager_apk(char *path)
  {
@@ -440,6 +442,14 @@ index 324147bc..4784346e 100644
  }
  
  void escape_to_root_for_init(void) {
+diff --git a/kernel/kernel b/kernel/kernel
+new file mode 120000
+index 00000000..9e51d0d6
+--- /dev/null
++++ b/kernel/kernel
+@@ -0,0 +1 @@
++../KernelSU/kernel
+\ No newline at end of file
 diff --git a/kernel/kernel_umount.c b/kernel/kernel_umount.c
 index a58d2f75..f6fc3cc8 100644
 --- a/kernel/kernel_umount.c
@@ -729,44 +739,51 @@ index d789d4de..14a43592 100644
 +
  #endif
 diff --git a/kernel/manager.h b/kernel/manager.h
-index 6e7002b0..f408edc8 100644
+index ac81c133..e9675367 100644
 --- a/kernel/manager.h
 +++ b/kernel/manager.h
-@@ -13,20 +13,34 @@ static inline bool ksu_is_manager_uid_valid()
-     return ksu_manager_uid != KSU_INVALID_UID;
+@@ -14,20 +14,34 @@ static inline bool ksu_is_manager_appid_valid()
+     return ksu_manager_appid != KSU_INVALID_APPID;
  }
  
 +#ifndef CONFIG_KSU_SUSFS
  static inline bool is_manager()
  {
-     return unlikely(ksu_manager_uid == current_uid().val);
+     return unlikely(ksu_manager_appid == current_uid().val % PER_USER_RANGE);
  }
 +#else
 +static inline bool is_manager()
 +{
-+    return unlikely(ksu_manager_uid == current_uid().val % 100000);
++    return unlikely(ksu_manager_appid == current_uid().val % 100000);
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
- static inline uid_t ksu_get_manager_uid()
+ static inline uid_t ksu_get_manager_appid()
  {
-     return ksu_manager_uid;
+     return ksu_manager_appid;
  }
  
 +#ifndef CONFIG_KSU_SUSFS
- static inline void ksu_set_manager_uid(uid_t uid)
+ static inline void ksu_set_manager_appid(uid_t appid)
  {
-     ksu_manager_uid = uid;
+     ksu_manager_appid = appid;
  }
 +#else
-+static inline void ksu_set_manager_uid(uid_t uid)
++static inline void ksu_set_manager_appid(uid_t appid)
 +{
-+    ksu_manager_uid = uid % 100000;
++    ksu_manager_appid = appid % 100000;
 +}
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
  static inline void ksu_invalidate_manager_uid()
  {
+@@ -35,4 +49,4 @@ static inline void ksu_invalidate_manager_uid()
+ }
+ 
+ int ksu_observer_init(void);
+-#endif
++#endif
+\ No newline at end of file
 diff --git a/kernel/selinux/rules.c b/kernel/selinux/rules.c
 index 99d8325e..9517f2ae 100644
 --- a/kernel/selinux/rules.c
@@ -909,7 +926,7 @@ index 400e9877..91796b55 100644
 +
  #endif
 diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
-index 016ac058..15e6f912 100644
+index 779ebfad..d03aa7ff 100644
 --- a/kernel/setuid_hook.c
 +++ b/kernel/setuid_hook.c
 @@ -27,6 +27,9 @@
@@ -964,7 +981,7 @@ index 016ac058..15e6f912 100644
  int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  {
      // we rely on the fact that zygote always call setresuid(3) with same uids
-@@ -135,6 +163,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
+@@ -130,6 +158,94 @@ int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid)
  
      return 0;
  }
@@ -1013,7 +1030,7 @@ index 016ac058..15e6f912 100644
 +    // - Since ksu maanger app uid is excluded in allow_list_arr, so ksu_uid_should_umount(manager_uid)
 +    //   will always return true, that's why we need to explicitly check if new_uid belongs to
 +    //   ksu manager
-+    if (ksu_get_manager_uid() == new_uid % 100000) {
++    if (ksu_get_manager_appid() == new_uid % 100000) {
 +        pr_info("install fd for manager: %d\n", new_uid);
 +        ksu_install_fd();
 +        spin_lock_irq(&current->sighand->siglock);
@@ -1059,6 +1076,13 @@ index 016ac058..15e6f912 100644
  
  void ksu_setuid_hook_init(void)
  {
+@@ -144,4 +260,4 @@ void ksu_setuid_hook_exit(void)
+     pr_info("ksu_core_exit\n");
+     ksu_kernel_umount_exit();
+     ksu_unregister_feature_handler(KSU_FEATURE_ENHANCED_SECURITY);
+-}
++}
+\ No newline at end of file
 diff --git a/kernel/sucompat.c b/kernel/sucompat.c
 index 04d8d3ca..08dfe261 100644
 --- a/kernel/sucompat.c
@@ -1252,20 +1276,20 @@ index 82161f7f..4f0d4f9d 100644
  #endif
 \ No newline at end of file
 diff --git a/kernel/supercalls.c b/kernel/supercalls.c
-index 01a7bdb8..805896f0 100644
+index d551a30a..860e350e 100644
 --- a/kernel/supercalls.c
 +++ b/kernel/supercalls.c
-@@ -12,6 +12,10 @@
+@@ -11,6 +11,10 @@
+ #include <linux/task_work.h>
  #include <linux/uaccess.h>
  #include <linux/version.h>
- #include <linux/pid.h>
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/namei.h>
 +#include <linux/susfs.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS
+ #include <linux/pid.h>
  
  #include "supercalls.h"
- #include "arch.h"
 @@ -25,7 +29,13 @@
  #include "selinux/selinux.h"
  #include "objsec.h"
@@ -1377,7 +1401,7 @@ index 01a7bdb8..805896f0 100644
 +    if (magic1 != KSU_INSTALL_MAGIC1) {
 +        return -EINVAL; 
 +    }
-+
+ 
 +    // If magic2 is susfs and current process is root
 +    if (magic2 == SUSFS_MAGIC && current_uid().val == 0) {
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
@@ -1466,7 +1490,7 @@ index 01a7bdb8..805896f0 100644
 +        }
 +        return 0;
 +    }
- 
++
 +    // Check if this is a request to install KSU fd
 +    if (magic2 == KSU_INSTALL_MAGIC2) {
 +        int fd = ksu_install_fd();
@@ -1505,6 +1529,13 @@ index 01a7bdb8..805896f0 100644
  }
  
  // IOCTL dispatcher
+@@ -777,4 +927,4 @@ int ksu_install_fd(void)
+     pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
+ 
+     return fd;
+-}
++}
+\ No newline at end of file
 -- 
 2.52.0
 

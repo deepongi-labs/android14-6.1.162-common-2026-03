@@ -1,13 +1,13 @@
-From c91b164603fb21fce51a075a25b903338589caff Mon Sep 17 00:00:00 2001
+From 79f35109387ead6c3cdd8a57c612a61cfa65cf6a Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
-Date: Tue, 2 Dec 2025 02:33:00 +0000
+Date: Fri, 5 Dec 2025 23:31:38 +0000
 Subject: [PATCH] 50_add_susfs_in_gki-android14-6.1
 
 ---
  drivers/input/input.c  |  10 ++
  fs/Makefile            |   2 +
  fs/devpts/inode.c      |  15 +++
- fs/exec.c              |  26 ++++
+ fs/exec.c              |  27 ++++
  fs/namei.c             | 258 +++++++++++++++++++++++++++++++++++++
  fs/namespace.c         | 247 ++++++++++++++++++++++++++++++++++++
  fs/notify/fdinfo.c     |  53 ++++++++
@@ -26,7 +26,7 @@ Subject: [PATCH] 50_add_susfs_in_gki-android14-6.1
  kernel/reboot.c        |  12 ++
  kernel/sys.c           |  15 +++
  security/selinux/avc.c |  19 ++-
- 22 files changed, 1252 insertions(+), 1 deletion(-)
+ 22 files changed, 1253 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/input/input.c b/drivers/input/input.c
 index 78be582b5..bdca57a9e 100644
@@ -110,7 +110,7 @@ index 4f25015aa..17e9e15af 100644
  		return NULL;
  	return dentry->d_fsdata;
 diff --git a/fs/exec.c b/fs/exec.c
-index 05ec9e696..119874b8d 100644
+index 05ec9e696..ca49ecfd4 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -64,6 +64,9 @@
@@ -123,12 +123,13 @@ index 05ec9e696..119874b8d 100644
  
  #include <linux/uaccess.h>
  #include <asm/mmu_context.h>
-@@ -1879,6 +1882,15 @@ static int bprm_execve(struct linux_binprm *bprm,
+@@ -1879,6 +1882,16 @@ static int bprm_execve(struct linux_binprm *bprm,
  	return retval;
  }
  
 +#ifdef CONFIG_KSU_SUSFS
 +extern bool ksu_execveat_hook __read_mostly;
++extern bool susfs_is_boot_completed_triggered __read_mostly;
 +extern bool __ksu_is_allow_uid_for_current(uid_t uid);
 +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
 +			void *envp, int *flags);
@@ -139,7 +140,7 @@ index 05ec9e696..119874b8d 100644
  static int do_execveat_common(int fd, struct filename *filename,
  			      struct user_arg_ptr argv,
  			      struct user_arg_ptr envp,
-@@ -1890,6 +1902,20 @@ static int do_execveat_common(int fd, struct filename *filename,
+@@ -1890,6 +1903,20 @@ static int do_execveat_common(int fd, struct filename *filename,
  	if (IS_ERR(filename))
  		return PTR_ERR(filename);
  
@@ -148,7 +149,7 @@ index 05ec9e696..119874b8d 100644
 +		goto orig_flow;
 +	}
 +
-+	if (unlikely(ksu_execveat_hook)) {
++	if (unlikely(ksu_execveat_hook || !susfs_is_boot_completed_triggered)) {
 +		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
 +	} else if ((__ksu_is_allow_uid_for_current(current_uid().val))) {
 +		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
@@ -573,7 +574,7 @@ index 8e9c0b567..220ebbb09 100644
  	return filp;
  }
 diff --git a/fs/namespace.c b/fs/namespace.c
-index f22f76d9c..8c33658e9 100644
+index f22f76d9c..1f86fc82b 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
 @@ -32,10 +32,23 @@
@@ -589,7 +590,7 @@ index f22f76d9c..8c33658e9 100644
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +extern bool susfs_is_current_ksu_domain(void);
-+extern bool susfs_is_boot_completed_triggered;
++extern bool susfs_is_boot_completed_triggered __read_mostly;
 +
 +static DEFINE_IDA(susfs_ksu_mnt_group_ida);
 +static atomic64_t susfs_ksu_mounts = ATOMIC64_INIT(0);

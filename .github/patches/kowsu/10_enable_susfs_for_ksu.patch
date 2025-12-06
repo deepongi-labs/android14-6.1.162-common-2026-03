@@ -1,4 +1,4 @@
-From 5bae11b5ed0a58784b961a674c149c7c295ea856 Mon Sep 17 00:00:00 2001
+From 2f453576b736924dcb59c81f0ace34ce27136647 Mon Sep 17 00:00:00 2001
 From: deepongi <infectedmushi@gmail.com>
 Date: Sat, 6 Dec 2025 17:04:56 +0000
 Subject: [PATCH] 10_enable_susfs_for_ksu
@@ -18,11 +18,11 @@ Subject: [PATCH] 10_enable_susfs_for_ksu
  kernel/selinux/rules.c   |   9 +++
  kernel/selinux/selinux.c |  91 ++++++++++++++++++++++++
  kernel/selinux/selinux.h |  13 ++++
- kernel/setuid_hook.c     | 116 ++++++++++++++++++++++++++++++
+ kernel/setuid_hook.c     | 118 ++++++++++++++++++++++++++++++-
  kernel/sucompat.c        | 144 +++++++++++++++++++++++++++++++++++++
  kernel/sucompat.h        |  10 ++-
  kernel/supercalls.c      | 148 ++++++++++++++++++++++++++++++++++++---
- 18 files changed, 747 insertions(+), 17 deletions(-)
+ 18 files changed, 748 insertions(+), 18 deletions(-)
 
 diff --git a/kernel/Kbuild b/kernel/Kbuild
 index d93e5cc6..18bb408b 100644
@@ -720,7 +720,7 @@ index 400e9877..91796b55 100644
 +
  #endif
 diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
-index 779ebfad..c03a99ec 100644
+index 779ebfad..d03aa7ff 100644
 --- a/kernel/setuid_hook.c
 +++ b/kernel/setuid_hook.c
 @@ -27,6 +27,9 @@
@@ -824,7 +824,7 @@ index 779ebfad..c03a99ec 100644
 +    // - Since ksu maanger app uid is excluded in allow_list_arr, so ksu_uid_should_umount(manager_uid)
 +    //   will always return true, that's why we need to explicitly check if new_uid belongs to
 +    //   ksu manager
-+    if (ksu_get_manager_uid() == new_uid % 100000) {
++    if (ksu_get_manager_appid() == new_uid % 100000) {
 +        pr_info("install fd for manager: %d\n", new_uid);
 +        ksu_install_fd();
 +        spin_lock_irq(&current->sighand->siglock);
@@ -870,6 +870,13 @@ index 779ebfad..c03a99ec 100644
  
  void ksu_setuid_hook_init(void)
  {
+@@ -144,4 +260,4 @@ void ksu_setuid_hook_exit(void)
+     pr_info("ksu_core_exit\n");
+     ksu_kernel_umount_exit();
+     ksu_unregister_feature_handler(KSU_FEATURE_ENHANCED_SECURITY);
+-}
++}
+\ No newline at end of file
 diff --git a/kernel/sucompat.c b/kernel/sucompat.c
 index 04d8d3ca..08dfe261 100644
 --- a/kernel/sucompat.c

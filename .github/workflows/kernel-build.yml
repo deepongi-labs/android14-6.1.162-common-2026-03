@@ -864,6 +864,15 @@ jobs:
       - name: Export Build Information
         id: export-build-info
         run: |
+          # Debug: Show what we have in environment
+          echo "🔍 Debug - Environment variables:"
+          echo "  CCACHE_HIT_RATE='${{ env.CCACHE_HIT_RATE }}'"
+          echo "  CCACHE_HITS='${{ env.CCACHE_HITS }}'"
+          echo "  CCACHE_MISSES='${{ env.CCACHE_MISSES }}'"
+          echo "  FINAL_CACHE_SIZE='${{ env.FINAL_CACHE_SIZE }}'"
+          echo "  WORKFLOW_COMMIT_SHORT='${{ env.WORKFLOW_COMMIT_SHORT }}'"
+          echo "  WORKFLOW_COMMIT_MSG='${{ env.WORKFLOW_COMMIT_MSG }}'"
+          
           # Export CCache stats from environment variables (already set by Check CCACHE Performance)
           echo "ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}" >> $GITHUB_OUTPUT
           echo "ccache_hits=${{ env.CCACHE_HITS }}" >> $GITHUB_OUTPUT
@@ -875,9 +884,6 @@ jobs:
           echo "commit_message=${{ env.WORKFLOW_COMMIT_MSG }}" >> $GITHUB_OUTPUT
           
           echo "✅ Build information exported to job outputs"
-          echo "📊 CCache: ${{ env.CCACHE_HIT_RATE }} (Hits: ${{ env.CCACHE_HITS }}, Misses: ${{ env.CCACHE_MISSES }})"
-          echo "💾 Cache Size: ${{ env.FINAL_CACHE_SIZE }}"
-          echo "📝 Commit: ${{ env.WORKFLOW_COMMIT_SHORT }} - ${{ env.WORKFLOW_COMMIT_MSG }}"
 
       - name: Package Kernel
         run: |

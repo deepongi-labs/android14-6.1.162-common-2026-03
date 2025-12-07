@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.0 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.1 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -48,7 +48,6 @@ env:
   ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
   ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
   CCACHE_DIR: /mnt/ccache/.ccache
-  MAKE_JOBS: 8
 
 jobs:
   setup:
@@ -161,6 +160,7 @@ jobs:
 
       - name: Initialize and Update Submodules with Correct Branches
         run: |
+          SUBMODULE_START=$SECONDS
           echo "📦 Initializing submodules in parallel..."
           
           # Initialize both submodules in parallel for faster checkout
@@ -173,7 +173,10 @@ jobs:
           wait $PID1 && echo "✅ Kernel submodule ready"
           wait $PID2 && echo "✅ SuSFS submodule ready"
           
+          SUBMODULE_TIME=$((SECONDS - SUBMODULE_START))
           echo "✅ All submodules initialized with correct branches"
+          echo "⏱️  Submodule checkout took: ${SUBMODULE_TIME}s"
+          echo "SUBMODULE_TIME=${SUBMODULE_TIME}s" >> $GITHUB_ENV
 
       - name: Verify Submodules
         run: |
@@ -269,6 +272,7 @@ jobs:
 
       - name: Setup KernelSU Variant
         run: |
+          KSU_SETUP_START=$SECONDS
           cd kernel
 
           # Remove any existing KernelSU
@@ -357,6 +361,10 @@ jobs:
               echo "⚠️ KernelSU not in config, may need manual enabling"
             fi
           fi
+          
+          KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))
+          echo "⏱️  KernelSU setup took: ${KSU_SETUP_TIME}s"
+          echo "KSU_SETUP_TIME=${KSU_SETUP_TIME}s" >> $GITHUB_ENV
 
       - name: Store KernelSU Commit Info
         run: |
@@ -783,12 +791,28 @@ jobs:
           export CC="ccache clang"
           export CXX="ccache clang++"
           
+          # Dynamic MAKE_JOBS calculation (memory-aware)
+          CORES=$(nproc)
+          MEMORY_GB=$(free -g | awk '/^Mem:/{print $2}')
+          # Each compile job needs ~2GB RAM, leave 2GB for system
+          MAX_JOBS=$(( (MEMORY_GB - 2) / 2 ))
+          # Use the smaller of cores or memory-based limit
+          if [ $MAX_JOBS -lt $CORES ]; then
+            MAKE_JOBS=$MAX_JOBS
+            echo "⚠️  Limited by RAM: Using $MAKE_JOBS jobs (have $CORES cores, ${MEMORY_GB}GB RAM)"
+          else
+            MAKE_JOBS=$CORES
+            echo "✅ Using $MAKE_JOBS jobs ($CORES cores available, ${MEMORY_GB}GB RAM)"
+          fi
+          # Ensure at least 1 job
+          [ $MAKE_JOBS -lt 1 ] && MAKE_JOBS=1
+          
           START_TIME=$SECONDS
           
           # ⬇️ THIS IS WHERE YOU ADD THE CLEAN COMMAND ⬇️
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             echo "🧹 Performing clean build..."
-            make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean
+            make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean
           fi
           
           echo "🗿️ Building kernel for ${{ matrix.variant }}..."
@@ -799,15 +823,17 @@ jobs:
           echo "  - LLVM: 1 (full LLVM toolchain for LTO)"
           echo "  - LLVM_IAS: 1 (LLVM integrated assembler)"
           echo "  - LD: ld.lld (LLVM linker)"
+          echo "  - MAKE_JOBS: $MAKE_JOBS (auto-detected)"
           echo "  - CCache: Optimized (compress=true, maxsize=50G)"
           
           # Build with full LLVM toolchain for LTO support
-          make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out CC="$CC" 2>&1 | tee build.log
+          make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out CC="$CC" 2>&1 | tee build.log
           
           BUILD_TIME=$((SECONDS - START_TIME))
           BUILD_MINS=$((BUILD_TIME / 60))
           BUILD_SECS=$((BUILD_TIME % 60))
           echo "BUILD_TIME=${BUILD_MINS}m ${BUILD_SECS}s" >> $GITHUB_ENV
+          echo "MAKE_JOBS=$MAKE_JOBS" >> $GITHUB_ENV
 
       - name: Record Build Duration
         id: build-duration
@@ -1004,6 +1030,22 @@ jobs:
           echo "   Size: ${ACTUAL_SIZE}"
           echo "   MD5: ${MD5_HASH}"
           echo "   SHA256: ${SHA256_HASH}"
+
+      - name: Build Time Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 BUILD TIME BREAKDOWN - ${{ matrix.variant }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "⏱️  Submodule checkout:  ${{ env.SUBMODULE_TIME || 'N/A' }}"
+          echo "⏱️  KernelSU setup:      ${{ env.KSU_SETUP_TIME || 'N/A' }}"
+          echo "⏱️  Kernel compilation:  ${{ env.BUILD_TIME || 'N/A' }}"
+          echo "⏱️  Parallel jobs used:  ${{ env.MAKE_JOBS || 'N/A' }}"
+          echo ""
+          echo "💾 CCache stats:         ${{ env.CCACHE_HIT_RATE || 'N/A' }}"
+          echo "📦 Final package:        ${{ env.KERNEL_ZIP || 'N/A' }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

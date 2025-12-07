@@ -860,6 +860,17 @@ jobs:
               echo "❌ Could not extract hit/miss counts"
             fi
           fi
+          
+          # Export all values to GITHUB_ENV so they're available to next steps
+          echo "CCACHE_HIT_RATE=${HIT_RATE:-N/A}" >> $GITHUB_ENV
+          echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
+          echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
+          echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ CCache stats exported to environment"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Export Build Information
         id: export-build-info

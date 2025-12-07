@@ -864,7 +864,7 @@ jobs:
       - name: Export Build Information
         id: export-build-info
         run: |
-          # Export CCache stats from environment
+          # Export CCache stats from environment variables (already set by Check CCACHE Performance)
           echo "ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}" >> $GITHUB_OUTPUT
           echo "ccache_hits=${{ env.CCACHE_HITS }}" >> $GITHUB_OUTPUT
           echo "ccache_misses=${{ env.CCACHE_MISSES }}" >> $GITHUB_OUTPUT
@@ -875,35 +875,9 @@ jobs:
           echo "commit_message=${{ env.WORKFLOW_COMMIT_MSG }}" >> $GITHUB_OUTPUT
           
           echo "✅ Build information exported to job outputs"
-          
-          # Clean up the HIT_RATE - remove any newlines or extra whitespace
-          HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n' | xargs)
-          FINAL_CACHE_SIZE=$(echo "$FINAL_CACHE_SIZE" | tr -d '\n' | xargs)
-          CACHE_HITS=$(echo "$CACHE_HITS" | tr -d '\n' | xargs)
-          CACHE_MISSES=$(echo "$CACHE_MISSES" | tr -d '\n' | xargs)
-          CACHE_TOTAL=$(echo "$CACHE_TOTAL" | tr -d '\n' | xargs)
-          
-          # Format for display in your desired format
-          CCACHE_FORMATTED="${HIT_RATE} (Hits: ${CACHE_HITS}/Misses: ${CACHE_MISSES})"
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 Final Results:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "💾 Cache Size: $FINAL_CACHE_SIZE"
-          echo "🎯 Hit Rate: $HIT_RATE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Get hits and misses for export (FIX)
-          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
-          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -m1 "Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
-          
-          # Export to environment
-          echo "FINAL_CACHE_SIZE=$FINAL_CACHE_SIZE" >> $GITHUB_ENV
-          echo "CCACHE_HIT_RATE=$HIT_RATE" >> $GITHUB_ENV
-          echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
-          echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
-          echo "CCACHE_TOTAL=${CACHE_TOTAL:-0}" >> $GITHUB_ENV
-          echo "CCACHE_FORMATTED=${CCACHE_FORMATTED}" >> $GITHUB_ENV
+          echo "📊 CCache: ${{ env.CCACHE_HIT_RATE }} (Hits: ${{ env.CCACHE_HITS }}, Misses: ${{ env.CCACHE_MISSES }})"
+          echo "💾 Cache Size: ${{ env.FINAL_CACHE_SIZE }}"
+          echo "📝 Commit: ${{ env.WORKFLOW_COMMIT_SHORT }} - ${{ env.WORKFLOW_COMMIT_MSG }}"
 
       - name: Package Kernel
         run: |

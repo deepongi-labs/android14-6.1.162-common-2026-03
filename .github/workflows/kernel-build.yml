@@ -818,7 +818,8 @@ jobs:
           CCACHE_OUTPUT=$(ccache -s 2>&1)
           
           # Extract cache size - CCache 4.12.1 format - get ONLY first match
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//')
+          # Format: "  Cache size (GB):   26.2 /   50.0 (52.36%)"
+          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1}')
           
           # Extract hit rate from FIRST "Hits:" line only (skip Local storage section)
           # Use -m1 to get only the first match

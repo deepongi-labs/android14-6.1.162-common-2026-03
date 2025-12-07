@@ -1119,13 +1119,13 @@ jobs:
           CCACHE_HIT_RATE="${{ needs.build.outputs.ccache_hit_rate }}"
           CCACHE_HITS="${{ needs.build.outputs.ccache_hits }}"
           CCACHE_MISSES="${{ needs.build.outputs.ccache_misses }}"
-          CACHE_SIZE="${{ needs.build.outputs.ccache_size }}"
+          CCACHE_SIZE="${{ needs.build.outputs.ccache_size }}"
           
           # If empty, set to N/A
           CCACHE_HIT_RATE="${CCACHE_HIT_RATE:-N/A}"
           CCACHE_HITS="${CCACHE_HITS:-0}"
           CCACHE_MISSES="${CCACHE_MISSES:-0}"
-          CACHE_SIZE="${CACHE_SIZE:-N/A}"
+          CCACHE_SIZE="${CCACHE_SIZE:-N/A}"
           
           # Format CCache details like Telegram does
           if [ "$CCACHE_HITS" != "0" ] || [ "$CCACHE_MISSES" != "0" ]; then

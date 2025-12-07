@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.0 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -32,6 +32,11 @@ on:
         description: 'Create GitHub Release with artifacts'
         required: false
         default: true
+        type: boolean
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: false
         type: boolean
 
 permissions:
@@ -156,16 +161,17 @@ jobs:
 
       - name: Initialize and Update Submodules with Correct Branches
         run: |
-          echo "📦 Initializing submodules..."
-          git submodule init
+          echo "📦 Initializing submodules in parallel..."
           
-          echo "📥 Updating kernel submodule..."
-          # Use --remote to fetch the branch specified in .gitmodules
-          git submodule update --init --recursive --remote kernel
+          # Initialize both submodules in parallel for faster checkout
+          git submodule update --init --recursive --remote --jobs 4 kernel &
+          PID1=$!
+          git submodule update --init --recursive --remote --jobs 4 susfs4ksu &
+          PID2=$!
           
-          echo "📥 Updating susfs4ksu submodule..."
-          # Use --remote to fetch the branch specified in .gitmodules
-          git submodule update --init --recursive --remote susfs4ksu
+          # Wait for both to complete
+          wait $PID1 && echo "✅ Kernel submodule ready"
+          wait $PID2 && echo "✅ SuSFS submodule ready"
           
           echo "✅ All submodules initialized with correct branches"
 
@@ -192,10 +198,10 @@ jobs:
 
       - name: Store Workflow Commit Info
         run: |
-          WORKFLOW_COMMIT=$(git rev-parse HEAD)
-          WORKFLOW_COMMIT_SHORT=$(git rev-parse --short HEAD)
-          WORKFLOW_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
-          WORKFLOW_COMMIT_MSG=$(git log -1 --format=%s)
+          # Optimized: Single git log call
+          read -r WORKFLOW_COMMIT WORKFLOW_COMMIT_SHORT WORKFLOW_COMMIT_DATE WORKFLOW_COMMIT_MSG << EOF
+          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
+          EOF
           
           echo "WORKFLOW_COMMIT=$WORKFLOW_COMMIT" >> $GITHUB_ENV
           echo "WORKFLOW_COMMIT_SHORT=$WORKFLOW_COMMIT_SHORT" >> $GITHUB_ENV
@@ -218,10 +224,10 @@ jobs:
       - name: Store Kernel Commit Info
         run: |
           cd kernel
-          KERNEL_COMMIT=$(git rev-parse HEAD)
-          KERNEL_COMMIT_SHORT=$(git rev-parse --short HEAD)
-          KERNEL_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
-          KERNEL_COMMIT_MSG=$(git log -1 --format=%s)
+          # Optimized: Single git log call instead of multiple commands
+          read -r KERNEL_COMMIT KERNEL_COMMIT_SHORT KERNEL_COMMIT_DATE KERNEL_COMMIT_MSG << EOF
+          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
+          EOF
           
           echo "KERNEL_COMMIT=$KERNEL_COMMIT" >> $GITHUB_ENV
           echo "KERNEL_COMMIT_SHORT=$KERNEL_COMMIT_SHORT" >> $GITHUB_ENV
@@ -242,10 +248,10 @@ jobs:
       - name: Store SuSFS Commit Info
         run: |
           cd susfs4ksu
-          SUSFS_COMMIT=$(git rev-parse HEAD)
-          SUSFS_COMMIT_SHORT=$(git rev-parse --short HEAD)
-          SUSFS_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
-          SUSFS_COMMIT_MSG=$(git log -1 --format=%s)
+          # Optimized: Single git log call
+          read -r SUSFS_COMMIT SUSFS_COMMIT_SHORT SUSFS_COMMIT_DATE SUSFS_COMMIT_MSG << EOF
+          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
+          EOF
           
           echo "SUSFS_COMMIT=$SUSFS_COMMIT" >> $GITHUB_ENV
           echo "SUSFS_COMMIT_SHORT=$SUSFS_COMMIT_SHORT" >> $GITHUB_ENV
@@ -355,11 +361,10 @@ jobs:
       - name: Store KernelSU Commit Info
         run: |
           cd kernel/KernelSU
-          KSU_COMMIT=$(git rev-parse HEAD)
-          KSU_COMMIT_SHORT=$(git rev-parse --short HEAD)
-          KSU_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')
-          KSU_COMMIT_MSG=$(git log -1 --format=%s)
-          KSU_COMMIT_AUTHOR=$(git log -1 --format='%an')
+          # Optimized: Single git log call
+          read -r KSU_COMMIT KSU_COMMIT_SHORT KSU_COMMIT_DATE KSU_COMMIT_MSG KSU_COMMIT_AUTHOR << EOF
+          $(git log -1 --format="%H %h %cd %s %an" --date=format:'%Y-%m-%d %H:%M:%S')
+          EOF
           
           echo "KSU_COMMIT=$KSU_COMMIT" >> $GITHUB_ENV
           echo "KSU_COMMIT_SHORT=$KSU_COMMIT_SHORT" >> $GITHUB_ENV
@@ -370,6 +375,7 @@ jobs:
           echo "🔖 KernelSU commit: $KSU_COMMIT_SHORT - $KSU_COMMIT_MSG"
 
       - name: Generate Comprehensive Changelog - ${{ matrix.variant }}
+        if: needs.setup.outputs.create_release == 'true'
         run: |
           mkdir -p changelogs
           CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
@@ -767,6 +773,13 @@ jobs:
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          
+          # CCache performance optimizations
+          export CCACHE_COMPRESS=true
+          export CCACHE_COMPRESSLEVEL=6
+          export CCACHE_MAXSIZE=50G
+          export CCACHE_SLOPPINESS="include_file_ctime,include_file_mtime,time_macros"
+          
           export CC="ccache clang"
           export CXX="ccache clang++"
           
@@ -786,6 +799,7 @@ jobs:
           echo "  - LLVM: 1 (full LLVM toolchain for LTO)"
           echo "  - LLVM_IAS: 1 (LLVM integrated assembler)"
           echo "  - LD: ld.lld (LLVM linker)"
+          echo "  - CCache: Optimized (compress=true, maxsize=50G)"
           
           # Build with full LLVM toolchain for LTO support
           make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out CC="$CC" 2>&1 | tee build.log
@@ -876,14 +890,16 @@ jobs:
       - name: Export Build Information
         id: export-build-info
         run: |
-          # Debug: Show what we have in environment
-          echo "🔍 Debug - Environment variables:"
-          echo "  CCACHE_HIT_RATE='${{ env.CCACHE_HIT_RATE }}'"
-          echo "  CCACHE_HITS='${{ env.CCACHE_HITS }}'"
-          echo "  CCACHE_MISSES='${{ env.CCACHE_MISSES }}'"
-          echo "  FINAL_CACHE_SIZE='${{ env.FINAL_CACHE_SIZE }}'"
-          echo "  WORKFLOW_COMMIT_SHORT='${{ env.WORKFLOW_COMMIT_SHORT }}'"
-          echo "  WORKFLOW_COMMIT_MSG='${{ env.WORKFLOW_COMMIT_MSG }}'"
+          # Debug output (can be disabled by setting debug=false)
+          if [ "${{ github.event.inputs.debug || 'false' }}" = "true" ] || [ "${{ runner.debug }}" = "1" ]; then
+            echo "🔍 Debug - Environment variables:"
+            echo "  CCACHE_HIT_RATE='${{ env.CCACHE_HIT_RATE }}'"
+            echo "  CCACHE_HITS='${{ env.CCACHE_HITS }}'"
+            echo "  CCACHE_MISSES='${{ env.CCACHE_MISSES }}'"
+            echo "  FINAL_CACHE_SIZE='${{ env.FINAL_CACHE_SIZE }}'"
+            echo "  WORKFLOW_COMMIT_SHORT='${{ env.WORKFLOW_COMMIT_SHORT }}'"
+            echo "  WORKFLOW_COMMIT_MSG='${{ env.WORKFLOW_COMMIT_MSG }}'"
+          fi
           
           # Export CCache stats from environment variables (already set by Check CCACHE Performance)
           echo "ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}" >> $GITHUB_OUTPUT

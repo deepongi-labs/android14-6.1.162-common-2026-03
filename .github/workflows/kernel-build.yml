@@ -740,7 +740,7 @@ jobs:
               ;;
           esac
           
-          # SuSFS configuration
+          # SuSFS configuration - All available features enabled
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
@@ -752,7 +752,6 @@ jobs:
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_SU=n
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
           fi
@@ -1219,13 +1218,21 @@ jobs:
               # Initial build - show last 5 commits
               COMMITS=$(grep -A 50 "### 🔧 KernelSU - ${variant}" "$changelog" | grep "^- \*\*" | head -5)
               if [ -n "$COMMITS" ]; then
+                # Format variant name with repo link
+                VARIANT_NAME=""
+                case "$variant" in
+                  "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
+                  "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
+                  "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
+                esac
+                
                 VARIANT_COMMITS="${VARIANT_COMMITS}
           
-          ### ${variant} (tiann/KernelSU)
+          ### ${VARIANT_NAME}
           *Initial build - showing last 5 commits:*
           ${COMMITS}"
               fi
-            elif grep -q "## 📄 Changes Since Last Build" "$changelog"; then
+            elif grep -q "## 🔄 Changes Since Last Build" "$changelog"; then
               # Has changes - extract the commit details
               CHANGE_COUNT=$(grep "**Changes:**" "$changelog" | grep -oE '[0-9]+ commit' | grep -oE '[0-9]+')
               
@@ -1234,12 +1241,12 @@ jobs:
                 COMMITS=$(sed -n '/### 🔧 KernelSU/,/^### /p' "$changelog" | grep -A 200 "#### " | grep -B 1 "^----$" | grep -v "^----$" | head -20)
                 
                 if [ -n "$COMMITS" ]; then
-                  # Format variant name properly
+                  # Format variant name properly with repo link
                   VARIANT_NAME=""
                   case "$variant" in
-                    "tiann") VARIANT_NAME="tiann (Official KernelSU)" ;;
-                    "kowsu") VARIANT_NAME="kowsu (KOWX712/KernelSU)" ;;
-                    "mksu") VARIANT_NAME="mksu (5ec1cff/KernelSU)" ;;
+                    "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
+                    "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
+                    "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
                   esac
                   
                   VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1253,9 +1260,9 @@ jobs:
                 # No changes
                 VARIANT_NAME=""
                 case "$variant" in
-                  "tiann") VARIANT_NAME="tiann (Official KernelSU)" ;;
-                  "kowsu") VARIANT_NAME="kowsu (KOWX712/KernelSU)" ;;
-                  "mksu") VARIANT_NAME="mksu (5ec1cff/KernelSU)" ;;
+                  "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
+                  "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
+                  "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
                 esac
                 
                 VARIANT_COMMITS="${VARIANT_COMMITS}

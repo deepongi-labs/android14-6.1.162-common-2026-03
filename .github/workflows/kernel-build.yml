@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.1 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.1.1 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:

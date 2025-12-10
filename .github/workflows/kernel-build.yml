@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.1.1 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.2 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ on:
           - tiann
           - kowsu
           - mksu
+          - sukisu
       disable_susfs:
         description: 'Disable SuSFS features'
         required: false
@@ -76,7 +77,7 @@ jobs:
           VARIANT="${{ github.event.inputs.ksu_variant }}"
           
           if [ "$VARIANT" = "all" ]; then
-            echo 'matrix={"variant":["tiann","kowsu","mksu"]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu"]}' >> $GITHUB_OUTPUT
           else
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
           fi
@@ -285,18 +286,28 @@ jobs:
               KSU_REPO="tiann/KernelSU"
               KSU_BRANCH="main"
               PATCH_DIR="KSU"
+              USE_SETUP_SH="true"
               ;;
             "kowsu")
               echo "📦 Setting up KowSU (KOWX712)..."
               KSU_REPO="KOWX712/KernelSU"
               KSU_BRANCH="master"
               PATCH_DIR="KowSU"
+              USE_SETUP_SH="true"
               ;;
             "mksu")
               echo "📦 Setting up MKSU (5ec1cff)..."
               KSU_REPO="5ec1cff/KernelSU"
               KSU_BRANCH="main"
               PATCH_DIR="5ec1cff"
+              USE_SETUP_SH="true"
+              ;;
+            "sukisu")
+              echo "📦 Setting up SukiSU-Ultra..."
+              KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
+              KSU_BRANCH="builtin"
+              PATCH_DIR="sukisu"
+              USE_SETUP_SH="false"
               ;;
           esac
           
@@ -305,16 +316,51 @@ jobs:
           git clone --depth=1 --branch=$KSU_BRANCH \
             https://github.com/$KSU_REPO.git KernelSU
           
-          # Execute setup.sh from kernel source directory, passing current directory (.)
-          echo "🚀 Running setup.sh from kernel source..."
-          if [ -f "KernelSU/kernel/setup.sh" ]; then
-            chmod +x KernelSU/kernel/setup.sh
-            ./KernelSU/kernel/setup.sh .
+          if [ "$USE_SETUP_SH" = "true" ]; then
+            # Execute setup.sh for standard variants (tiann, kowsu, mksu)
+            echo "🚀 Running setup.sh from kernel source..."
+            if [ -f "KernelSU/kernel/setup.sh" ]; then
+              chmod +x KernelSU/kernel/setup.sh
+              ./KernelSU/kernel/setup.sh .
+            else
+              echo "❌ KernelSU/kernel/setup.sh not found!"
+              echo "📁 Available files in KernelSU:"
+              find KernelSU -name "*.sh" -type f
+              exit 1
+            fi
           else
-            echo "❌ KernelSU/kernel/setup.sh not found!"
-            echo "📁 Available files in KernelSU:"
-            find KernelSU -name "*.sh" -type f
-            exit 1
+            # Manual setup for sukisu (builtin branch has everything integrated)
+            echo "🔧 Manual setup for SukiSU-Ultra (builtin branch)..."
+            
+            # Setup KernelSU in kernel tree
+            ln -sf "$(pwd)/KernelSU/kernel" drivers/kernelsu
+            
+            # Verify symlink
+            if [ -d "drivers/kernelsu" ] && [ -f "drivers/kernelsu/Kconfig" ]; then
+              echo "✅ KernelSU symlink created successfully"
+            else
+              echo "⚠️ KernelSU symlink failed, trying copy instead..."
+              rm -rf drivers/kernelsu
+              cp -r KernelSU/kernel drivers/kernelsu
+              if [ -f "drivers/kernelsu/Kconfig" ]; then
+                echo "✅ KernelSU copied successfully"
+              else
+                echo "❌ KernelSU setup failed"
+                exit 1
+              fi
+            fi
+            
+            # Add to Makefile if not present
+            if ! grep -q "kernelsu" drivers/Makefile; then
+              echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+            fi
+            
+            # Add to Kconfig if not present
+            if ! grep -q "kernelsu" drivers/Kconfig; then
+              sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+            fi
+            
+            echo "✅ SukiSU-Ultra manual setup completed"
           fi
           
           echo "PATCH_DIR=$PATCH_DIR" >> $GITHUB_ENV
@@ -332,12 +378,30 @@ jobs:
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
           
           echo "🔢 Counting commits..."
-          KSU_COUNT=$(git rev-list --count HEAD)
-          KSU_VERSION=$((KSU_COUNT + 30000))
+          
+          # Special version calculation for sukisu
+          if [ "${{ matrix.variant }}" = "sukisu" ]; then
+            # Fetch main branch for version counting
+            echo "📥 Fetching main branch for version counting..."
+            git fetch origin main:main --quiet || true
+            
+            # Count commits on main branch
+            KSU_COUNT=$(git rev-list --count main)
+            
+            # SukiSU formula: 40000 + main_commits - 2815
+            KSU_VERSION=$((40000 + KSU_COUNT - 2815))
+            
+            echo "✅ SukiSU version: r$KSU_VERSION (main branch commits: $KSU_COUNT)"
+          else
+            # Standard calculation for tiann/kowsu/mksu
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+            
+            echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT)"
+          fi
           
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
           echo "KSU_COUNT=$KSU_COUNT" >> $GITHUB_ENV
-          echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT)"
 
       - name: Verify KernelSU Setup
         run: |
@@ -408,6 +472,9 @@ jobs:
               ;;
             "mksu")
               echo "**Variant:** MKSU Fork (5ec1cff)" >> "$CHANGELOG_FILE"
+              ;;
+            "sukisu")
+              echo "**Variant:** SukiSU-Ultra (builtin)" >> "$CHANGELOG_FILE"
               ;;
           esac
           
@@ -612,9 +679,14 @@ jobs:
           echo "✅ Comprehensive changelog generated successfully!"
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true'
+        if: env.ENABLE_SUSFS == 'true' || matrix.variant == 'sukisu'
         run: |
           echo "📦 Setting up SuSFS..."
+          
+          # SukiSU ALWAYS requires SuSFS (pre-integrated in builtin branch)
+          if [ "${{ matrix.variant }}" = "sukisu" ]; then
+            echo "🔒 SukiSU-Ultra: SuSFS is mandatory (pre-integrated)"
+          fi
           
           # Copy SuSFS files
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
@@ -635,25 +707,41 @@ jobs:
             patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || true
           fi
           
-          # Apply KernelSU-specific SuSFS patch
-          cd KernelSU
-          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
-          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-          
-          if [ -f "$VARIANT_KSU_PATCH" ]; then
-            echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/${{ matrix.variant }}/"
-            patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
-          else
-            echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
-            patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+          # Apply sukisu-specific scope_min_manual_hooks patch (after 50 patch)
+          if [ "${{ matrix.variant }}" = "sukisu" ]; then
+            SUKISU_SCOPE_PATCH="../.github/patches/sukisu/scope_min_manual_hooks_v1.6.patch"
+            if [ -f "$SUKISU_SCOPE_PATCH" ]; then
+              echo "📋 Applying sukisu scope_min_manual_hooks patch"
+              patch -p1 --forward < "$SUKISU_SCOPE_PATCH" || true
+            else
+              echo "⚠️  Warning: sukisu scope_min_manual_hooks patch not found: $SUKISU_SCOPE_PATCH"
+            fi
           fi
-          cd ..
+          
+          # Apply KernelSU-specific SuSFS patch (skip for sukisu - already integrated)
+          if [ "${{ matrix.variant }}" != "sukisu" ]; then
+            cd KernelSU
+            VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+            DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+            
+            if [ -f "$VARIANT_KSU_PATCH" ]; then
+              echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/${{ matrix.variant }}/"
+              patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
+            else
+              echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
+              patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+            fi
+            cd ..
+          else
+            echo "⏭️  Skipping 10_enable_susfs_for_ksu patch for sukisu (pre-integrated)"
+          fi
 
       - name: Apply LKM Spoof Patch
+        if: matrix.variant != 'sukisu'
         run: |
           cd kernel/KernelSU
           
-          # Apply LKM spoof patch (always, regardless of SuSFS)
+          # Apply LKM spoof patch (skip for sukisu)
           LKM_SPOOF_PATCH="../../.github/patches/${{ matrix.variant }}/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
           if [ -f "$LKM_SPOOF_PATCH" ]; then
             echo "📋 Applying LKM spoof patch from .github/patches/${{ matrix.variant }}/"
@@ -661,7 +749,7 @@ jobs:
           else
             echo "⚠️ LKM spoof patch not found: $LKM_SPOOF_PATCH"
           fi
-          
+
       - name: Apply Remote Patches
         run: |
           cd kernel
@@ -687,61 +775,141 @@ jobs:
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
           
-          # Base configuration
+          # Base configuration - Complete set
           cat >> out/.config << 'EOF'
-          # CPU & Architecture
+          # CPU & Architecture - Tensor G3 Cores
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_ARM64_VA_BITS=48
+          CONFIG_ARM64_PA_BITS=48
+          CONFIG_ARM64_TAGGED_ADDR_ABI=y
+          CONFIG_ARM64_SVE=y
+          CONFIG_ARM64_BTI=y
+          CONFIG_ARM64_PTR_AUTH=y
+          CONFIG_ARM64_SME=y
 
-          # Performance & Debug
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          # Scheduler & Performance
+          CONFIG_SCHED_MC=y
+          CONFIG_SCHED_CORE=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
+
+          # CPU Frequency Scaling
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPUFREQ_DT=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_OPP=y
+
+          # CPU Idle
+          CONFIG_CPU_IDLE=y
+          CONFIG_ARM_PSCI_CPUIDLE=y
+
+          # Thermal Management
+          CONFIG_THERMAL=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_DEVFREQ_THERMAL=y
+          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
+          CONFIG_THERMAL_GOV_STEP_WISE=y
+          CONFIG_THERMAL_GOV_FAIR_SHARE=y
+          CONFIG_THERMAL_EMULATION=y
+          CONFIG_THERMAL_WRITABLE_TRIPS=y
+
+          # Power & Performance
+          CONFIG_POWER_CAP=y
+          CONFIG_PERF_EVENTS=y
+          CONFIG_NUMA_BALANCING=y
+
+          # Memory Management
+          CONFIG_CMA=y
+          CONFIG_CMA_AREAS=7
+
+          # Kernel Version
+          CONFIG_LOCALVERSION_AUTO=n
+
+          # Kprobes (required for KernelSU)
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
 
           # Filesystem
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
 
-          # Compilation
+          # Network - IPTables & Traffic Control
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+
+          # TCP Congestion Control
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          # CONFIG_TCP_CONG_BIC is not set
+          # CONFIG_TCP_CONG_WESTWOOD is not set
+          # CONFIG_TCP_CONG_HTCP is not set
+
+          # Compilation Optimization
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
           CONFIG_LTO=y
           CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
-          CONFIG_LOCALVERSION_AUTO=n
 
-          # Kprobes (important for KernelSU)
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
+          # IP Sets (firewall/routing)
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=256
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+
+          # CAKE Queue Discipline
+          CONFIG_NET_SCH_CAKE=y
+
+          # KernelSU Base Config (all variants)
+          CONFIG_KSU=y
+          CONFIG_KSU_DEBUG=n
           EOF
           
           # Variant-specific config
           case "${{ matrix.variant }}" in
             "tiann")
-              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
-              echo 'CONFIG_KSU=y' >> out/.config
-              echo 'CONFIG_KSU_DEBUG=y' >> out/.config
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
               echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
               echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
               echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "kowsu")
-              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
-              echo 'CONFIG_KSU=y' >> out/.config
-              echo 'CONFIG_KSU_DEBUG=y' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config              ;;
-            "mksu")
-              echo 'CONFIG_LOCALVERSION="-deepongi"' >> out/.config
-              echo 'CONFIG_KSU=y' >> out/.config
-              echo 'CONFIG_KSU_DEBUG=y' >> out/.config
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
               echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
               echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
               echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
+            "mksu")
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              ;;
+            "sukisu")
+              # SukiSU-Ultra (builtin branch) - minimal config + manual hook
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_MANUAL_HOOK=y' >> out/.config
+              ;;
           esac
           
           # SuSFS configuration - All available features enabled
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          # Note: SukiSU ALWAYS builds with SuSFS (pre-integrated)
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] || [ "${{ matrix.variant }}" = "sukisu" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -968,6 +1136,11 @@ jobs:
               AK3_REPO="deepongi-labs/AnyKernel3-p8a"
               echo "📦 Using AnyKernel3 branch: MKSU (for mksu variant)"
               ;;
+            "sukisu")
+              AK3_BRANCH="sukisu"
+              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
+              echo "📦 Using AnyKernel3 branch: sukisu (for SukiSU-Ultra variant)"
+              ;;
           esac
           
           # Clone the appropriate AnyKernel3 branch for this variant
@@ -987,7 +1160,8 @@ jobs:
           VARIANT_UPPER=$(echo "${{ matrix.variant }}" | tr '[:lower:]' '[:upper:]')
           
           # Use both kernel version and KSU version in ZIP name
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          # Note: SukiSU ALWAYS builds with SuSFS
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] || [ "${{ matrix.variant }}" = "sukisu" ]; then
             ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
           else
             ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUSFS.zip"

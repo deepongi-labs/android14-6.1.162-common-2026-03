@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.2 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.2.2 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -1304,6 +1304,7 @@ jobs:
           [ -f "CHANGELOG-tiann.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}tiann "
           [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
           [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
+          [ -f "CHANGELOG-sukisu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}sukisu "
           VARIANTS_BUILT=$(echo "$VARIANTS_BUILT" | xargs)
           echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
 
@@ -1336,10 +1337,18 @@ jobs:
           MKSU_KERNEL_VERSION="${{ needs.build.outputs.mksu_kernel_version || '6.1.x' }}"
           MKSU_ZIP="${{ needs.build.outputs.mksu_zip || '' }}"
           
+          SUKISU_SIZE="${{ needs.build.outputs.sukisu_size || 'Unknown' }}"
+          SUKISU_MD5="${{ needs.build.outputs.sukisu_md5 || 'Unknown' }}"
+          SUKISU_SHA256="${{ needs.build.outputs.sukisu_sha256 || 'Unknown' }}"
+          SUKISU_KSU_VERSION="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
+          SUKISU_KERNEL_VERSION="${{ needs.build.outputs.sukisu_kernel_version || '6.1.x' }}"
+          SUKISU_ZIP="${{ needs.build.outputs.sukisu_zip || '' }}"
+          
           # Find actual ZIP files
           [ -z "$TIANN_ZIP" ] && TIANN_ZIP=$(ls AK3-*-TIANN-*.zip 2>/dev/null | head -1 || echo "")
           [ -z "$KOWSU_ZIP" ] && KOWSU_ZIP=$(ls AK3-*-KowSU-*.zip 2>/dev/null | head -1 || echo "")
           [ -z "$MKSU_ZIP" ] && MKSU_ZIP=$(ls AK3-*-MKSU-*.zip 2>/dev/null | head -1 || echo "")
+          [ -z "$SUKISU_ZIP" ] && SUKISU_ZIP=$(ls AK3-*-SUKISU-*.zip 2>/dev/null | head -1 || echo "")
           
           # Use common kernel version
           COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
@@ -1397,6 +1406,7 @@ jobs:
                   "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
                   "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
                   "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
+                  "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
                 esac
                 
                 VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1420,6 +1430,7 @@ jobs:
                     "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
                     "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
                     "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
+                    "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
                   esac
                   
                   VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1436,6 +1447,7 @@ jobs:
                   "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
                   "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
                   "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
+                  "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
                 esac
                 
                 VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1450,6 +1462,7 @@ jobs:
           [ -f "CHANGELOG-tiann.md" ] && extract_variant_commits "tiann"
           [ -f "CHANGELOG-kowsu.md" ] && extract_variant_commits "kowsu"
           [ -f "CHANGELOG-mksu.md" ] && extract_variant_commits "mksu"
+          [ -f "CHANGELOG-sukisu.md" ] && extract_variant_commits "sukisu"
           
           # Build the release notes (no duplicate title, no build table)
           RELEASE_NOTES="**Build Date:** ${{ env.BUILD_DATE }}  
@@ -1552,6 +1565,7 @@ jobs:
           [[ "${VARIANTS_BUILT}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
           [[ "${VARIANTS_BUILT}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
           [[ "${VARIANTS_BUILT}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
+          [[ "${VARIANTS_BUILT}" == *"sukisu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}sukisu "
           
           # Clean up and format variants
           BUILT_VARIANTS=$(echo "${BUILT_VARIANTS}" | xargs)
@@ -1628,12 +1642,14 @@ jobs:
           TIANN_KSU="${{ needs.build.outputs.tiann_ksu_version || 'Unknown' }}"
           KOWSU_KSU="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
           MKSU_KSU="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
+          SUKISU_KSU="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
           
           # Set environment variables
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
           echo "TIANN_KSU_VERSION=${TIANN_KSU}" >> $GITHUB_ENV
           echo "KOWSU_KSU_VERSION=${KOWSU_KSU}" >> $GITHUB_ENV
           echo "MKSU_KSU_VERSION=${MKSU_KSU}" >> $GITHUB_ENV
+          echo "SUKISU_KSU_VERSION=${SUKISU_KSU}" >> $GITHUB_ENV
 
       - name: Get CCache Statistics
         if: always()
@@ -1782,6 +1798,14 @@ jobs:
               KSU_INFO="✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
             fi
           fi
+          if [ -n "${{ env.SUKISU_KSU_VERSION }}" ] && [ "${{ env.SUKISU_KSU_VERSION }}" != "Unknown" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
+            fi
+          fi
           
           # Get CCache hits and misses for more detailed info
           CCACHE_HITS="${{ env.CCACHE_HITS || '0' }}"
@@ -1801,7 +1825,7 @@ jobs:
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
           ━━━━━━━━━━━━━━━━━━━━━
 
-          📦 *Variants:* ${{ env.VARIANT_COUNT }}/3 (${{ env.VARIANTS_FORMATTED }})
+          📦 *Variants:* ${{ env.VARIANT_COUNT }}/4 (${{ env.VARIANTS_FORMATTED }})
           ⏱️ *Duration:* ${BUILD_DURATION}
           🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI

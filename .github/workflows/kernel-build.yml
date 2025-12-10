@@ -903,7 +903,6 @@ jobs:
             "sukisu")
               # SukiSU-Ultra (builtin branch) - minimal config + manual hook
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_MANUAL_HOOK=y' >> out/.config
               ;;
           esac
           

@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.2.2 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.2.3 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -138,6 +138,13 @@ jobs:
       mksu_sha256: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
       mksu_kernel_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
       mksu_ksu_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
+      
+      sukisu_zip: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
+      sukisu_size: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
+      sukisu_md5: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
+      sukisu_sha256: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
+      sukisu_kernel_version: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
+      sukisu_ksu_version: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
       
       duration: ${{ steps.build-duration.outputs.duration || env.BUILD_TIME || 'Unknown' }}
 
@@ -707,17 +714,6 @@ jobs:
             patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || true
           fi
           
-          # Apply sukisu-specific scope_min_manual_hooks patch (after 50 patch)
-          if [ "${{ matrix.variant }}" = "sukisu" ]; then
-            SUKISU_SCOPE_PATCH="../.github/patches/sukisu/scope_min_manual_hooks_v1.6.patch"
-            if [ -f "$SUKISU_SCOPE_PATCH" ]; then
-              echo "📋 Applying sukisu scope_min_manual_hooks patch"
-              patch -p1 --forward < "$SUKISU_SCOPE_PATCH" || true
-            else
-              echo "⚠️  Warning: sukisu scope_min_manual_hooks patch not found: $SUKISU_SCOPE_PATCH"
-            fi
-          fi
-          
           # Apply KernelSU-specific SuSFS patch (skip for sukisu - already integrated)
           if [ "${{ matrix.variant }}" != "sukisu" ]; then
             cd KernelSU
@@ -901,8 +897,9 @@ jobs:
               echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "sukisu")
-              # SukiSU-Ultra (builtin branch) - minimal config + manual hook
+              # SukiSU-Ultra (builtin branch) - minimal config
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
               ;;
           esac
           
@@ -921,6 +918,11 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
+            
+            # SukiSU-specific: Enable inline hook for sus_kstat
+            if [ "${{ matrix.variant }}" = "sukisu" ]; then
+              echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
+            fi
           fi
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig

@@ -1,7 +1,7 @@
 [submodule "kernel"]
 	path = kernel
 	url = https://android.googlesource.com/kernel/common.git
-	branch = android14-6.1.158_r00
+	branch = android14-6.1-2025-12
 [submodule "susfs4ksu"]
 	path = susfs4ksu
 	url = https://gitlab.com/simonpunk/susfs4ksu.git

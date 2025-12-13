@@ -43,102 +43,102 @@ index cc4dbb3a..393e16cd 100644
 @@ -2,7 +2,6 @@ menu "KernelSU"
  
  config KSU
- 	tristate "KernelSU function support"
--	depends on KPROBES
- 	default y
- 	help
- 	  Enable kernel-level root privileges on Android System.
+     tristate "KernelSU function support"
+-    depends on KPROBES
+     default y
+     help
+       Enable kernel-level root privileges on Android System.
 @@ -17,4 +16,94 @@ config KSU_DEBUG
- 	help
- 	  Enable KernelSU debug mode.
+     help
+       Enable KernelSU debug mode.
  
 +menu "KernelSU - SUSFS"
 +config KSU_SUSFS
-+	bool "KernelSU addon - SUSFS"
-+	depends on KSU
-+	depends on THREAD_INFO_IN_TASK
-+	default y
-+	help
-+		Patch and Enable SUSFS to kernel with KernelSU.
++    bool "KernelSU addon - SUSFS"
++    depends on KSU
++    depends on THREAD_INFO_IN_TASK
++    default y
++    help
++         Patch and Enable SUSFS to kernel with KernelSU.
 +
 +config KSU_SUSFS_SUS_PATH
-+	bool "Enable to hide suspicious path (NOT recommended)"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow hiding the user-defined path and all its sub-paths from various system calls.
-+		- Includes temp fix for the leaks of app path in /sdcard/Android/data directory.
-+		- Effective only on zygote spawned user app process.
-+		- Use with cautious as it may cause performance loss and will be vulnerable to side channel attacks,
-+		  just disable this feature if it doesn't work for you or you don't need it at all.
++    bool "Enable to hide suspicious path (NOT recommended)"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow hiding the user-defined path and all its sub-paths from various system calls.
++         - Includes temp fix for the leaks of app path in /sdcard/Android/data directory.
++         - Effective only on zygote spawned user app process.
++         - Use with cautious as it may cause performance loss and will be vulnerable to side channel attacks,
++           just disable this feature if it doesn't work for you or you don't need it at all.
 +
 +config KSU_SUSFS_SUS_MOUNT
-+	bool "Enable to hide suspicious mounts"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow hiding the user-defined mount paths from /proc/self/[mounts|mountinfo|mountstat].
-+		- Effective on all processes for hiding mount entries.
-+		- mnt_id and mnt_group_id of the sus mount will be assigned to a much bigger number to solve the issue of id not being contiguous.
++    bool "Enable to hide suspicious mounts"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow hiding the user-defined mount paths from /proc/self/[mounts|mountinfo|mountstat].
++         - Effective on all processes for hiding mount entries.
++         - mnt_id and mnt_group_id of the sus mount will be assigned to a much bigger number to solve the issue of id not being contiguous.
 +
 +config KSU_SUSFS_SUS_KSTAT
-+	bool "Enable to spoof suspicious kstat"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow spoofing the kstat of user-defined file/directory.
-+		- Effective only on zygote spawned user app process.
++    bool "Enable to spoof suspicious kstat"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow spoofing the kstat of user-defined file/directory.
++         - Effective only on zygote spawned user app process.
 +
 +config KSU_SUSFS_SPOOF_UNAME
-+	bool "Enable to spoof uname"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow spoofing the string returned by uname syscall to user-defined string.
-+		- Effective on all processes.
++    bool "Enable to spoof uname"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow spoofing the string returned by uname syscall to user-defined string.
++         - Effective on all processes.
 +
 +config KSU_SUSFS_ENABLE_LOG
-+	bool "Enable logging susfs log to kernel"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow logging susfs log to kernel, uncheck it to completely disable all susfs log.
++    bool "Enable logging susfs log to kernel"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow logging susfs log to kernel, uncheck it to completely disable all susfs log.
 +
 +config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-+	bool "Enable to automatically hide ksu and susfs symbols from /proc/kallsyms"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Automatically hide ksu and susfs symbols from '/proc/kallsyms'.
-+		- Effective on all processes.
++    bool "Enable to automatically hide ksu and susfs symbols from /proc/kallsyms"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Automatically hide ksu and susfs symbols from '/proc/kallsyms'.
++         - Effective on all processes.
 +
 +config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-+	bool "Enable to spoof /proc/bootconfig (gki) or /proc/cmdline (non-gki)"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Spoof the output of /proc/bootconfig (gki) or /proc/cmdline (non-gki) with a user-defined file.
-+		- Effective on all processes.
++    bool "Enable to spoof /proc/bootconfig (gki) or /proc/cmdline (non-gki)"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Spoof the output of /proc/bootconfig (gki) or /proc/cmdline (non-gki) with a user-defined file.
++         - Effective on all processes.
 +
 +config KSU_SUSFS_OPEN_REDIRECT
-+	bool "Enable to redirect a path to be opened with another path (experimental)"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow redirecting a target path to be opened with another user-defined path.
-+		- Effective only on processes with uid < 2000.
-+		- Please be reminded that process with open access to the target and redirected path can be detected.
++    bool "Enable to redirect a path to be opened with another path (experimental)"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow redirecting a target path to be opened with another user-defined path.
++         - Effective only on processes with uid < 2000.
++         - Please be reminded that process with open access to the target and redirected path can be detected.
 +
 +config KSU_SUSFS_SUS_MAP
-+	bool "Enable to hide some mmapped real file from different proc maps interfaces"
-+	depends on KSU_SUSFS
-+	default y
-+	help
-+		- Allow hiding mmapped real file from /proc/<pid>/[maps|smaps|smaps_rollup|map_files|mem|pagemap]
-+		- It does NOT support hiding for anon memory.
-+		- It does NOT hide any inline hooks or plt hooks cause by the injected library itself.
-+		- It may not be able to evade detections by apps that implement a good injection detection.
-+		- Effective only on zygote spawned umounted user app process.
++    bool "Enable to hide some mmapped real file from different proc maps interfaces"
++    depends on KSU_SUSFS
++    default y
++    help
++         - Allow hiding mmapped real file from /proc/<pid>/[maps|smaps|smaps_rollup|map_files|mem|pagemap]
++         - It does NOT support hiding for anon memory.
++         - It does NOT hide any inline hooks or plt hooks cause by the injected library itself.
++         - It may not be able to evade detections by apps that implement a good injection detection.
++         - Effective only on zygote spawned umounted user app process.
 +
 +endmenu
 +
@@ -149,7 +149,7 @@ index 7752836b..7f0b2f2d 100644
 +++ b/kernel/Makefile
 @@ -17,4 +17,13 @@ clean:
  check_symbol: tools/check_symbol.c
- 	$(CC) tools/check_symbol.c -o check_symbol
+     $(CC) tools/check_symbol.c -o check_symbol
  
 +## For susfs stuff ##
 +ifeq ($(shell test -e $(srctree)/fs/susfs.c; echo $$?),0)
@@ -219,28 +219,28 @@ index 201b8bea..2a4ecf79 100644
 @@ -211,8 +213,10 @@ static void disable_seccomp(void)
  void escape_with_root_profile(void)
  {
- 	struct cred *cred;
+     struct cred *cred;
 +#ifndef CONFIG_KSU_SUSFS
- 	struct task_struct *p = current;
- 	struct task_struct *t;
+     struct task_struct *p = current;
+     struct task_struct *t;
 +#endif // #ifndef CONFIG_KSU_SUSFS
  
- 	cred = prepare_creds();
- 	if (!cred) {
+     cred = prepare_creds();
+     if (!cred) {
 @@ -264,11 +268,14 @@ void escape_with_root_profile(void)
  
- 	setup_selinux(profile->selinux_domain);
- 	setup_mount_namespace(profile->namespaces);
-+	
+     setup_selinux(profile->selinux_domain);
+     setup_mount_namespace(profile->namespaces);
++    
 +#ifndef CONFIG_KSU_SUSFS
- 	for_each_thread (p, t) {
- 		ksu_set_task_tracepoint_flag(t);
- 	}
+     for_each_thread (p, t) {
+          ksu_set_task_tracepoint_flag(t);
+     }
 +#endif // #ifndef CONFIG_KSU_SUSFS
  }
  
  void escape_to_root_for_init(void) {
- 	setup_selinux(KERNEL_SU_CONTEXT);
+     setup_selinux(KERNEL_SU_CONTEXT);
 -}
 +}
 \ No newline at end of file
@@ -1054,7 +1054,7 @@ index 82161f7f..4f0d4f9d 100644
  
  // Handler functions exported for hook_manager
  int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
--			 int *mode, int *__unused_flags);
+-               int *mode, int *__unused_flags);
 +             int *mode, int *__unused_flags);
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0) && defined(CONFIG_KSU_SUSFS)
 +int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);
@@ -1062,8 +1062,8 @@ index 82161f7f..4f0d4f9d 100644
  int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
 +#endif // #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0) && defined(CONFIG_KSU_SUSFS)
  int ksu_handle_execve_sucompat(const char __user **filename_user,
--			       void *__never_use_argv, void *__never_use_envp,
--			       int *__never_use_flags);
+-                     void *__never_use_argv, void *__never_use_envp,
+-                     int *__never_use_flags);
 +                   void *__never_use_argv, void *__never_use_envp,
 +                   int *__never_use_flags);
  
@@ -1188,7 +1188,7 @@ index e1bcfe98..bd625154 100644
  {
 -
      if (magic1 != KSU_INSTALL_MAGIC1)
--    	return 0;
+-         return 0;
 +        return 0;
  
      pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
@@ -1197,7 +1197,7 @@ index e1bcfe98..bd625154 100644
  
          if (cmd == ksu_get_manager_appid()) {
              if (copy_to_user((void __user *)*arg, &reply, sizeof(reply)))
--            	pr_info("sys_reboot: reply fail\n");
+-              pr_info("sys_reboot: reply fail\n");
 +                pr_info("sys_reboot: reply fail\n");
          }
  
@@ -1350,4 +1350,3 @@ index e1bcfe98..bd625154 100644
 \ No newline at end of file
 -- 
 2.52.0
-

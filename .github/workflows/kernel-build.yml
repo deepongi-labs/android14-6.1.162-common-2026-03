@@ -312,7 +312,7 @@ jobs:
             "sukisu")
               echo "📦 Setting up SukiSU-Ultra..."
               KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
-              KSU_BRANCH="builtin"
+              KSU_BRANCH="tmp-builtin"
               PATCH_DIR="sukisu"
               USE_SETUP_SH="false"
               ;;
@@ -336,8 +336,8 @@ jobs:
               exit 1
             fi
           else
-            # Manual setup for sukisu (builtin branch has everything integrated)
-            echo "🔧 Manual setup for SukiSU-Ultra (builtin branch)..."
+            # Manual setup for sukisu (tmp-builtin branch has everything integrated)
+            echo "🔧 Manual setup for SukiSU-Ultra (tmp-builtin branch)..."
             
             # Setup KernelSU in kernel tree
             ln -sf "$(pwd)/KernelSU/kernel" drivers/kernelsu
@@ -481,7 +481,7 @@ jobs:
               echo "**Variant:** MKSU Fork (5ec1cff)" >> "$CHANGELOG_FILE"
               ;;
             "sukisu")
-              echo "**Variant:** SukiSU-Ultra (builtin)" >> "$CHANGELOG_FILE"
+              echo "**Variant:** SukiSU-Ultra (tmp-builtin)" >> "$CHANGELOG_FILE"
               ;;
           esac
           
@@ -690,7 +690,7 @@ jobs:
         run: |
           echo "📦 Setting up SuSFS..."
           
-          # SukiSU ALWAYS requires SuSFS (pre-integrated in builtin branch)
+          # SukiSU ALWAYS requires SuSFS (pre-integrated in tmp-builtin branch)
           if [ "${{ matrix.variant }}" = "sukisu" ]; then
             echo "🔒 SukiSU-Ultra: SuSFS is mandatory (pre-integrated)"
           fi
@@ -897,7 +897,7 @@ jobs:
               echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "sukisu")
-              # SukiSU-Ultra (builtin branch) - minimal config
+              # SukiSU-Ultra (tmp-builtin branch) - minimal config
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
               echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
               ;;

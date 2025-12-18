@@ -880,21 +880,21 @@ jobs:
           case "${{ matrix.variant }}" in
             "tiann")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=y' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
               echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "kowsu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=y' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
               echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "mksu")
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=y' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
               echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "sukisu")
               # SukiSU-Ultra (builtin branch) - minimal config

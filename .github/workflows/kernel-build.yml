@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.2.3 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.3.0 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -312,9 +312,18 @@ jobs:
             "sukisu")
               echo "📦 Setting up SukiSU-Ultra..."
               KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
-              KSU_BRANCH="tmp-builtin"
               PATCH_DIR="sukisu"
-              USE_SETUP_SH="false"
+              
+              # Branch selection based on SuSFS mode
+              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+                KSU_BRANCH="tmp-builtin"
+                echo "🛡️ SuSFS Mode: Using tmp-builtin branch (SuSFS pre-integrated)"
+                USE_SETUP_SH="false"
+              else
+                KSU_BRANCH="main"
+                echo "🔓 No-SuSFS Mode: Using main branch (standard hooks)"
+                USE_SETUP_SH="true"
+              fi
               ;;
           esac
           
@@ -388,7 +397,7 @@ jobs:
           
           # Special version calculation for sukisu
           if [ "${{ matrix.variant }}" = "sukisu" ]; then
-            # Fetch main branch for version counting
+            # Always use main branch for version counting (regardless of which branch is checked out)
             echo "📥 Fetching main branch for version counting..."
             git fetch origin main:main --quiet || true
             
@@ -398,7 +407,11 @@ jobs:
             # SukiSU formula: 40000 + main_commits - 2815
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
             
-            echo "✅ SukiSU version: r$KSU_VERSION (main branch commits: $KSU_COUNT)"
+            if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+              echo "✅ SukiSU version: r$KSU_VERSION (main: $KSU_COUNT commits) [tmp-builtin branch]"
+            else
+              echo "✅ SukiSU version: r$KSU_VERSION (main: $KSU_COUNT commits) [main branch]"
+            fi
           else
             # Standard calculation for tiann/kowsu/mksu
             KSU_COUNT=$(git rev-list --count HEAD)
@@ -481,7 +494,11 @@ jobs:
               echo "**Variant:** MKSU Fork (5ec1cff)" >> "$CHANGELOG_FILE"
               ;;
             "sukisu")
-              echo "**Variant:** SukiSU-Ultra (tmp-builtin)" >> "$CHANGELOG_FILE"
+              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+                echo "**Variant:** SukiSU-Ultra (tmp-builtin branch - SuSFS pre-integrated)" >> "$CHANGELOG_FILE"
+              else
+                echo "**Variant:** SukiSU-Ultra (main branch - standard hooks)" >> "$CHANGELOG_FILE"
+              fi
               ;;
           esac
           
@@ -686,14 +703,9 @@ jobs:
           echo "✅ Comprehensive changelog generated successfully!"
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true' || matrix.variant == 'sukisu'
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           echo "📦 Setting up SuSFS..."
-          
-          # SukiSU ALWAYS requires SuSFS (pre-integrated in tmp-builtin branch)
-          if [ "${{ matrix.variant }}" = "sukisu" ]; then
-            echo "🔒 SukiSU-Ultra: SuSFS is mandatory (pre-integrated)"
-          fi
           
           # Copy SuSFS files
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
@@ -714,8 +726,28 @@ jobs:
             patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || true
           fi
           
-          # Apply KernelSU-specific SuSFS patch (skip for sukisu - already integrated)
-          if [ "${{ matrix.variant }}" != "sukisu" ]; then
+          # Apply KernelSU-specific SuSFS patch
+          if [ "${{ matrix.variant }}" = "sukisu" ]; then
+            # Sukisu tmp-builtin branch has SuSFS pre-integrated, skip patching
+            if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+              echo "⏭️  Skipping 10_enable_susfs_for_ksu patch for sukisu tmp-builtin (pre-integrated)"
+            else
+              # Sukisu main branch needs standard SuSFS patch
+              cd KernelSU
+              VARIANT_KSU_PATCH="../../.github/patches/sukisu/10_enable_susfs_for_ksu.patch"
+              DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+              
+              if [ -f "$VARIANT_KSU_PATCH" ]; then
+                echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/sukisu/"
+                patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
+              else
+                echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
+                patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+              fi
+              cd ..
+            fi
+          else
+            # Standard variants (tiann/kowsu/mksu) - always apply patch
             cd KernelSU
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
             DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
@@ -728,16 +760,14 @@ jobs:
               patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
             fi
             cd ..
-          else
-            echo "⏭️  Skipping 10_enable_susfs_for_ksu patch for sukisu (pre-integrated)"
           fi
 
       - name: Apply LKM Spoof Patch
-        if: matrix.variant != 'sukisu'
+        if: matrix.variant != 'sukisu' && matrix.variant != 'kowsu'
         run: |
           cd kernel/KernelSU
           
-          # Apply LKM spoof patch (skip for sukisu)
+          # Apply LKM spoof patch (skip for sukisu and kowsu)
           LKM_SPOOF_PATCH="../../.github/patches/${{ matrix.variant }}/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
           if [ -f "$LKM_SPOOF_PATCH" ]; then
             echo "📋 Applying LKM spoof patch from .github/patches/${{ matrix.variant }}/"
@@ -897,15 +927,21 @@ jobs:
               echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
             "sukisu")
-              # SukiSU-Ultra (tmp-builtin branch) - minimal config
+              # SukiSU-Ultra configuration
               echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
+              
+              # Only add inline hook config if using tmp-builtin (SuSFS mode)
+              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+                echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
+              fi
               ;;
           esac
           
           # SuSFS configuration - All available features enabled
-          # Note: SukiSU ALWAYS builds with SuSFS (pre-integrated)
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] || [ "${{ matrix.variant }}" = "sukisu" ]; then
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -919,10 +955,6 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
             
-            # SukiSU-specific: Enable inline hook for sus_kstat
-            if [ "${{ matrix.variant }}" = "sukisu" ]; then
-              echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
-            fi
           fi
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
@@ -1161,8 +1193,7 @@ jobs:
           VARIANT_UPPER=$(echo "${{ matrix.variant }}" | tr '[:lower:]' '[:upper:]')
           
           # Use both kernel version and KSU version in ZIP name
-          # Note: SukiSU ALWAYS builds with SuSFS
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] || [ "${{ matrix.variant }}" = "sukisu" ]; then
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
           else
             ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUSFS.zip"

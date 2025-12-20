@@ -76,13 +76,32 @@ jobs:
         id: set-matrix
         run: |
           VARIANT="${{ github.event.inputs.ksu_variant }}"
+          DISABLE_SUSFS="${{ github.event.inputs.disable_susfs }}"
           
           if [ "$VARIANT" = "all" ]; then
-            echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","next"]}' >> $GITHUB_OUTPUT
+            # Exclude 'next' from builds when SuSFS is enabled (default)
+            if [ "$DISABLE_SUSFS" = "true" ]; then
+              # SuSFS disabled: build all variants including next
+              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants (SuSFS disabled): tiann, kowsu, mksu, sukisu, next"
+            else
+              # SuSFS enabled: exclude next variant
+              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building SuSFS variants only: tiann, kowsu, mksu, sukisu"
+              echo "⏭️  Skipping 'next' variant (incompatible with SuSFS builds)"
+            fi
           else
+            # Single variant requested
+            if [ "$VARIANT" = "next" ] && [ "$DISABLE_SUSFS" != "true" ]; then
+              echo "❌ ERROR: Cannot build 'next' variant with SuSFS enabled"
+              echo "💡 Please either:"
+              echo "   1. Set disable_susfs=true to build 'next' variant"
+              echo "   2. Choose a different variant (tiann/kowsu/mksu/sukisu)"
+              exit 1
+            fi
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
+            echo "🎯 Building single variant: $VARIANT"
           fi
-          echo "🎯 Building variant(s): $VARIANT"
 
       - name: Set Build Config
         id: config
@@ -158,13 +177,13 @@ jobs:
           echo "🧹 Properly cleaning kernel directory..."
           if [ -d "kernel" ]; then
             cd kernel
+            # Hard reset to remove all changes
+            git reset --hard HEAD
+            git clean -fdx
             # Remove any KernelSU and patches
             rm -rf KernelSU drivers/kernelsu
             # Remove ABI files that will be regenerated
             rm -f android/abi_gki_protected_exports_* || true
-            # Hard reset to remove all changes
-            git reset --hard HEAD
-            git clean -fdx
             cd ..
           fi
           echo "✅ Kernel directory fully reset"
@@ -689,7 +708,7 @@ jobs:
           echo "✅ Comprehensive changelog generated successfully!"
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true'
+        if: env.ENABLE_SUSFS == 'true' && matrix.variant != 'next'
         run: |
           echo "📦 Setting up SuSFS..."
           
@@ -977,8 +996,8 @@ jobs:
               ;;
           esac
           
-          # SuSFS configuration - All available features enabled
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          # SuSFS configuration - All available features enabled (skip for next variant)
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ "${{ matrix.variant }}" != "next" ]; then
             cat >> out/.config << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -1970,7 +1989,7 @@ jobs:
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
           ━━━━━━━━━━━━━━━━━━━━━
 
-          📦 *Variants:* ${{ env.VARIANT_COUNT }}/5 (${{ env.VARIANTS_FORMATTED }})
+          📦 *Variants:* ${{ env.VARIANT_COUNT }}/${{ github.event.inputs.disable_susfs == 'true' && '5' || '4' }} (${{ env.VARIANTS_FORMATTED }})
           ⏱️ *Duration:* ${BUILD_DURATION}
           🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI

@@ -1667,6 +1667,13 @@ jobs:
           fi
           echo "SUSFS_STATUS=${SUSFS_STATUS}" >> $GITHUB_ENV
 
+      - name: Download Build Artifacts
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          path: notify-artifacts
+        continue-on-error: true
+
       - name: Calculate Build Duration
         if: always()
         id: calculate-duration
@@ -1712,15 +1719,67 @@ jobs:
         if: always()
         id: get-versions
         run: |
-          # Initialize version variables
-          KERNEL_VERSION="${{ needs.build.outputs.tiann_kernel_version || '6.1.x' }}"
+          echo "🔍 Extracting KSU versions from artifact ZIP filenames..."
           
-          # Get KSU versions from build outputs
-          TIANN_KSU="${{ needs.build.outputs.tiann_ksu_version || 'Unknown' }}"
-          KOWSU_KSU="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
-          MKSU_KSU="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
-          SUKISU_KSU="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
-          NEXT_KSU="${{ needs.build.outputs.next_ksu_version || 'Unknown' }}"
+          # Default values
+          KERNEL_VERSION="6.1.x"
+          TIANN_KSU="Unknown"
+          KOWSU_KSU="Unknown"
+          MKSU_KSU="Unknown"
+          SUKISU_KSU="Unknown"
+          NEXT_KSU="Unknown"
+          
+          # Check if artifacts were downloaded
+          if [ -d "notify-artifacts" ]; then
+            cd notify-artifacts
+            
+            # Extract versions from ZIP filenames
+            # Format: AK3-6.1.157-TIANN-20241220-1234-r43826-SUSFS.zip
+            
+            for dir in kernel-*; do
+              if [ -d "$dir" ]; then
+                cd "$dir"
+                
+                # Find ZIP file and extract version
+                ZIP_FILE=$(ls AK3-*.zip 2>/dev/null | head -1)
+                
+                if [ -n "$ZIP_FILE" ]; then
+                  echo "📦 Found: $ZIP_FILE"
+                  
+                  # Extract kernel version (6.1.157)
+                  KERNEL_VERSION=$(echo "$ZIP_FILE" | sed -n 's/AK3-\([0-9]\+\.[0-9]\+\.[0-9]\+\)-.*/\1/p')
+                  
+                  # Extract KSU version (r43826)
+                  KSU_VER=$(echo "$ZIP_FILE" | sed -n 's/.*-\(r[0-9]\+\)-.*/\1/p')
+                  
+                  # Determine variant from filename
+                  if [[ "$ZIP_FILE" == *"-TIANN-"* ]]; then
+                    TIANN_KSU="$KSU_VER"
+                  elif [[ "$ZIP_FILE" == *"-KOWSU-"* ]]; then
+                    KOWSU_KSU="$KSU_VER"
+                  elif [[ "$ZIP_FILE" == *"-MKSU-"* ]]; then
+                    MKSU_KSU="$KSU_VER"
+                  elif [[ "$ZIP_FILE" == *"-SUKISU-"* ]]; then
+                    SUKISU_KSU="$KSU_VER"
+                  elif [[ "$ZIP_FILE" == *"-NEXT-"* ]]; then
+                    NEXT_KSU="$KSU_VER"
+                  fi
+                fi
+                
+                cd ..
+              fi
+            done
+            
+            cd ..
+          fi
+          
+          echo "✅ Extracted versions:"
+          echo "  Kernel: $KERNEL_VERSION"
+          echo "  TIANN: $TIANN_KSU"
+          echo "  KOWSU: $KOWSU_KSU"
+          echo "  MKSU: $MKSU_KSU"
+          echo "  SUKISU: $SUKISU_KSU"
+          echo "  NEXT: $NEXT_KSU"
           
           # Set environment variables
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
@@ -1729,7 +1788,6 @@ jobs:
           echo "MKSU_KSU_VERSION=${MKSU_KSU}" >> $GITHUB_ENV
           echo "SUKISU_KSU_VERSION=${SUKISU_KSU}" >> $GITHUB_ENV
           echo "NEXT_KSU_VERSION=${NEXT_KSU}" >> $GITHUB_ENV
-
       - name: Get CCache Statistics
         if: always()
         id: get-ccache-stats

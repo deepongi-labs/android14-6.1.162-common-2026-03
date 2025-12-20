@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.3.0-bugfix (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.4.0 (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ on:
           - kowsu
           - mksu
           - sukisu
+          - next
       disable_susfs:
         description: 'Disable SuSFS features'
         required: false
@@ -77,7 +78,7 @@ jobs:
           VARIANT="${{ github.event.inputs.ksu_variant }}"
           
           if [ "$VARIANT" = "all" ]; then
-            echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu"]}' >> $GITHUB_OUTPUT
+            echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","next"]}' >> $GITHUB_OUTPUT
           else
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
           fi
@@ -286,6 +287,13 @@ jobs:
                 USE_SETUP_SH="true"
               fi
               ;;
+            "next")
+              echo "📦 Setting up KernelSU-Next..."
+              KSU_REPO="KernelSU-Next/KernelSU-Next"
+              KSU_BRANCH="dev"
+              PATCH_DIR="next"
+              USE_SETUP_SH="true"
+              ;;
           esac
           
           # Clone the KernelSU repository with error handling
@@ -365,7 +373,7 @@ jobs:
           
           echo "🔢 Counting commits..."
           
-          # Special version calculation for sukisu
+          # Special version calculation for sukisu and next
           if [ "${{ matrix.variant }}" = "sukisu" ]; then
             # Always use main branch for version counting (regardless of which branch is checked out)
             echo "📥 Fetching main branch for version counting..."
@@ -382,8 +390,13 @@ jobs:
             else
               echo "✅ SukiSU version: r$KSU_VERSION (main: $KSU_COUNT commits) [main branch]"
             fi
+          elif [ "${{ matrix.variant }}" = "next" ]; then
+            # KernelSU-Next uses dev branch commit count
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+            
+            echo "✅ KernelSU-Next version: r$KSU_VERSION (commits: $KSU_COUNT) [dev branch]"
           else
-            # Standard calculation for tiann/kowsu/mksu
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((KSU_COUNT + 30000))
             
@@ -469,6 +482,9 @@ jobs:
               else
                 echo "**Variant:** SukiSU-Ultra (main branch - standard hooks)" >> "$CHANGELOG_FILE"
               fi
+              ;;
+            "next")
+              echo "**Variant:** KernelSU-Next (KernelSU-Next/dev branch)" >> "$CHANGELOG_FILE"
               ;;
           esac
           
@@ -764,7 +780,7 @@ jobs:
           fi
 
       - name: Apply LKM Spoof Patch
-        if: matrix.variant != 'sukisu' && matrix.variant != 'kowsu'
+        if: matrix.variant != 'sukisu' && matrix.variant != 'kowsu' && matrix.variant != 'next'
         run: |
           cd kernel/KernelSU
           
@@ -951,6 +967,13 @@ jobs:
               if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
                 echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
               fi
+              ;;
+            "next")
+              # KernelSU-Next configuration (experimental/development branch)
+              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
+              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
+              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
+              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
               ;;
           esac
           
@@ -1174,6 +1197,11 @@ jobs:
               AK3_REPO="deepongi-labs/AnyKernel3-p8a"
               echo "📦 Using AnyKernel3 branch: sukisu (for SukiSU-Ultra variant)"
               ;;
+            "next")
+              AK3_BRANCH="next"
+              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
+              echo "📦 Using AnyKernel3 branch: next (for KernelSU-Next variant)"
+              ;;
           esac
           
           # Clone the appropriate AnyKernel3 branch with error handling
@@ -1342,6 +1370,7 @@ jobs:
           [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
           [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
           [ -f "CHANGELOG-sukisu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}sukisu "
+          [ -f "CHANGELOG-next.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}next "
           VARIANTS_BUILT=$(echo "$VARIANTS_BUILT" | xargs)
           echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
 
@@ -1380,6 +1409,13 @@ jobs:
           SUKISU_KSU_VERSION="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
           SUKISU_KERNEL_VERSION="${{ needs.build.outputs.sukisu_kernel_version || '6.1.x' }}"
           SUKISU_ZIP="${{ needs.build.outputs.sukisu_zip || '' }}"
+          
+          NEXT_SIZE="${{ needs.build.outputs.next_size || 'Unknown' }}"
+          NEXT_MD5="${{ needs.build.outputs.next_md5 || 'Unknown' }}"
+          NEXT_SHA256="${{ needs.build.outputs.next_sha256 || 'Unknown' }}"
+          NEXT_KSU_VERSION="${{ needs.build.outputs.next_ksu_version || 'Unknown' }}"
+          NEXT_KERNEL_VERSION="${{ needs.build.outputs.next_kernel_version || '6.1.x' }}"
+          NEXT_ZIP="${{ needs.build.outputs.next_zip || '' }}"
           
           # Find actual ZIP files
           [ -z "$TIANN_ZIP" ] && TIANN_ZIP=$(ls AK3-*-TIANN-*.zip 2>/dev/null | head -1 || echo "")
@@ -1468,6 +1504,7 @@ jobs:
                     "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
                     "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
                     "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
+                    "next") VARIANT_NAME="[next](https://github.com/KernelSU-Next/KernelSU-Next/tree/dev) (KernelSU-Next)" ;;
                   esac
                   
                   VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1485,6 +1522,7 @@ jobs:
                   "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
                   "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
                   "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
+                  "next") VARIANT_NAME="[next](https://github.com/KernelSU-Next/KernelSU-Next/tree/dev) (KernelSU-Next)" ;;
                 esac
                 
                 VARIANT_COMMITS="${VARIANT_COMMITS}
@@ -1500,6 +1538,7 @@ jobs:
           [ -f "CHANGELOG-kowsu.md" ] && extract_variant_commits "kowsu"
           [ -f "CHANGELOG-mksu.md" ] && extract_variant_commits "mksu"
           [ -f "CHANGELOG-sukisu.md" ] && extract_variant_commits "sukisu"
+          [ -f "CHANGELOG-next.md" ] && extract_variant_commits "next"
           
           # Build the release notes (no duplicate title, no build table)
           RELEASE_NOTES="**Build Date:** ${{ env.BUILD_DATE }}  
@@ -1603,6 +1642,7 @@ jobs:
           [[ "${VARIANTS_BUILT}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
           [[ "${VARIANTS_BUILT}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
           [[ "${VARIANTS_BUILT}" == *"sukisu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}sukisu "
+          [[ "${VARIANTS_BUILT}" == *"next"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}next "
           
           # Clean up and format variants
           BUILT_VARIANTS=$(echo "${BUILT_VARIANTS}" | xargs)
@@ -1680,6 +1720,7 @@ jobs:
           KOWSU_KSU="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
           MKSU_KSU="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
           SUKISU_KSU="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
+          NEXT_KSU="${{ needs.build.outputs.next_ksu_version || 'Unknown' }}"
           
           # Set environment variables
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
@@ -1687,6 +1728,7 @@ jobs:
           echo "KOWSU_KSU_VERSION=${KOWSU_KSU}" >> $GITHUB_ENV
           echo "MKSU_KSU_VERSION=${MKSU_KSU}" >> $GITHUB_ENV
           echo "SUKISU_KSU_VERSION=${SUKISU_KSU}" >> $GITHUB_ENV
+          echo "NEXT_KSU_VERSION=${NEXT_KSU}" >> $GITHUB_ENV
 
       - name: Get CCache Statistics
         if: always()
@@ -1843,6 +1885,14 @@ jobs:
               KSU_INFO="✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
             fi
           fi
+          if [ -n "${{ env.NEXT_KSU_VERSION }}" ] && [ "${{ env.NEXT_KSU_VERSION }}" != "Unknown" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
+            fi
+          fi
           
           # Get CCache hits and misses for more detailed info
           CCACHE_HITS="${{ env.CCACHE_HITS || '0' }}"
@@ -1862,7 +1912,7 @@ jobs:
           MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
           ━━━━━━━━━━━━━━━━━━━━━
 
-          📦 *Variants:* ${{ env.VARIANT_COUNT }}/4 (${{ env.VARIANTS_FORMATTED }})
+          📦 *Variants:* ${{ env.VARIANT_COUNT }}/5 (${{ env.VARIANTS_FORMATTED }})
           ⏱️ *Duration:* ${BUILD_DURATION}
           🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
           📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI

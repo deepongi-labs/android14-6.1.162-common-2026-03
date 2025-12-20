@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.3.0 (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.3.0-bugfix (by deepongi@deepongi-labs)
 
 on:
   workflow_dispatch:
@@ -116,47 +116,6 @@ jobs:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       KSU_VARIANT: ${{ matrix.variant }}
-    
-    outputs:
-      tiann_zip: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
-      tiann_size: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
-      tiann_md5: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.MD5_HASH || '' }}
-      tiann_sha256: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
-      tiann_kernel_version: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
-      tiann_ksu_version: ${{ contains(matrix.variant, 'tiann') && steps.generate-file-info.outputs.VARIANT == 'tiann' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
-      
-      kowsu_zip: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
-      kowsu_size: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
-      kowsu_md5: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
-      kowsu_sha256: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
-      kowsu_kernel_version: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
-      kowsu_ksu_version: ${{ contains(matrix.variant, 'kowsu') && steps.generate-file-info.outputs.VARIANT == 'kowsu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
-      
-      mksu_zip: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
-      mksu_size: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
-      mksu_md5: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
-      mksu_sha256: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
-      mksu_kernel_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
-      mksu_ksu_version: ${{ contains(matrix.variant, 'mksu') && steps.generate-file-info.outputs.VARIANT == 'mksu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
-      
-      sukisu_zip: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.ZIP_NAME || '' }}
-      sukisu_size: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.FILE_SIZE || '' }}
-      sukisu_md5: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.MD5_HASH || '' }}
-      sukisu_sha256: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.SHA256_HASH || '' }}
-      sukisu_kernel_version: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.KERNEL_VERSION || '' }}
-      sukisu_ksu_version: ${{ contains(matrix.variant, 'sukisu') && steps.generate-file-info.outputs.VARIANT == 'sukisu' && steps.generate-file-info.outputs.KSU_VERSION || '' }}
-      
-      duration: ${{ steps.build-duration.outputs.duration || env.BUILD_TIME || 'Unknown' }}
-
-      # CCache stats (FIX: from job outputs, not logs)
-      ccache_hit_rate: ${{ steps.export-build-info.outputs.ccache_hit_rate || '' }}
-      ccache_hits: ${{ steps.export-build-info.outputs.ccache_hits || '' }}
-      ccache_misses: ${{ steps.export-build-info.outputs.ccache_misses || '' }}
-      ccache_size: ${{ steps.export-build-info.outputs.ccache_size || '' }}
-      
-      # Commit info (FIX: from job outputs, not hardcoded)
-      workflow_commit_hash: ${{ steps.export-build-info.outputs.commit_hash || '' }}
-      workflow_commit_message: ${{ steps.export-build-info.outputs.commit_message || '' }}
 
     steps:
       - name: Checkout with Submodules
@@ -200,6 +159,8 @@ jobs:
             cd kernel
             # Remove any KernelSU and patches
             rm -rf KernelSU drivers/kernelsu
+            # Remove ABI files that will be regenerated
+            rm -f android/abi_gki_protected_exports_* || true
             # Hard reset to remove all changes
             git reset --hard HEAD
             git clean -fdx
@@ -327,10 +288,19 @@ jobs:
               ;;
           esac
           
-          # Clone the KernelSU repository
+          # Clone the KernelSU repository with error handling
           echo "📥 Cloning $KSU_REPO on branch $KSU_BRANCH..."
-          git clone --depth=1 --branch=$KSU_BRANCH \
-            https://github.com/$KSU_REPO.git KernelSU
+          if ! git clone --depth=1 --branch=$KSU_BRANCH \
+            https://github.com/$KSU_REPO.git KernelSU; then
+            echo "❌ Failed to clone $KSU_REPO on branch $KSU_BRANCH"
+            echo "This could be due to:"
+            echo "  - Network failure"
+            echo "  - Repository not found"
+            echo "  - Branch does not exist"
+            echo "  - Rate limit exceeded"
+            exit 1
+          fi
+          echo "✅ Successfully cloned $KSU_REPO"
           
           if [ "$USE_SETUP_SH" = "true" ]; then
             # Execute setup.sh for standard variants (tiann, kowsu, mksu)
@@ -720,10 +690,21 @@ jobs:
           
           if [ -f "$VARIANT_SUSFS_PATCH" ]; then
             echo "📋 Applying variant-specific SuSFS patch from .github/patches/${{ matrix.variant }}/"
-            patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || true
+            # Dry-run first to check if it will apply
+            if patch -p1 --dry-run --forward < "$VARIANT_SUSFS_PATCH" > /dev/null 2>&1; then
+              patch -p1 --forward < "$VARIANT_SUSFS_PATCH"
+              echo "✅ Patch applied successfully"
+            else
+              echo "⏭️  Patch skipped (likely already applied or not needed)"
+            fi
           else
             echo "📋 Applying default SuSFS patch from susfs4ksu submodule"
-            patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || true
+            if patch -p1 --dry-run --forward < "$DEFAULT_SUSFS_PATCH" > /dev/null 2>&1; then
+              patch -p1 --forward < "$DEFAULT_SUSFS_PATCH"
+              echo "✅ Patch applied successfully"
+            else
+              echo "⏭️  Patch skipped (likely already applied or not needed)"
+            fi
           fi
           
           # Apply KernelSU-specific SuSFS patch
@@ -739,10 +720,20 @@ jobs:
               
               if [ -f "$VARIANT_KSU_PATCH" ]; then
                 echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/sukisu/"
-                patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
+                if patch -p1 --dry-run --forward < "$VARIANT_KSU_PATCH" > /dev/null 2>&1; then
+                  patch -p1 --forward < "$VARIANT_KSU_PATCH"
+                  echo "✅ Patch applied successfully"
+                else
+                  echo "⏭️  Patch skipped (likely already applied or not needed)"
+                fi
               else
                 echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
-                patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+                if patch -p1 --dry-run --forward < "$DEFAULT_KSU_PATCH" > /dev/null 2>&1; then
+                  patch -p1 --forward < "$DEFAULT_KSU_PATCH"
+                  echo "✅ Patch applied successfully"
+                else
+                  echo "⏭️  Patch skipped (likely already applied or not needed)"
+                fi
               fi
               cd ..
             fi
@@ -754,10 +745,20 @@ jobs:
             
             if [ -f "$VARIANT_KSU_PATCH" ]; then
               echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/${{ matrix.variant }}/"
-              patch -p1 --forward < "$VARIANT_KSU_PATCH" || true
+              if patch -p1 --dry-run --forward < "$VARIANT_KSU_PATCH" > /dev/null 2>&1; then
+                patch -p1 --forward < "$VARIANT_KSU_PATCH"
+                echo "✅ Patch applied successfully"
+              else
+                echo "⏭️  Patch skipped (likely already applied or not needed)"
+              fi
             else
               echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
-              patch -p1 --forward < "$DEFAULT_KSU_PATCH" || true
+              if patch -p1 --dry-run --forward < "$DEFAULT_KSU_PATCH" > /dev/null 2>&1; then
+                patch -p1 --forward < "$DEFAULT_KSU_PATCH"
+                echo "✅ Patch applied successfully"
+              else
+                echo "⏭️  Patch skipped (likely already applied or not needed)"
+              fi
             fi
             cd ..
           fi
@@ -771,7 +772,12 @@ jobs:
           LKM_SPOOF_PATCH="../../.github/patches/${{ matrix.variant }}/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
           if [ -f "$LKM_SPOOF_PATCH" ]; then
             echo "📋 Applying LKM spoof patch from .github/patches/${{ matrix.variant }}/"
-            patch -p1 --forward < "$LKM_SPOOF_PATCH" || true
+            if patch -p1 --dry-run --forward < "$LKM_SPOOF_PATCH" > /dev/null 2>&1; then
+              patch -p1 --forward < "$LKM_SPOOF_PATCH"
+              echo "✅ Patch applied successfully"
+            else
+              echo "⏭️  Patch skipped (likely already applied or not needed)"
+            fi
           else
             echo "⚠️ LKM spoof patch not found: $LKM_SPOOF_PATCH"
           fi
@@ -782,9 +788,17 @@ jobs:
           
           # CLIDR fix (essential for all variants)
           echo "📋 Applying fix-clidr-uninitialized.patch"
-          curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" \
-            -o /tmp/fix-clidr.patch
-          patch -p1 --forward < /tmp/fix-clidr.patch || true
+          if curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" \
+            -o /tmp/fix-clidr.patch; then
+            if patch -p1 --dry-run --forward < /tmp/fix-clidr.patch > /dev/null 2>&1; then
+              patch -p1 --forward < /tmp/fix-clidr.patch
+              echo "✅ Patch applied successfully"
+            else
+              echo "⏭️  Patch skipped (likely already applied or not needed)"
+            fi
+          else
+            echo "⚠️ Failed to download remote patch, continuing anyway"
+          fi
 
       - name: Patch Scripts
         run: |
@@ -958,20 +972,6 @@ jobs:
           fi
           
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
-
-      - name: Handle ABI File Changes
-        run: |
-          cd kernel
-          
-          # Remove ABI files as per KernelSU guide
-          echo "🧹 Removing ABI protected exports..."
-          rm -vf android/abi_gki_protected_exports_* || true
-          
-          # Clean kernel build to ensure everything rebuilds
-          echo "🧹 Cleaning kernel build..."
-          make -j$(nproc) LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out clean  # ⬅️ Update this line
-          
-          echo "✅ Ready for fresh build with modified ABI files"
 
       - name: Build Kernel
         run: |
@@ -1176,10 +1176,14 @@ jobs:
               ;;
           esac
           
-          # Clone the appropriate AnyKernel3 branch for this variant
+          # Clone the appropriate AnyKernel3 branch with error handling
           echo "📥 Cloning AnyKernel3 from $AK3_REPO on branch $AK3_BRANCH..."
-          git clone --depth=1 --branch=$AK3_BRANCH \
-            https://github.com/$AK3_REPO AnyKernel3
+          if ! git clone --depth=1 --branch=$AK3_BRANCH \
+            https://github.com/$AK3_REPO AnyKernel3; then
+            echo "❌ Failed to clone AnyKernel3 from $AK3_REPO on branch $AK3_BRANCH"
+            exit 1
+          fi
+          echo "✅ Successfully cloned AnyKernel3"
           
           cd AnyKernel3
           rm -rf .git .github

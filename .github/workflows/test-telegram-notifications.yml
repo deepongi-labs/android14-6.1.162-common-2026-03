@@ -1,0 +1,260 @@
+name: Test Telegram Notifications
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of notification to test'
+        required: true
+        default: 'success'
+        type: choice
+        options:
+          - success
+          - failure
+          - custom
+      custom_message:
+        description: 'Custom message (if test_type is custom)'
+        required: false
+        default: 'This is a test message'
+        type: string
+
+jobs:
+  test_notification:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Simulate Build Process
+        run: |
+          echo "🔧 Simulating build process..."
+          sleep 2
+          echo "✅ Build simulation complete!"
+
+      - name: Set Test Data
+        id: test-data
+        run: |
+          # Simulate build data
+          echo "BUILD_NUMBER=${{ github.run_number }}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
+          echo "BUILD_DURATION=2m 15s" >> $GITHUB_ENV
+          echo "KERNEL_VERSION=6.1.157" >> $GITHUB_ENV
+          echo "CCACHE_HIT_RATE=93.5%" >> $GITHUB_ENV
+          echo "CCACHE_HITS=131527" >> $GITHUB_ENV
+          echo "CCACHE_MISSES=8236" >> $GITHUB_ENV
+          echo "CCACHE_SIZE=34.2" >> $GITHUB_ENV
+          echo "VARIANT_COUNT=5" >> $GITHUB_ENV
+          echo "VARIANTS_FORMATTED=tiann | kowsu | mksu | sukisu | next" >> $GITHUB_ENV
+          echo "SUSFS_STATUS=✅ Enabled" >> $GITHUB_ENV
+          echo "TIANN_KSU_VERSION=r43826" >> $GITHUB_ENV
+          echo "KOWSU_KSU_VERSION=r43827" >> $GITHUB_ENV
+          echo "MKSU_KSU_VERSION=r43828" >> $GITHUB_ENV
+          echo "SUKISU_KSU_VERSION=r37185" >> $GITHUB_ENV
+          echo "NEXT_KSU_VERSION=r43829" >> $GITHUB_ENV
+          echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE=$(git log -1 --pretty=format:'%s')" >> $GITHUB_ENV
+
+      - name: Calculate CCache Emoji
+        run: |
+          # Simulate ccache emoji calculation
+          HIT_RATE="93.5"
+          RATE_NUM=$(echo "$HIT_RATE" | awk '{print int($1+0.5)}')
+          
+          if [ "$RATE_NUM" -ge 90 ]; then
+            CCACHE_EMOJI="🚀"
+          elif [ "$RATE_NUM" -ge 70 ]; then
+            CCACHE_EMOJI="⚡"
+          elif [ "$RATE_NUM" -ge 50 ]; then
+            CCACHE_EMOJI="📈"
+          elif [ "$RATE_NUM" -ge 20 ]; then
+            CCACHE_EMOJI="🐢"
+          else
+            CCACHE_EMOJI="🐌"
+          fi
+          
+          echo "CCACHE_EMOJI=$CCACHE_EMOJI" >> $GITHUB_ENV
+
+      - name: Send Success Notification
+        if: github.event.inputs.test_type == 'success'
+        run: |
+          CURRENT_TIME=$(date +"%H:%M")
+          
+          # Build KSU info
+          KSU_INFO=""
+          if [ -n "${{ env.TIANN_KSU_VERSION }}" ]; then
+            KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
+          fi
+          if [ -n "${{ env.KOWSU_KSU_VERSION }}" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
+            fi
+          fi
+          if [ -n "${{ env.MKSU_KSU_VERSION }}" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
+            fi
+          fi
+          if [ -n "${{ env.SUKISU_KSU_VERSION }}" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
+            fi
+          fi
+          if [ -n "${{ env.NEXT_KSU_VERSION }}" ]; then
+            if [ -n "$KSU_INFO" ]; then
+              KSU_INFO="$KSU_INFO
+          ✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
+            else
+              KSU_INFO="✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
+            fi
+          fi
+          
+          # Format CCache details
+          CCACHE_HITS="${{ env.CCACHE_HITS }}"
+          CCACHE_MISSES="${{ env.CCACHE_MISSES }}"
+          CCACHE_SIZE="${{ env.CCACHE_SIZE }}"
+          
+          CCACHE_DETAILS="${{ env.CCACHE_HIT_RATE }} (${CCACHE_HITS} hits, ${CCACHE_MISSES} misses)"
+          
+          MESSAGE="🚀 *Build #${{ env.BUILD_NUMBER }} | SUCCESS* *(TEST)*
+          ━━━━━━━━━━━━━━━━━━━━━
+          📦 *Variants:* ${{ env.VARIANT_COUNT }}/5 (${{ env.VARIANTS_FORMATTED }})
+          ⏱️ *Duration:* ${{ env.BUILD_DURATION }}
+          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
+          📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
+          
+          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
+          🎯 *CCache Hit-Rate:* ${CCACHE_DETAILS} ${{ env.CCACHE_EMOJI }}
+          💾 *Cache Size:* ${CCACHE_SIZE} GB
+          
+          🔧 *KSU Versions:*
+          ${KSU_INFO}
+          
+          ⬇️ *Downloads:*
+          [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ env.BUILD_NUMBER }})
+          
+          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
+          💬 *Message:* \"${{ env.COMMIT_MESSAGE }}\"
+          
+          🔗 *Links:*
+          ├─ [Release Page](https://github.com/${{ github.repository }}/releases/tag/build-${{ env.BUILD_NUMBER }})
+          ├─ [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          └─ [Download All](https://github.com/${{ github.repository }}/releases/tag/build-${{ env.BUILD_NUMBER }})
+          
+          🕰️ ${CURRENT_TIME} | GitHub Actions"
+          
+          echo "Generated message:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "$MESSAGE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Send with retry
+          for ATTEMPT in 1 2 3; do
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true && echo "✅ Sent!" && break
+            [ $ATTEMPT -lt 3 ] && echo "⚠️ Retry $ATTEMPT..." && sleep $((ATTEMPT * 2))
+          done
+
+      - name: Send Failure Notification
+        if: github.event.inputs.test_type == 'failure'
+        run: |
+          CURRENT_TIME=$(date +"%H:%M")
+          
+          MESSAGE="❌ *Build #${{ env.BUILD_NUMBER }} | FAILED* *(TEST)*
+          ━━━━━━━━━━━━━━━━━━━━━
+          🔨 *Failed Stage:* Build Process
+          ⏱️ *Duration:* ${{ env.BUILD_DURATION }}
+          📦 *Target Variants:* ${{ env.VARIANTS_FORMATTED }}
+          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
+          
+          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
+          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
+          
+          🚨 *Error Details:*
+          • Build process encountered an error
+          • Check specific variant logs below
+          • Last successful build: #$(({{ env.BUILD_NUMBER }} - 1))
+          
+          🔗 *Quick Actions:*
+          ├─ [View Error Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          ├─ [Retry This Build](https://github.com/${{ github.repository }}/actions/workflows/kernel-build.yml)
+          └─ [Compare with Previous](https://github.com/${{ github.repository }}/compare/build-$(({{ env.BUILD_NUMBER }} - 1))...build-${{ env.BUILD_NUMBER }})
+          
+          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
+          
+          🕰️ ${CURRENT_TIME} | GitHub Actions"
+          
+          echo "Generated failure message:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "$MESSAGE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Send with retry
+          for ATTEMPT in 1 2 3; do
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true && echo "✅ Sent!" && break
+            [ $ATTEMPT -lt 3 ] && echo "⚠️ Retry $ATTEMPT..." && sleep $((ATTEMPT * 2))
+          done
+
+      - name: Send Custom Notification
+        if: github.event.inputs.test_type == 'custom'
+        run: |
+          CURRENT_TIME=$(date +"%H:%M")
+          
+          MESSAGE="📬 *Test Notification*
+          ━━━━━━━━━━━━━━━━━━━━━
+          
+          ${{ github.event.inputs.custom_message }}
+          
+          🔧 *Build Info:*
+          • Build: #${{ env.BUILD_NUMBER }}
+          • Kernel: ${{ env.KERNEL_VERSION }}
+          • Variants: ${{ env.VARIANT_COUNT }}/5
+          
+          📝 *Commit:* \`${{ env.COMMIT_HASH }}\`
+          
+          🕰️ ${CURRENT_TIME} | GitHub Actions"
+          
+          echo "Generated custom message:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "$MESSAGE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Send with retry
+          for ATTEMPT in 1 2 3; do
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d text="$MESSAGE" \
+              -d parse_mode="Markdown" \
+              -d disable_web_page_preview=true && echo "✅ Sent!" && break
+            [ $ATTEMPT -lt 3 ] && echo "⚠️ Retry $ATTEMPT..." && sleep $((ATTEMPT * 2))
+          done
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 TELEGRAM NOTIFICATION TEST SUMMARY"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "✅ Test Type: ${{ github.event.inputs.test_type }}"
+          echo "✅ Build Number: ${{ env.BUILD_NUMBER }}"
+          echo "✅ Repository: ${{ github.repository }}"
+          echo ""
+          echo "Check your Telegram channel/group for the notification!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

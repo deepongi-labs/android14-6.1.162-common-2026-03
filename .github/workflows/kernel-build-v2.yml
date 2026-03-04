@@ -270,12 +270,20 @@ jobs:
             patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
           fi
 
-      - name: Apply Remote Patches
+      - name: Apply Remote Patches & Source Fixes
         run: |
           cd kernel
+          
+          # 1. CLIDR uninitialized fix
           curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o /tmp/fix-clidr.patch
           patch -p1 --forward < /tmp/fix-clidr.patch || true
+          
+          # 2. Fix localversion script appending dirty flags
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
+          
+          # 3. Fix libbpf compilation error (type casting issue with strchr)
+          echo "🔧 Patching libbpf.c type casting..."
+          sed -i 's/next_path = strchr(s, '"'"':'"'"');/next_path = (char *)strchr(s, '"'"':'"'"');/' tools/lib/bpf/libbpf.c
 
       - name: Configure Kernel
         run: |

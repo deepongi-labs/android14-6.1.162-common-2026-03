@@ -187,7 +187,7 @@ jobs:
             "mksu") KSU_REPO="5ec1cff/KernelSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
             "sukisu") 
               KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
-              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then KSU_BRANCH="tmp-builtin"; USE_SETUP_SH="false"; else KSU_BRANCH="main"; USE_SETUP_SH="true"; fi
+              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then KSU_BRANCH="builtin"; USE_SETUP_SH="false"; else KSU_BRANCH="main"; USE_SETUP_SH="true"; fi
               ;;
             "next") KSU_REPO="KernelSU-Next/KernelSU-Next"; KSU_BRANCH="dev"; USE_SETUP_SH="true" ;;
           esac

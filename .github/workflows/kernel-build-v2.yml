@@ -119,21 +119,29 @@ jobs:
           sudo rm -rf ${{ github.workspace }}/* || true
           sudo rm -rf ${{ github.workspace }}/.* || true
 
-      - name: Checkout with Submodules
+      - name: Checkout Workflow Repo
         uses: actions/checkout@v4
         with:
-          submodules: false
-          fetch-depth: 0
           clean: false
 
-      - name: Initialize and Update Submodules
+      - name: Clone Kernel & SuSFS Sources Explicitly
         run: |
+          echo "📦 Fetching kernel and SuSFS sources..."
           SUBMODULE_START=$SECONDS
-          git submodule update --init --recursive --remote --jobs 4 kernel & PID1=$!
-          git submodule update --init --recursive --remote --jobs 4 susfs4ksu & PID2=$!
-          wait $PID1 && wait $PID2
+          
+          # Clean up any empty placeholder directories 
+          rm -rf kernel susfs4ksu
+          
+          # 1. Clone Google's Android 14 6.1 GKI Kernel
+          echo "📥 Downloading Kernel source (android14-6.1-2025-12)..."
+          git clone --depth=1 --branch=android14-6.1-2025-12 https://github.com/aosp-mirror/kernel_common kernel
+          
+          # 2. Clone SuSFS
+          echo "📥 Downloading SuSFS source (gki-android14-6.1-dev)..."
+          git clone --depth=1 --branch=gki-android14-6.1-dev https://gitlab.com/simonpunk/susfs4ksu susfs4ksu
+          
           echo "SUBMODULE_TIME=$((SECONDS - SUBMODULE_START))s" >> $GITHUB_ENV
-
+          
       - name: Clean Kernel Directory Properly
         run: |
           if [ -d "kernel" ]; then

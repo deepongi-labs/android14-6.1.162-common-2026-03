@@ -102,7 +102,7 @@
 
         build:
           needs: setup
-          runs-on: [self-hosted, Linux, X64]
+          runs-on: [self-hosted, linux, x64]
           timeout-minutes: 120
           strategy:
             fail-fast: false
@@ -132,9 +132,9 @@
                 # Clean up any empty placeholder directories
                 rm -rf kernel susfs4ksu
                     
-                # 1. Clone the REAL kernel source tree, not the empty manifest tag!
-                echo "📥 Downloading Kernel source (android14-6.1)..."
-                git clone --depth=1 --branch=android14-6.1 https://android.googlesource.com/kernel/common kernel
+                # 1. Clone the REAL kernel source tree from the explicit branch
+                echo "📥 Downloading Kernel source (android14-6.1-2026-03)..."
+                git clone --depth=1 --branch=android14-6.1-2026-03 https://android.googlesource.com/kernel/common kernel
                     
                 # 2. Clone SuSFS
                 echo "📥 Downloading SuSFS source (gki-android14-6.1-dev)..."
@@ -407,7 +407,7 @@
 
         create_release:
           needs: [setup, build]
-          runs-on: [self-hosted, Linux, X64]
+          runs-on: [self-hosted, linux, x64]
           if: needs.setup.outputs.create_release == 'true' && success()
           steps:
             - name: Checkout
@@ -441,7 +441,7 @@
 
         notify:
           needs: [setup, create_release, build]
-          runs-on: [self-hosted, Linux, X64]
+          runs-on: [self-hosted, linux, x64]
           if: always() && github.event.inputs.enable_telegram == 'true'
           steps:
             - name: Send Telegram Notification

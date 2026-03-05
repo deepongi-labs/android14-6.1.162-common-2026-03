@@ -14,6 +14,7 @@ on:
           - kowsu
           - mksu
           - sukisu
+          - resukisu
           - next
       disable_susfs:
         description: 'Disable SuSFS features'
@@ -77,10 +78,10 @@ jobs:
           
           if [ "$VARIANT" = "all" ]; then
             if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","next"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants (SuSFS disabled)"
             else
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building SuSFS variants only (Skipping 'next')"
             fi
           else
@@ -189,6 +190,7 @@ jobs:
               KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
               if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then KSU_BRANCH="builtin"; USE_SETUP_SH="false"; else KSU_BRANCH="main"; USE_SETUP_SH="true"; fi
               ;;
+            "resukisu") KSU_REPO="ReSukiSU/ReSukiSU"; KSU_BRANCH="susfs-ksud"; USE_SETUP_SH="true" ;;
             "next") KSU_REPO="KernelSU-Next/KernelSU-Next"; KSU_BRANCH="dev"; USE_SETUP_SH="true" ;;
           esac
           
@@ -210,7 +212,7 @@ jobs:
           cd kernel/KernelSU
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
           
-          if [ "${{ matrix.variant }}" = "sukisu" ]; then
+          if [ "${{ matrix.variant }}" = "sukisu" ] || [ "${{ matrix.variant }}" = "resukisu" ]; then
             git fetch origin main:main --quiet || true
             KSU_COUNT=$(git rev-list --count main)
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
@@ -269,8 +271,8 @@ jobs:
           # Apply core SuSFS patch
           patch -p1 --forward < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || true
           
-          # Apply KSU specific SuSFS patch
-          if [ "${{ matrix.variant }}" != "sukisu" ]; then
+          # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
+          if [ "${{ matrix.variant }}" != "sukisu" ] && [ "${{ matrix.variant }}" != "resukisu" ]; then
             cd KernelSU
             patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
           fi
@@ -373,10 +375,11 @@ jobs:
             "kowsu") AK3_BRANCH="KowSU" ;;
             "mksu") AK3_BRANCH="MKSU" ;;
             "sukisu") AK3_BRANCH="sukisu" ;;
+            "resukisu") AK3_BRANCH="resukisu" ;;
             "next") AK3_BRANCH="next" ;;
           esac
           
-          git clone --depth=1 --branch=$AK3_BRANCH https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
+          git clone --depth=1 --branch=$AK3_BRANCH https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3 || git clone --depth=1 --branch=sukisu https://github.com/deepongi-labs/AnyKernel3-p8a AnyKernel3
           
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/

@@ -263,11 +263,11 @@ jobs:
           
           cd kernel
           
-          # Apply core SuSFS patch (Check for custom patch first)
+          # Apply core SuSFS patch (Check for custom patch first, but force default for mksu)
           VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           
-          if [ -f "$VARIANT_SUSFS_PATCH" ]; then
+          if [ -f "$VARIANT_SUSFS_PATCH" ] && [ "${{ matrix.variant }}" != "mksu" ]; then
             echo "📋 Applying CUSTOM core SuSFS patch from .github/patches/${{ matrix.variant }}/..."
             patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || echo "⚠️ Patch failed or already applied."
           else
@@ -279,11 +279,11 @@ jobs:
           if [ "${{ matrix.variant }}" != "sukisu" ] && [ "${{ matrix.variant }}" != "resukisu" ]; then
             cd KernelSU
             
-            # Check for custom KernelSU patch first
+            # Check for custom KernelSU patch first, but force default for mksu
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
             DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
             
-            if [ -f "$VARIANT_KSU_PATCH" ]; then
+            if [ -f "$VARIANT_KSU_PATCH" ] && [ "${{ matrix.variant }}" != "mksu" ]; then
               echo "📋 Applying CUSTOM 10_enable_susfs_for_ksu patch from .github/patches/${{ matrix.variant }}/..."
               patch -p1 --forward < "$VARIANT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
             else

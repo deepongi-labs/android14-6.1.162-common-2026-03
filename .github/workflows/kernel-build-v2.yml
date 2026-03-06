@@ -492,29 +492,30 @@ jobs:
         run: |
           STATUS="${{ needs.build.result }}"
           ICON="✅"
-          [ "$STATUS" != "success" ] && ICON="⚠️" # Warning icon if some matrix jobs failed but others passed
-          [ "$STATUS" == "failure" ] && ICON="❌" # Red X only if the whole thing crashed
+          [ "$STATUS" != "success" ] && ICON="⚠️"
+          [ "$STATUS" == "failure" ] && ICON="❌"
           
-          # Format variables for Telegram Markdown
+          # Format variables
           IS_CLEAN="${{ inputs.force_clean_build == true && 'Yes' || 'No' }}"
           IS_SUSFS="${{ inputs.disable_susfs == true && 'Disabled' || 'Enabled' }}"
           DO_REL="${{ inputs.create_release == true && 'Yes' || 'No' }}"
           
+          # Use HTML parsing to completely avoid Markdown character breaking (hyphens/underscores)
           cat << EOF > tg_message.txt
-          $ICON *Kernel Build ${STATUS^^}*
+          $ICON <b>Kernel Build ${STATUS^^}</b>
           ━━━━━━━━━━━━━━━━━━━━━
-          📱 *Target:* Pixel 8 / 8a / 8 Pro
-          🛠️ *Variant(s):* ${{ inputs.ksu_variant }}
-          🛡️ *SuSFS:* $IS_SUSFS
-          🧹 *Clean Build:* $IS_CLEAN
-          📦 *Release Created:* $DO_REL
-          👤 *Triggered by:* [${{ github.actor }}](https://github.com/${{ github.actor }})
+          📱 <b>Target:</b> Pixel 8 / 8a / 8 Pro
+          🛠️ <b>Variant(s):</b> ${{ inputs.ksu_variant }}
+          🛡️ <b>SuSFS:</b> $IS_SUSFS
+          🧹 <b>Clean Build:</b> $IS_CLEAN
+          📦 <b>Release Created:</b> $DO_REL
+          👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
           
-          🔗 [View Run Logs & Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>
           EOF
           
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d text="$(cat tg_message.txt)" \
-            -d parse_mode="Markdown" \
+            -d parse_mode="HTML" \
             -d disable_web_page_preview=true

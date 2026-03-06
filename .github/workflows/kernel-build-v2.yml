@@ -114,42 +114,47 @@ jobs:
       KSU_VARIANT: ${{ matrix.variant }}
 
     steps:
-      - name: Pre-Clean Workspace (Self-Hosted Guarantee)
+      - name: Pre-Clean Build Artifacts
         run: |
-          echo "🧹 Deep cleaning self-hosted workspace..."
-          sudo rm -rf ${{ github.workspace }}/* || true
-          sudo rm -rf ${{ github.workspace }}/.* || true
+          echo "🧹 Cleaning previous build artifacts..."
+          # We only remove the outputs and AnyKernel, leaving the source repos intact
+          rm -rf AnyKernel3 release-assets changelogs || true
 
       - name: Checkout Workflow Repo
         uses: actions/checkout@v4
         with:
           clean: false
 
-      - name: Clone Kernel & SuSFS Sources Explicitly
+      - name: Smart Sync Kernel & SuSFS Sources
         run: |
-          echo "📦 Fetching kernel and SuSFS sources..."
-              
-          # Clean up any empty placeholder directories
-          rm -rf kernel susfs4ksu
-              
-          # 1. Clone the REAL kernel source tree from the explicit branch
-          echo "📥 Downloading Kernel source (android14-6.1-2026-03)..."
-          git clone --depth=1 --branch=android14-6.1-2026-03 https://android.googlesource.com/kernel/common kernel
-              
-          # 2. Clone SuSFS
-          echo "📥 Downloading SuSFS source (gki-android14-6.1-dev)..."
-          git clone --depth=1 --branch=gki-android14-6.1-dev https://gitlab.com/simonpunk/susfs4ksu susfs4ksu
+          echo "📦 Smart syncing kernel and SuSFS sources..."
           
-      - name: Clean Kernel Directory Properly
-        run: |
-          if [ -d "kernel" ]; then
+          # 1. Smart Sync Kernel
+          if [ -d "kernel/.git" ]; then
+            echo "♻️ Existing Kernel tree found. Factory resetting and updating..."
             cd kernel
-            git reset --hard HEAD
+            git fetch --depth=1 origin android14-6.1-2026-03
+            git reset --hard origin/android14-6.1-2026-03
             git clean -fdx
-            rm -rf KernelSU drivers/kernelsu
-            rm -f android/abi_gki_protected_exports_* || true
+            cd ..
+          else
+            echo "📥 Downloading Kernel source..."
+            git clone --depth=1 --branch=android14-6.1-2026-03 https://android.googlesource.com/kernel/common kernel
           fi
-
+              
+          # 2. Smart Sync SuSFS
+          if [ -d "susfs4ksu/.git" ]; then
+            echo "♻️ Existing SuSFS tree found. Factory resetting and updating..."
+            cd susfs4ksu
+            git fetch --depth=1 origin gki-android14-6.1-dev
+            git reset --hard origin/gki-android14-6.1-dev
+            git clean -fdx
+            cd ..
+          else
+            echo "📥 Downloading SuSFS source..."
+            git clone --depth=1 --branch=gki-android14-6.1-dev https://gitlab.com/simonpunk/susfs4ksu susfs4ksu
+          fi
+          
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
         run: |
           # Workflow

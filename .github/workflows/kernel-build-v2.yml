@@ -263,17 +263,36 @@ jobs:
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
           
           cd kernel
-          # Apply core SuSFS patch
-          patch -p1 --forward < "../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" || true
+          
+          # --- RESTORED LOGIC: Apply core SuSFS patch (Check for custom patch first) ---
+          VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
+          DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+          
+          if [ -f "$VARIANT_SUSFS_PATCH" ]; then
+            echo "📋 Applying CUSTOM core SuSFS patch from .github/patches/${{ matrix.variant }}/..."
+            patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || echo "⚠️ Patch failed or already applied."
+          else
+            echo "📋 Applying DEFAULT core SuSFS patch..."
+            patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || echo "⚠️ Patch failed or already applied."
+          fi
           
           # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
           if [ "${{ matrix.variant }}" != "sukisu" ] && [ "${{ matrix.variant }}" != "resukisu" ]; then
             cd KernelSU
-            echo "📋 Applying standard 10_enable_susfs_for_ksu patch..."
-            patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+            
+            # --- RESTORED LOGIC: Check for custom KernelSU patch first ---
+            VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+            DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+            
+            if [ -f "$VARIANT_KSU_PATCH" ]; then
+              echo "📋 Applying CUSTOM 10_enable_susfs_for_ksu patch from .github/patches/${{ matrix.variant }}/..."
+              patch -p1 --forward < "$VARIANT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
+            else
+              echo "📋 Applying DEFAULT 10_enable_susfs_for_ksu patch..."
+              patch -p1 --forward < "$DEFAULT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
+            fi
             
             # --- NEXT VARIANT FIXES ---
-            # If the variant is KernelSU-Next, we must apply the WildKernels fixes over the standard patch
             if [ "${{ matrix.variant }}" = "next" ]; then
               echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
               WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.0.0"
@@ -407,77 +426,4 @@ jobs:
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
           
           cd AnyKernel3 && rm -rf .git .github
-          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
-          zip -r9 "../$ZIP_NAME" .
-          cd ..
-          
-          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-${{ matrix.variant }}-${{ github.run_number }}
-          path: |
-            ${{ env.KERNEL_ZIP }}
-            ${{ env.CHANGELOG_FILE }}
-
-  create_release:
-    needs: [setup, build]
-    runs-on: [self-hosted, linux, x64]
-    if: needs.setup.outputs.create_release == 'true' && success()
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-
-      - name: Create GitHub Release
-        run: |
-          cd release-assets
-          find . -type f -exec mv {} . \; 2>/dev/null || true
-          
-          RELEASE_NOTES="**Build Date:** $(date)
-          **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}
-          
-          ### Devices Supported
-          - Pixel 8, 8a, 8 Pro
-          
-          Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
-          
-          gh release create "build-${{ github.run_number }}" \
-            --title "Android 14 Kernel Build #${{ github.run_number }}" \
-            --notes "$RELEASE_NOTES" \
-            --repo "${{ github.repository }}" \
-            ./*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify:
-    needs: [setup, create_release, build]
-    runs-on: [self-hosted, linux, x64]
-    if: always() && github.event.inputs.enable_telegram == 'true'
-    steps:
-      - name: Send Telegram Notification
-        run: |
-          STATUS="${{ needs.build.result }}"
-          ICON="✅"
-          [ "$STATUS" != "success" ] && ICON="❌"
-          
-          # Clean heredoc for Telegram Message
-          cat << EOF > tg_message.txt
-          $ICON *Build #${{ github.run_number }} | ${STATUS^^}*
-          ━━━━━━━━━━━━━━━━━━━━━
-          📱 *Target:* Pixel 8a/8/8 Pro | GKI Make
-          🛡️ *SuSFS:* ${{ github.event.inputs.disable_susfs == 'true' && 'Disabled' || 'Enabled' }}
-          
-          🔗 [View GitHub Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          EOF
-          
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="$(cat tg_message.txt)" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview=true
+          ZIP_NAME="AK3-${KERNEL_VERSION

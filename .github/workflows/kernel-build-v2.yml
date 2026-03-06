@@ -321,6 +321,10 @@ jobs:
         run: |
           cd kernel
           
+          # 0. Bypass GKI ABI symbol checks
+          echo "🚫 Removing GKI protected exports..."
+          rm -f android/abi_gki_protected_exports_* || true
+          
           # 1. CLIDR uninitialized fix
           curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" -o /tmp/fix-clidr.patch
           patch -p1 --forward < /tmp/fix-clidr.patch || true

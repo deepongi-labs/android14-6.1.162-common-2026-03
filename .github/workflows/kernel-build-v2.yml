@@ -74,21 +74,12 @@ jobs:
         id: set-matrix
         run: |
           VARIANT="${{ github.event.inputs.ksu_variant }}"
-          DISABLE_SUSFS="${{ github.event.inputs.disable_susfs }}"
           
+          # We can now build 'next' alongside all others, so we don't need to skip it!
           if [ "$VARIANT" = "all" ]; then
-            if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu","next"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all variants (SuSFS disabled)"
-            else
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building SuSFS variants only (Skipping 'next')"
-            fi
+            echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu","next"]}' >> $GITHUB_OUTPUT
+            echo "🎯 Building all variants"
           else
-            if [ "$VARIANT" = "next" ] && [ "$DISABLE_SUSFS" != "true" ]; then
-              echo "❌ ERROR: Cannot build 'next' variant with SuSFS enabled"
-              exit 1
-            fi
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
             echo "🎯 Building single variant: $VARIANT"
           fi
@@ -117,7 +108,6 @@ jobs:
       - name: Pre-Clean Build Artifacts
         run: |
           echo "🧹 Cleaning previous build artifacts..."
-          # We only remove the outputs and AnyKernel, leaving the source repos intact
           rm -rf AnyKernel3 release-assets changelogs || true
 
       - name: Checkout Workflow Repo
@@ -154,7 +144,7 @@ jobs:
             echo "📥 Downloading SuSFS source..."
             git clone --depth=1 --branch=gki-android14-6.1-dev https://gitlab.com/simonpunk/susfs4ksu susfs4ksu
           fi
-          
+
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
         run: |
           # Workflow
@@ -266,7 +256,7 @@ jobs:
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true' && matrix.variant != 'next'
+        if: env.ENABLE_SUSFS == 'true'
         run: |
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
@@ -279,7 +269,34 @@ jobs:
           # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
           if [ "${{ matrix.variant }}" != "sukisu" ] && [ "${{ matrix.variant }}" != "resukisu" ]; then
             cd KernelSU
+            echo "📋 Applying standard 10_enable_susfs_for_ksu patch..."
             patch -p1 --forward < "../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+            
+            # --- NEXT VARIANT FIXES ---
+            # If the variant is KernelSU-Next, we must apply the WildKernels fixes over the standard patch
+            if [ "${{ matrix.variant }}" = "next" ]; then
+              echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
+              WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.0.0"
+              
+              curl -LSs "$WK_URL/fix_Makefile.patch" -o fix_Makefile.patch
+              curl -LSs "$WK_URL/fix_kernel_umount.c.patch" -o fix_kernel_umount.c.patch
+              curl -LSs "$WK_URL/fix_ksu.c.patch" -o fix_ksu.c.patch
+              curl -LSs "$WK_URL/fix_ksud.c.patch" -o fix_ksud.c.patch
+              curl -LSs "$WK_URL/fix_sucompat.c.patch" -o fix_sucompat.c.patch
+              curl -LSs "$WK_URL/fix_supercalls.c.patch" -o fix_supercalls.c.patch
+              curl -LSs "$WK_URL/ksu_toolkit.patch" -o ksu_toolkit.patch
+              
+              patch -p1 --forward < fix_Makefile.patch || true
+              patch -p1 --forward < fix_kernel_umount.c.patch || true
+              patch -p1 --forward < fix_ksu.c.patch || true
+              patch -p1 --forward < fix_ksud.c.patch || true
+              patch -p1 --forward < fix_sucompat.c.patch || true
+              patch -p1 --forward < fix_supercalls.c.patch || true
+              patch -p1 --forward < ksu_toolkit.patch || true
+              
+              echo "✅ WildKernels fixes applied successfully!"
+            fi
+            
           fi
 
       - name: Apply Remote Patches & Source Fixes
@@ -333,7 +350,7 @@ jobs:
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
           
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ "${{ matrix.variant }}" != "next" ]; then
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y

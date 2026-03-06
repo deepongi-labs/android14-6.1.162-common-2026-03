@@ -75,7 +75,7 @@ jobs:
         run: |
           VARIANT="${{ github.event.inputs.ksu_variant }}"
           
-          # We can now build 'next' alongside all others, so we don't need to skip it!
+          # We can now build 'next' alongside all others
           if [ "$VARIANT" = "all" ]; then
             echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","resukisu","next"]}' >> $GITHUB_OUTPUT
             echo "🎯 Building all variants"
@@ -233,7 +233,6 @@ jobs:
           mkdir -p changelogs
           CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
           
-          # Optimized: Use heredocs to generate the file cleanly
           cat << EOF > "$CHANGELOG_FILE"
           # 📋 Comprehensive Build Changelog
           
@@ -264,7 +263,7 @@ jobs:
           
           cd kernel
           
-          # --- RESTORED LOGIC: Apply core SuSFS patch (Check for custom patch first) ---
+          # Apply core SuSFS patch (Check for custom patch first)
           VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           
@@ -280,7 +279,7 @@ jobs:
           if [ "${{ matrix.variant }}" != "sukisu" ] && [ "${{ matrix.variant }}" != "resukisu" ]; then
             cd KernelSU
             
-            # --- RESTORED LOGIC: Check for custom KernelSU patch first ---
+            # Check for custom KernelSU patch first
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
             DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
             
@@ -329,7 +328,7 @@ jobs:
           # 2. Fix localversion script appending dirty flags
           sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
           
-          # 3. Fix libbpf compilation error (type casting issue with strchr)
+          # 3. Fix libbpf compilation error
           echo "🔧 Patching libbpf.c type casting..."
           sed -i 's/next_path = strchr(s, '"'"':'"'"');/next_path = (char *)strchr(s, '"'"':'"'"');/' tools/lib/bpf/libbpf.c
 
@@ -431,3 +430,87 @@ jobs:
           cd ..
           
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.variant }}-${{ github.run_number }}
+          path: |
+            ${{ env.KERNEL_ZIP }}
+            ${{ env.CHANGELOG_FILE }}
+
+  create_release:
+    needs: [setup, build]
+    runs-on: [self-hosted, linux, x64]
+    if: always() && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Create GitHub Release
+        run: |
+          cd release-assets
+          find . -type f -exec mv {} . \; 2>/dev/null || true
+          
+          # Safety check: Only create release if at least one ZIP was actually built
+          if ! ls *.zip 1> /dev/null 2>&1; then
+            echo "❌ No ZIP artifacts found! All matrix builds must have failed. Skipping release."
+            exit 0
+          fi
+          
+          RELEASE_NOTES="**Build Date:** $(date)
+          **SuSFS:** ${{ inputs.disable_susfs == true && '❌ Disabled' || '✅ Enabled' }}
+          
+          ### Devices Supported
+          - Pixel 8, 8a, 8 Pro
+          
+          Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
+          
+          gh release create "build-${{ github.run_number }}" \
+            --title "Android 14 Kernel Build #${{ github.run_number }}" \
+            --notes "$RELEASE_NOTES" \
+            --repo "${{ github.repository }}" \
+            ./*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    needs: [setup, create_release, build]
+    runs-on: [self-hosted, linux, x64]
+    if: always() && inputs.enable_telegram
+    steps:
+      - name: Send Telegram Notification
+        run: |
+          STATUS="${{ needs.build.result }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="⚠️" # Warning icon if some matrix jobs failed but others passed
+          [ "$STATUS" == "failure" ] && ICON="❌" # Red X only if the whole thing crashed
+          
+          # Format variables for Telegram Markdown
+          IS_CLEAN="${{ inputs.force_clean_build == true && 'Yes' || 'No' }}"
+          IS_SUSFS="${{ inputs.disable_susfs == true && 'Disabled' || 'Enabled' }}"
+          DO_REL="${{ inputs.create_release == true && 'Yes' || 'No' }}"
+          
+          cat << EOF > tg_message.txt
+          $ICON *Kernel Build ${STATUS^^}*
+          ━━━━━━━━━━━━━━━━━━━━━
+          📱 *Target:* Pixel 8 / 8a / 8 Pro
+          🛠️ *Variant(s):* ${{ inputs.ksu_variant }}
+          🛡️ *SuSFS:* $IS_SUSFS
+          🧹 *Clean Build:* $IS_CLEAN
+          📦 *Release Created:* $DO_REL
+          👤 *Triggered by:* [${{ github.actor }}](https://github.com/${{ github.actor }})
+          
+          🔗 [View Run Logs & Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$(cat tg_message.txt)" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview=true

@@ -175,7 +175,8 @@ jobs:
       - name: Setup KernelSU Variant
         run: |
           KSU_SETUP_START=$SECONDS
-          cd kernel && rm -rf KernelSU drivers/kernelsu
+          # Nuke the rogue KernelSU-Next folder as well to clean up the runner
+          cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
           
           case "${{ matrix.variant }}" in
             "tiann") KSU_REPO="tiann/KernelSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
@@ -191,17 +192,21 @@ jobs:
           
           git clone --depth=1 --branch=$KSU_BRANCH https://github.com/$KSU_REPO.git KernelSU
           
+          # We manually integrate KSU to prevent fork setup scripts from rogue cloning
           if [ "$USE_SETUP_SH" = "true" ]; then
-            chmod +x KernelSU/kernel/setup.sh && ./KernelSU/kernel/setup.sh .
+            echo "🔗 Manually symlinking KernelSU..."
+            ln -sf ../KernelSU/kernel drivers/kernelsu
           else
+            echo "📋 Manually copying KernelSU (No symlink)..."
             cp -r KernelSU/kernel drivers/kernelsu
-            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-            grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
+          
+          # Add KSU to kernel makefiles
+          grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV && echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
           echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
-
       - name: Get KSU Version Info & Commit
         run: |
           cd kernel/KernelSU

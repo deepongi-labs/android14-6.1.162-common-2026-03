@@ -315,11 +315,13 @@ jobs:
           fi
 
           # ---------------------------------------------------------
-          # Inject missing SuSFS definitions into task_mmu.c
-          # Make sure we are back in the kernel root directory first!
+          # Inject missing SuSFS definitions into task_mmu.c SAFELY
           cd $GITHUB_WORKSPACE/kernel
           echo "🔧 Fixing missing headers in task_mmu.c..."
-          sed -i '1i #include <linux/susfs_def.h>\n#include <linux/susfs.h>' fs/proc/task_mmu.c
+          # Delete our old bad injection if it's there
+          sed -i '/#include <linux\/susfs/d' fs/proc/task_mmu.c
+          # Inject the headers AFTER all the standard kernel includes
+          sed -i '/#include <linux\/pkeys.h>/a #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/proc/task_mmu.c
           # ---------------------------------------------------------
 
       - name: Apply Remote Patches & Source Fixes

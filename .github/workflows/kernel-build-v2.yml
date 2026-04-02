@@ -369,12 +369,23 @@ jobs:
         run: |
           cd kernel
           export ARCH=arm64
-          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          export CC="ccache clang"
-          export CXX="ccache clang++"
+          
+          # Safely wrap Clang with ccache via symlinks (avoids Kbuild parsing errors)
+          CCACHE_PATH=$(which ccache || true)
+          if [ -n "$CCACHE_PATH" ]; then
+            echo "✅ ccache found at $CCACHE_PATH. Setting up interceptors..."
+            mkdir -p ccache-bin
+            ln -sf "$CCACHE_PATH" ccache-bin/clang
+            ln -sf "$CCACHE_PATH" ccache-bin/clang++
+            # Put symlinks first, then the real toolchain, then the rest of PATH
+            export PATH="$PWD/ccache-bin:${{ env.CLANG_BIN }}:$PATH"
+          else
+            echo "⚠️ ccache not found! Falling back to standard compilation..."
+            export PATH="${{ env.CLANG_BIN }}:$PATH"
+          fi
           
           MAKE_JOBS=$(nproc)
           START_TIME=$SECONDS
@@ -383,8 +394,8 @@ jobs:
             make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean
           fi
           
-          # Crucial Make Command (Exactly as requested)
-          make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out CC="$CC"
+          # Crucial Make Command (Dropped CC override, let LLVM=1 & PATH handle it)
+          make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out
           
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
 

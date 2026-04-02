@@ -274,7 +274,7 @@ jobs:
           fi
           
           # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
-          if [ "${{ matrix.variant }}" != "resukisu" ]; then
+          if [ "${{ matrix.variant }}" != "resukisu" ] && [ "${{ matrix.variant }}" != "next" ]; then
             cd KernelSU
             
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
@@ -288,30 +288,8 @@ jobs:
               patch -p1 --forward < "$DEFAULT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
             fi
             
-            # --- NEXT VARIANT FIXES ---
-            if [ "${{ matrix.variant }}" = "next" ]; then
-              echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
-              WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.0.0"
-              
-              curl -LSs "$WK_URL/fix_Makefile.patch" -o fix_Makefile.patch
-              curl -LSs "$WK_URL/fix_kernel_umount.c.patch" -o fix_kernel_umount.c.patch
-              curl -LSs "$WK_URL/fix_ksu.c.patch" -o fix_ksu.c.patch
-              curl -LSs "$WK_URL/fix_ksud.c.patch" -o fix_ksud.c.patch
-              curl -LSs "$WK_URL/fix_sucompat.c.patch" -o fix_sucompat.c.patch
-              curl -LSs "$WK_URL/fix_supercalls.c.patch" -o fix_supercalls.c.patch
-              curl -LSs "$WK_URL/ksu_toolkit.patch" -o ksu_toolkit.patch
-              
-              patch -p1 --forward < fix_Makefile.patch || true
-              patch -p1 --forward < fix_kernel_umount.c.patch || true
-              patch -p1 --forward < fix_ksu.c.patch || true
-              patch -p1 --forward < fix_ksud.c.patch || true
-              patch -p1 --forward < fix_sucompat.c.patch || true
-              patch -p1 --forward < fix_supercalls.c.patch || true
-              patch -p1 --forward < ksu_toolkit.patch || true
-              
-              echo "✅ WildKernels fixes applied successfully!"
-            fi
-            
+          elif [ "${{ matrix.variant }}" = "next" ]; then
+            echo "📋 Skipping KSU directory patching for 'next' variant (dev-susfs branch handles this natively)."
           fi
 
       - name: Apply Remote Patches & Source Fixes

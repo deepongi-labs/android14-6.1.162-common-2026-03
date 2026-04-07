@@ -252,7 +252,7 @@ jobs:
           
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
 
-      - name: Setup SuSFS
+      - name: Setup SuSFS (Fail-Fast)
         if: env.ENABLE_SUSFS == 'true'
         run: |
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
@@ -267,10 +267,10 @@ jobs:
           
           if [ -f "$VARIANT_SUSFS_PATCH" ]; then
             echo "📋 Applying CUSTOM core SuSFS patch from .github/patches/${{ matrix.variant }}/..."
-            patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || echo "⚠️ Patch failed or already applied."
+            patch -p1 --forward < "$VARIANT_SUSFS_PATCH" || exit 1
           else
             echo "📋 Applying DEFAULT core SuSFS patch..."
-            patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || echo "⚠️ Patch failed or already applied."
+            patch -p1 --forward < "$DEFAULT_SUSFS_PATCH" || exit 1
           fi
           
           # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
@@ -282,10 +282,10 @@ jobs:
             
             if [ -f "$VARIANT_KSU_PATCH" ]; then
               echo "📋 Applying CUSTOM 10_enable_susfs_for_ksu patch from .github/patches/${{ matrix.variant }}/..."
-              patch -p1 --forward < "$VARIANT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
+              patch -p1 --forward < "$VARIANT_KSU_PATCH" || exit 1
             else
               echo "📋 Applying DEFAULT 10_enable_susfs_for_ksu patch..."
-              patch -p1 --forward < "$DEFAULT_KSU_PATCH" || echo "❌ KSU SuSFS Patch Failed!"
+              patch -p1 --forward < "$DEFAULT_KSU_PATCH" || exit 1
             fi
             
           elif [ "${{ matrix.variant }}" = "next" ]; then
@@ -354,12 +354,21 @@ jobs:
           
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
+          # Standard KernelSU / KOWX712 Names
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          
+          # KernelSU-Next Specific Names (Catch-All)
+          CONFIG_KSU_NEXT_SUSFS=y
+          CONFIG_KSU_NEXT_SUSFS_SUS_PATH=y
+          CONFIG_KSU_NEXT_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_NEXT_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_NEXT_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_NEXT_SUSFS_ENABLE_LOG=y
           EOF
           fi
           

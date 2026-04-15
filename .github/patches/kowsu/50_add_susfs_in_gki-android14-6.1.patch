@@ -455,7 +455,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index f22f76d9c..c0f1cad21 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,10 +32,24 @@
+@@ -33,10 +33,24 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>

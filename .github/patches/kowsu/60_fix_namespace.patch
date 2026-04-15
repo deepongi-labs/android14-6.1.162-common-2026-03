@@ -1,6 +1,6 @@
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,10 +32,24 @@
+@@ -33,10 +33,24 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>

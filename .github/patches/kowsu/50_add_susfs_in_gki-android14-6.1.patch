@@ -462,7 +462,6 @@ index f22f76d9c..c0f1cad21 100644
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +#include <linux/susfs_def.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 
  #include "pnode.h"
  #include "internal.h"
  

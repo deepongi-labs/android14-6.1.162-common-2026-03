@@ -478,7 +478,6 @@ index f22f76d9c..c0f1cad21 100644
 +
  /* Maximum number of mounts in a mount namespace */
  static unsigned int sysctl_mount_max __read_mostly = 100000;
- 
 @@ -144,6 +158,17 @@ static int mnt_alloc_id(struct mount *mnt)
  
  static void mnt_free_id(struct mount *mnt)

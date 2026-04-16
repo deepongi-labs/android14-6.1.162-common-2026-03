@@ -284,14 +284,6 @@ jobs:
           cp "$WORK_ROOT/susfs4ksu/kernel_patches/include/linux/susfs_def.h" "$WORK_ROOT/kernel/include/linux/"
           cd "$WORK_ROOT/kernel"
 
-          namespace_patch="$GITHUB_WORKSPACE/.github/patches/global/namespace_susfs_fix.patch"
-          if [[ -f "$namespace_patch" ]]; then
-            echo "📋 Applying shared namespace.c SuSFS fix..."
-            patch -p1 --forward < "$namespace_patch"
-          else
-            echo "ℹ️ No shared namespace.c SuSFS fix found, continuing..."
-          fi
-
           variant_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           default_patch="$WORK_ROOT/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           if [[ -f "$variant_patch" ]]; then

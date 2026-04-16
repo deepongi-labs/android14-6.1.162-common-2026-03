@@ -284,20 +284,37 @@ jobs:
           cp "$WORK_ROOT/susfs4ksu/kernel_patches/include/linux/susfs_def.h" "$WORK_ROOT/kernel/include/linux/"
           cd "$WORK_ROOT/kernel"
 
+          # Apply global namespace_susfs_fix patch FIRST
+          global_namespace_patch="$GITHUB_WORKSPACE/.github/patches/global/namespace_susfs_fix.patch"
+          if [[ -f "$global_namespace_patch" ]]; then
+            echo "Applying global namespace_susfs_fix patch..."
+            if patch -p1 --forward < "$global_namespace_patch"; then
+              echo "✓ Global namespace_susfs_fix patch applied successfully"
+            else
+              echo "⚠ Global namespace_susfs_fix patch failed or already applied"
+            fi
+          fi
+
+          # Then apply variant or default patches
           variant_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           default_patch="$WORK_ROOT/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           if [[ -f "$variant_patch" ]]; then
+            echo "Applying variant-specific patch: $variant_patch"
             patch -p1 --forward < "$variant_patch"
           else
+            echo "Applying default patch: $default_patch"
             patch -p1 --forward < "$default_patch"
           fi
+          
           if [[ "$KSU_VARIANT" != "resukisu" && "$KSU_VARIANT" != "next" ]]; then
             cd "$WORK_ROOT/kernel/KernelSU"
             variant_ksu_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
             default_ksu_patch="$WORK_ROOT/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
             if [[ -f "$variant_ksu_patch" ]]; then
+              echo "Applying variant KSU patch: $variant_ksu_patch"
               patch -p1 --forward < "$variant_ksu_patch"
             else
+              echo "Applying default KSU patch: $default_ksu_patch"
               patch -p1 --forward < "$default_ksu_patch"
             fi
           fi

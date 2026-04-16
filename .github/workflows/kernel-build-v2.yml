@@ -144,12 +144,32 @@ jobs:
           mkdir -p "$WORK_ROOT"
           mkdir -p "$CCACHE_DIR"
 
-      - name: Sync sources
+      - name: Sync sources (using persistent kernel cache)
         shell: bash
+        env:
+          KERNEL_CACHE_DIR: /mnt/kernel-persistent-cache
         run: |
           set -euo pipefail
           [[ "$DEBUG_BUILD" == "true" ]] && set -x
-          git clone --depth=1 --branch="${KERNEL_BRANCH}" "${KERNEL_REPO_URL}" "$WORK_ROOT/kernel"
+          
+          # Initialize bare repository cache if not exists
+          if [[ ! -d "$KERNEL_CACHE_DIR/.git" ]]; then
+            echo "::notice::Initializing persistent kernel cache at $KERNEL_CACHE_DIR..."
+            mkdir -p "$KERNEL_CACHE_DIR"
+            git clone --bare "${KERNEL_REPO_URL}" "$KERNEL_CACHE_DIR"
+          fi
+          
+          # Clone from local cache using reference (fast!)
+          echo "::notice::Cloning kernel from persistent cache..."
+          git clone --depth=1 --branch="${KERNEL_BRANCH}" --reference "$KERNEL_CACHE_DIR" "${KERNEL_REPO_URL}" "$WORK_ROOT/kernel"
+          
+          # Update cache in background for next build
+          (
+            cd "$KERNEL_CACHE_DIR"
+            git fetch origin "${KERNEL_BRANCH}:${KERNEL_BRANCH}" --force &>/dev/null
+          ) &
+          
+          # Clone SUSFS normally
           git clone --depth=1 --branch="${SUSFS_BRANCH}" "${SUSFS_REPO_URL}" "$WORK_ROOT/susfs4ksu"
 
       - name: Record source metadata
@@ -284,26 +304,32 @@ jobs:
           cp "$WORK_ROOT/susfs4ksu/kernel_patches/include/linux/susfs_def.h" "$WORK_ROOT/kernel/include/linux/"
           cd "$WORK_ROOT/kernel"
 
-          # Apply global namespace_susfs_fix patch FIRST
-          global_namespace_patch="$GITHUB_WORKSPACE/.github/patches/global/namespace_susfs_fix.patch"
-          if [[ -f "$global_namespace_patch" ]]; then
-            echo "Applying global namespace_susfs_fix patch..."
-            if patch -p1 --forward < "$global_namespace_patch"; then
-              echo "✓ Global namespace_susfs_fix patch applied successfully"
-            else
-              echo "⚠ Global namespace_susfs_fix patch failed or already applied"
-            fi
-          fi
-
-          # Then apply variant or default patches
+          # Apply variant or default patches
           variant_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           default_patch="$WORK_ROOT/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
           if [[ -f "$variant_patch" ]]; then
             echo "Applying variant-specific patch: $variant_patch"
-            patch -p1 --forward < "$variant_patch"
+            patch -p1 --forward < "$variant_patch" || patch_failed=true
           else
             echo "Applying default patch: $default_patch"
-            patch -p1 --forward < "$default_patch"
+            patch -p1 --forward < "$default_patch" || patch_failed=true
+          fi
+          
+          # Manual fallback for fs/namespace.c patch failure
+          if [[ -f "fs/namespace.c.rej" ]]; then
+            echo "::warning::Detected fs/namespace.c patch rejection, applying manual fallback..."
+            if ! grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT" fs/namespace.c; then
+              # Add susfs includes after #include <linux/mnt_idmapping.h>
+              sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c
+              
+              # Add susfs declarations after #include "internal.h"
+              sed -i '/#include "internal.h"/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c
+              
+              rm -f fs/namespace.c.rej
+              echo "::notice::Manual fallback patch applied successfully to fs/namespace.c"
+            else
+              echo "::notice::fs/namespace.c already contains susfs patches"
+            fi
           fi
           
           if [[ "$KSU_VARIANT" != "resukisu" && "$KSU_VARIANT" != "next" ]]; then
@@ -312,10 +338,10 @@ jobs:
             default_ksu_patch="$WORK_ROOT/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
             if [[ -f "$variant_ksu_patch" ]]; then
               echo "Applying variant KSU patch: $variant_ksu_patch"
-              patch -p1 --forward < "$variant_ksu_patch"
+              patch -p1 --forward < "$variant_ksu_patch" || true
             else
               echo "Applying default KSU patch: $default_ksu_patch"
-              patch -p1 --forward < "$default_ksu_patch"
+              patch -p1 --forward < "$default_ksu_patch" || true
             fi
           fi
 

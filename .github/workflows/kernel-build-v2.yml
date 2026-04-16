@@ -128,8 +128,12 @@ jobs:
           done
           test -x "${CLANG_BIN}/clang" || { echo "Missing clang at ${CLANG_BIN}/clang"; exit 1; }
           test -x "${CLANG_BIN}/ld.lld" || { echo "Missing ld.lld at ${CLANG_BIN}/ld.lld"; exit 1; }
-          test -x "${ARM64_TOOLCHAIN%?}gcc" || { echo "Missing ARM64 toolchain near ${ARM64_TOOLCHAIN}"; exit 1; }
-          test -x "${ARM32_TOOLCHAIN%?}gcc" || { echo "Missing ARM32 toolchain near ${ARM32_TOOLCHAIN}"; exit 1; }
+          arm64_dir="$(dirname "${ARM64_TOOLCHAIN}")"
+          arm64_prefix="$(basename "${ARM64_TOOLCHAIN}")"
+          arm32_dir="$(dirname "${ARM32_TOOLCHAIN}")"
+          arm32_prefix="$(basename "${ARM32_TOOLCHAIN}")"
+          compgen -G "${arm64_dir}/${arm64_prefix}*" >/dev/null || { echo "Missing ARM64 toolchain prefix near ${ARM64_TOOLCHAIN}"; ls -la "${arm64_dir}" || true; exit 1; }
+          compgen -G "${arm32_dir}/${arm32_prefix}*" >/dev/null || { echo "Missing ARM32 toolchain prefix near ${ARM32_TOOLCHAIN}"; ls -la "${arm32_dir}" || true; exit 1; }
           df -h .
 
       - name: Prepare isolated workspace

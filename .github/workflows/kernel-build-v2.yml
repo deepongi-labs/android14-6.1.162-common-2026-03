@@ -122,7 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          required=(git curl patch zip make sed grep awk find xargs ccache)
+          required=(git curl patch zip make sed grep awk find xargs ccache perl)
           for bin in "${required[@]}"; do
             command -v "$bin" >/dev/null 2>&1 || { echo "Missing required binary: $bin"; exit 1; }
           done
@@ -151,25 +151,22 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DEBUG_BUILD" == "true" ]] && set -x
-          
-          # Initialize bare repository cache if not exists
-          if [[ ! -d "$KERNEL_CACHE_DIR/.git" ]]; then
+
+          if [[ ! -d "$KERNEL_CACHE_DIR" ]] || [[ -z "$(ls -A "$KERNEL_CACHE_DIR" 2>/dev/null || true)" ]]; then
             echo "::notice::Initializing persistent kernel cache at $KERNEL_CACHE_DIR..."
+            rm -rf "$KERNEL_CACHE_DIR"
             mkdir -p "$KERNEL_CACHE_DIR"
             git clone --bare "${KERNEL_REPO_URL}" "$KERNEL_CACHE_DIR"
           fi
-          
-          # Clone from local cache using reference (fast!)
+
           echo "::notice::Cloning kernel from persistent cache..."
           git clone --depth=1 --branch="${KERNEL_BRANCH}" --reference "$KERNEL_CACHE_DIR" "${KERNEL_REPO_URL}" "$WORK_ROOT/kernel"
-          
-          # Update cache in background for next build
+
           (
             cd "$KERNEL_CACHE_DIR"
-            git fetch origin "${KERNEL_BRANCH}:${KERNEL_BRANCH}" --force &>/dev/null
+            git fetch origin "${KERNEL_BRANCH}:${KERNEL_BRANCH}" --force &>/dev/null || true
           ) &
-          
-          # Clone SUSFS normally
+
           git clone --depth=1 --branch="${SUSFS_BRANCH}" "${SUSFS_REPO_URL}" "$WORK_ROOT/susfs4ksu"
 
       - name: Record source metadata
@@ -286,10 +283,10 @@ jobs:
 
           | Component | Commit | Commit Date | Summary |
           |---|---|---|---|
-          | KernelSU | \\`${KSU_COMMIT_SHORT}\\` | ${KSU_COMMIT_DATE} | ${KSU_COMMIT_MSG} |
-          | Kernel | \\`${KERNEL_COMMIT_SHORT}\\` | ${KERNEL_COMMIT_DATE} | ${KERNEL_COMMIT_MSG} |
-          | SuSFS4KSU | \\`${SUSFS_COMMIT_SHORT}\\` | ${SUSFS_COMMIT_DATE} | ${SUSFS_COMMIT_MSG} |
-          | Workflow | \\`${WORKFLOW_COMMIT_SHORT}\\` | ${WORKFLOW_COMMIT_DATE} | ${WORKFLOW_COMMIT_MSG} |
+          | KernelSU | \\`${KSU_COMMIT_SHORT}` | ${KSU_COMMIT_DATE} | ${KSU_COMMIT_MSG} |
+          | Kernel | \\`${KERNEL_COMMIT_SHORT}` | ${KERNEL_COMMIT_DATE} | ${KERNEL_COMMIT_MSG} |
+          | SuSFS4KSU | \\`${SUSFS_COMMIT_SHORT}` | ${SUSFS_COMMIT_DATE} | ${SUSFS_COMMIT_MSG} |
+          | Workflow | \\`${WORKFLOW_COMMIT_SHORT}` | ${WORKFLOW_COMMIT_DATE} | ${WORKFLOW_COMMIT_MSG} |
           EOF
           echo "CHANGELOG_FILE=$changefile" >> "$GITHUB_ENV"
 
@@ -304,34 +301,37 @@ jobs:
           cp "$WORK_ROOT/susfs4ksu/kernel_patches/include/linux/susfs_def.h" "$WORK_ROOT/kernel/include/linux/"
           cd "$WORK_ROOT/kernel"
 
-          # Apply variant or default patches
           variant_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           default_patch="$WORK_ROOT/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+          patch_to_apply="$default_patch"
+          patch_label="default"
+
           if [[ -f "$variant_patch" ]]; then
-            echo "Applying variant-specific patch: $variant_patch"
-            patch -p1 --forward < "$variant_patch" || patch_failed=true
-          else
-            echo "Applying default patch: $default_patch"
-            patch -p1 --forward < "$default_patch" || patch_failed=true
+            echo "Trying variant-specific patch: $variant_patch"
+            if patch --dry-run -p1 --forward < "$variant_patch" >/dev/null 2>&1; then
+              patch_to_apply="$variant_patch"
+              patch_label="variant-specific"
+            else
+              echo "::warning::Variant-specific patch is not cleanly applicable or is malformed, falling back to default patch"
+            fi
           fi
-          
-          # Manual fallback for fs/namespace.c patch failure
+
+          echo "Applying ${patch_label} patch: $patch_to_apply"
+          patch -p1 --forward < "$patch_to_apply"
+
           if [[ -f "fs/namespace.c.rej" ]]; then
             echo "::warning::Detected fs/namespace.c patch rejection, applying manual fallback..."
             if ! grep -q "CONFIG_KSU_SUSFS_SUS_MOUNT" fs/namespace.c; then
-              # Add susfs includes after #include <linux/mnt_idmapping.h>
               sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c
-              
-              # Add susfs declarations after #include "internal.h"
               sed -i '/#include "internal.h"/a #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c
-              
               rm -f fs/namespace.c.rej
               echo "::notice::Manual fallback patch applied successfully to fs/namespace.c"
             else
               echo "::notice::fs/namespace.c already contains susfs patches"
+              rm -f fs/namespace.c.rej
             fi
           fi
-          
+
           if [[ "$KSU_VARIANT" != "resukisu" && "$KSU_VARIANT" != "next" ]]; then
             cd "$WORK_ROOT/kernel/KernelSU"
             variant_ksu_patch="$GITHUB_WORKSPACE/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
@@ -352,7 +352,7 @@ jobs:
           cd "$WORK_ROOT/kernel"
           rm -f android/abi_gki_protected_exports_* || true
           sed -i '/# Check for uncommitted changes\./,/fi/d' scripts/setlocalversion
-          sed -i 's/next_path = strchr(s, '\''':'\'');/next_path = (char *)strchr(s, '\''':'\'');/' tools/lib/bpf/libbpf.c
+          perl -0pi -e 's/next_path = strchr\(s, ":"\);/next_path = \(char \*\)strchr\(s, ":"\);/g; s/next_path = strchr\(s, '\''':''\''\);/next_path = \(char \*\)strchr\(s, '\''':''\''\);/g' tools/lib/bpf/libbpf.c
 
       - name: Configure kernel
         shell: bash

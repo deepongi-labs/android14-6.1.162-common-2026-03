@@ -218,7 +218,7 @@ jobs:
             "tiann") KSU_REPO="tiann/KernelSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="KOWX712/KernelSU"; KSU_BRANCH="master"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="ReSukiSU/ReSukiSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
-            "next") KSU_REPO="rifsxd/KernelSU-Next"; KSU_BRANCH="next-susfs-a14-6.1-dev"; USE_SETUP_SH="true" ;;
+            "next") KSU_REPO="KernelSU-Next/KernelSU-Next"; KSU_BRANCH="stable"; USE_SETUP_SH="true" ;;
           esac
           
           git clone --depth=1 --branch=$KSU_BRANCH https://github.com/$KSU_REPO.git KernelSU
@@ -343,7 +343,7 @@ jobs:
             "Default core SuSFS patch"
           
           # Apply KSU-specific SuSFS patch only for variants that still need it.
-          # RIFSXD KernelSU-Next and ReSukiSU already carry the base integration.
+          # KernelSU-Next stable and ReSukiSU already carry the base integration.
           if [ "${{ matrix.variant }}" != "resukisu" ] && [ "${{ matrix.variant }}" != "next" ]; then
             cd KernelSU
             

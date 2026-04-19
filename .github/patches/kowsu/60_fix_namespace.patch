@@ -1,11 +1,12 @@
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -33,10 +33,24 @@
+@@ -32,10 +32,24 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +#include <linux/susfs_def.h>
++#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  
  #include "pnode.h"
  #include "internal.h"

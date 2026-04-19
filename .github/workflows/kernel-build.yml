@@ -50,7 +50,7 @@ env:
   CLANG_BIN: /usr/lib/llvm-17/bin
   ARM64_TOOLCHAIN: aarch64-linux-gnu-
   ARM32_TOOLCHAIN: arm-linux-gnueabihf-
-  CCACHE_DIR: /mnt/ccache/.ccache
+  CCACHE_DIR: ~/.ccache
 
 jobs:
   setup:
@@ -152,6 +152,17 @@ jobs:
           echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
           echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
+
+          # Prefer persistent self-hosted ccache storage when available; fall back
+          # to a writable per-user path on GitHub-hosted runners.
+          if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
+            SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
+          else
+            SELECTED_CCACHE_DIR="$HOME/.ccache"
+            mkdir -p "$SELECTED_CCACHE_DIR"
+          fi
+
+          echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
           
           echo "✅ Build tools installed and configured"
 
@@ -249,8 +260,7 @@ jobs:
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
           
           if [ "${{ matrix.variant }}" = "resukisu" ]; then
-            git fetch origin main:main --quiet || true
-            KSU_COUNT=$(git rev-list --count main)
+            KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
           elif [ "${{ matrix.variant }}" = "next" ]; then
             KSU_COUNT=$(git rev-list --count HEAD)
@@ -309,6 +319,28 @@ jobs:
             fi
           }
 
+          apply_variant_or_default_patch() {
+            local variant_patch="$1"
+            local default_patch="$2"
+            local variant_desc="$3"
+            local default_desc="$4"
+
+            if [ -f "$variant_patch" ]; then
+              if patch -p1 --forward --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "📋 Applying CUSTOM patch: $variant_desc"
+                patch -p1 --forward < "$variant_patch"
+                return 0
+              elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "ℹ️ ${variant_desc} already present, skipping."
+                return 0
+              else
+                echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
+              fi
+            fi
+
+            apply_patch_or_fail "$default_patch" "$default_desc"
+          }
+
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
@@ -318,14 +350,12 @@ jobs:
           # Apply core SuSFS patch
           VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
-          
-          if [ -f "$VARIANT_SUSFS_PATCH" ]; then
-            echo "📋 Applying CUSTOM core SuSFS patch from .github/patches/${{ matrix.variant }}/..."
-            apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
-          else
-            echo "📋 Applying DEFAULT core SuSFS patch..."
-            apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          fi
+
+          apply_variant_or_default_patch \
+            "$VARIANT_SUSFS_PATCH" \
+            "$DEFAULT_SUSFS_PATCH" \
+            "Custom core SuSFS patch" \
+            "Default core SuSFS patch"
           
           # Apply KSU-specific SuSFS patch only for variants that still need it.
           # KernelSU-Next dev-susfs and ReSukiSU already carry the base integration.
@@ -334,14 +364,12 @@ jobs:
             
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
             DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-            
-            if [ -f "$VARIANT_KSU_PATCH" ]; then
-              echo "📋 Applying CUSTOM 10_enable_susfs_for_ksu patch from .github/patches/${{ matrix.variant }}/..."
-              apply_patch_or_fail "$VARIANT_KSU_PATCH" "Custom KernelSU SuSFS patch"
-            else
-              echo "📋 Applying DEFAULT 10_enable_susfs_for_ksu patch..."
-              apply_patch_or_fail "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"
-            fi
+
+            apply_variant_or_default_patch \
+              "$VARIANT_KSU_PATCH" \
+              "$DEFAULT_KSU_PATCH" \
+              "Custom KernelSU SuSFS patch" \
+              "Default KernelSU SuSFS patch"
           fi
 
           # --- NEXT VARIANT FIXES ---

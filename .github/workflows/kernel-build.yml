@@ -584,10 +584,18 @@ jobs:
   notify:
     needs: [setup, create_release, build]
     runs-on: ubuntu-24.04
-    if: always() && inputs.enable_telegram && secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+    if: always() && inputs.enable_telegram
     steps:
       - name: Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are not configured; skipping notification."
+            exit 0
+          fi
+
           STATUS="${{ needs.build.result }}"
           ICON="✅"
           [ "$STATUS" != "success" ] && ICON="⚠️"
@@ -613,8 +621,8 @@ jobs:
           EOF
           
           # Safely URL-encode the file using --data-urlencode text@filename
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
             --data-urlencode text@tg_message.txt \
             -d parse_mode="HTML" \
             -d disable_web_page_preview=true

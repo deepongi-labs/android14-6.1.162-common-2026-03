@@ -47,10 +47,10 @@ permissions:
 env:
   # Configurable paths with sensible defaults for GitHub-hosted runners
   # Self-hosted runners can override these via environment variables
-  CLANG_BIN: ${CLANG_BIN:-/usr/lib/llvm-17/bin}
-  ARM64_TOOLCHAIN: ${ARM64_TOOLCHAIN:-aarch64-linux-gnu-}
-  ARM32_TOOLCHAIN: ${ARM32_TOOLCHAIN:-arm-linux-gnueabihf-}
-  CCACHE_DIR: ${CCACHE_DIR:-$HOME/.ccache}
+  CLANG_BIN: /usr/lib/llvm-17/bin
+  ARM64_TOOLCHAIN: aarch64-linux-gnu-
+  ARM32_TOOLCHAIN: arm-linux-gnueabihf-
+  CCACHE_DIR: /mnt/ccache/.ccache
 
 jobs:
   setup:

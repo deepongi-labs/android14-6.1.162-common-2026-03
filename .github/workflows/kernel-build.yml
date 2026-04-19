@@ -45,16 +45,15 @@ permissions:
   packages: write
 
 env:
-  # Configurable paths with sensible defaults for GitHub-hosted runners
-  # Self-hosted runners can override these via environment variables
-  CLANG_BIN: /usr/lib/llvm-17/bin
-  ARM64_TOOLCHAIN: aarch64-linux-gnu-
-  ARM32_TOOLCHAIN: arm-linux-gnueabihf-
-  CCACHE_DIR: ~/.ccache
+  # Prefer local self-hosted toolchains when available.
+  CLANG_BIN: /mnt/Android/clang-22/bin
+  ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/aarch64/bin/aarch64-linux-gnu-
+  ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm/bin/arm-linux-gnueabihf-
+  CCACHE_DIR: /mnt/ccache/.ccache
 
 jobs:
   setup:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
@@ -92,7 +91,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -116,45 +115,24 @@ jobs:
 
       - name: Setup Build Tools & Dependencies
         run: |
-          echo "🔧 Setting up build tools for GitHub Actions..."
-          
-          # Update package lists
-          sudo apt-get update -qq
-          
-          # Install essential build tools
-          sudo apt-get install -y \
-            build-essential \
-            ccache \
-            clang-17 \
-            llvm-17 \
-            llvm-17-tools \
-            lld-17 \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf \
-            g++-aarch64-linux-gnu \
-            g++-arm-linux-gnueabihf \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabihf \
-            git \
-            curl \
-            wget \
-            flex \
-            bison \
-            libssl-dev \
-            libelf-dev \
-            libstdc++-12-dev
-          
-          # Create symlinks for toolchain
-          export CLANG_BIN="/usr/lib/llvm-17/bin"
-          export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
-          export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
-          
+          echo "🔧 Resolving build tools for self-hosted runner..."
+
+          if [ -x "/mnt/Android/clang-22/bin/clang" ] && [ -d "/mnt/Hawai/toolchains" ]; then
+            export CLANG_BIN="/mnt/Android/clang-22/bin"
+            export ARM64_TOOLCHAIN="/mnt/Hawai/toolchains/aarch64/bin/aarch64-linux-gnu-"
+            export ARM32_TOOLCHAIN="/mnt/Hawai/toolchains/arm/bin/arm-linux-gnueabihf-"
+            echo "Using local self-hosted toolchains."
+          else
+            echo "Falling back to distro toolchains from PATH."
+            export CLANG_BIN="/usr/lib/llvm-17/bin"
+            export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
+            export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
+          fi
+
           echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
           echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
 
-          # Prefer persistent self-hosted ccache storage when available; fall back
-          # to a writable per-user path on GitHub-hosted runners.
           if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
             SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
           else
@@ -163,8 +141,15 @@ jobs:
           fi
 
           echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
-          
-          echo "✅ Build tools installed and configured"
+
+          command -v git >/dev/null
+          command -v curl >/dev/null
+          command -v patch >/dev/null
+          command -v make >/dev/null
+          command -v ccache >/dev/null
+          command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
+
+          echo "✅ Build tools configured"
 
       - name: Smart Sync Kernel & SuSFS Sources
         run: |
@@ -571,7 +556,7 @@ jobs:
 
   create_release:
     needs: [setup, build]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     if: always() && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled'
     steps:
       - name: Checkout
@@ -612,7 +597,7 @@ jobs:
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     if: always() && inputs.enable_telegram
     steps:
       - name: Send Telegram Notification

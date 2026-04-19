@@ -645,11 +645,6 @@ jobs:
           echo "🔧 Patching libbpf.c type casting..."
           apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
 
-          # 6. Align tiann with the locally tested SuSFS integration tree.
-          if [ "${KSU_VARIANT}" = "tiann" ] && [ "${ENABLE_SUSFS}" = "true" ]; then
-            apply_repo_patch_or_fail ".github/patches/tiann/tiann_tested_integration_fix.patch" "Tiann tested SuSFS integration fix"
-          fi
-
       - name: Verify Patched Tree
         run: |
           set -e

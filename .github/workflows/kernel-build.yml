@@ -285,36 +285,52 @@ jobs:
           echo "✅ Build tools configured"
           echo "::endgroup::"
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('kernel/.config') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Static analysis (shellcheck)
+        run: |
+          if command -v shellcheck >/dev/null; then
+            shellcheck **/*.sh || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
       - name: Smart Sync Kernel & SuSFS Sources
         run: |
           set -e
-          sync_repo() {
+          sync_repo_shallow() {
             local name="$1"
             local url="$2"
             local ref="$3"
             local target="$4"
-            local mirror="${SOURCE_MIRROR_DIR}/${name}.git"
 
             echo "::group::Sync ${name}"
-            if [ ! -d "$mirror" ]; then
-              git clone --mirror "$url" "$mirror"
+            if [ -d "${target}/.git" ]; then
+              git -C "$target" remote set-url origin "$url"
+              git -C "$target" fetch --depth=1 origin "$ref"
+              git -C "$target" checkout --detach FETCH_HEAD
+              git -C "$target" clean -fdx
             else
-              git -C "$mirror" remote set-url origin "$url"
-              git -C "$mirror" fetch --prune origin
+              rm -rf "$target"
+              git clone --depth=1 --branch="$ref" "$url" "$target"
+              git -C "$target" checkout --detach
             fi
 
-            rm -rf "$target"
-            git clone --reference-if-able "$mirror" "$mirror" "$target"
-            git -C "$target" fetch --depth=1 origin "$ref"
-            git -C "$target" checkout --detach FETCH_HEAD
             echo "${name} -> $(git -C "$target" rev-parse --short HEAD)"
             echo "::endgroup::"
           }
 
           echo "📦 Smart syncing kernel and SuSFS sources..."
 
-          sync_repo "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
-          sync_repo "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
+          # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
+          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
+          sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
 
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
         run: |
@@ -566,11 +582,13 @@ jobs:
           
           # 1. CLIDR uninitialized fix
           fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
+            if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
           
           # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
           echo "📶 Applying Wi-Fi patch..."
           fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+            if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
           
           # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.

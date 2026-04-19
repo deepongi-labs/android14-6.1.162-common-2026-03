@@ -1,2 +1,6 @@
 
 .aider*
+# Archives and backup files
+*.tar.gz
+*.zip
+files/

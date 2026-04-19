@@ -536,17 +536,50 @@ jobs:
           VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
+          try_apply_patch() {
+            local patch_file="$1"
+            local desc="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch: $desc"
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${desc} already present, skipping."
+              printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            return 1
+          }
+
           if [ -f "$VARIANT_KSU_PATCH" ]; then
-            apply_variant_or_default_patch \
-              "$VARIANT_KSU_PATCH" \
-              "$DEFAULT_KSU_PATCH" \
-              "Custom KernelSU SuSFS patch" \
-              "Default KernelSU SuSFS patch"
-          elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
-            echo "ℹ️ KernelSU SuSFS integration already present, skipping fallback patch."
-            printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+            if ! try_apply_patch "$VARIANT_KSU_PATCH" "Custom KernelSU SuSFS patch"; then
+              echo "⚠️ Custom KernelSU SuSFS patch is stale, falling back to default: $VARIANT_KSU_PATCH"
+              printf '%s | %s | stale-fallback\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+                if grep -R -q 'KSU_SUSFS' kernel 2>/dev/null; then
+                  echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                  printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/*" >> "$PATCH_MANIFEST"
+                else
+                  echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                  printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                  exit 1
+                fi
+              fi
+            fi
           else
-            apply_patch_or_fail "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"
+            if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+              if grep -R -q 'KSU_SUSFS' kernel 2>/dev/null; then
+                echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/*" >> "$PATCH_MANIFEST"
+              else
+                echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                exit 1
+              fi
+            fi
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

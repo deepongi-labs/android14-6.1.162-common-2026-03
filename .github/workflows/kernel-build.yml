@@ -518,15 +518,21 @@ jobs:
           
           cd kernel
           
-          # Apply core SuSFS patch
+          # Apply core SuSFS patch. KOWSU uses the upstream 50-patch on common
+          # plus a follow-up namespace fix instead of its variant-specific 50-patch.
           VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          apply_variant_or_default_patch \
-            "$VARIANT_SUSFS_PATCH" \
-            "$DEFAULT_SUSFS_PATCH" \
-            "Custom core SuSFS patch" \
-            "Default core SuSFS patch"
+          if [ "${{ matrix.variant }}" = "kowsu" ]; then
+            apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
+            apply_patch_or_fail "../.github/patches/global/namespace_susfs_fix.patch" "KOWSU namespace SuSFS fix"
+          else
+            apply_variant_or_default_patch \
+              "$VARIANT_SUSFS_PATCH" \
+              "$DEFAULT_SUSFS_PATCH" \
+              "Custom core SuSFS patch" \
+              "Default core SuSFS patch"
+          fi
           
           # Always attempt the KernelSU-side SuSFS integration patch.
           # Some upstream variants drift over time; the helper will skip cleanly

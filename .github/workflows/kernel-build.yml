@@ -645,6 +645,11 @@ jobs:
           echo "🔧 Patching libbpf.c type casting..."
           apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
 
+          # 6. Align tiann with the locally tested SuSFS integration tree.
+          if [ "${KSU_VARIANT}" = "tiann" ] && [ "${ENABLE_SUSFS}" = "true" ]; then
+            apply_repo_patch_or_fail ".github/patches/tiann/tiann_tested_integration_fix.patch" "Tiann tested SuSFS integration fix"
+          fi
+
       - name: Verify Patched Tree
         run: |
           set -e
@@ -769,6 +774,12 @@ jobs:
           MAKE_JOBS=$(nproc)
           START_TIME=$SECONDS
 
+          if [ "${KSU_VARIANT}" = "tiann" ]; then
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
+          else
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
+          fi
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
@@ -777,7 +788,7 @@ jobs:
             O=out gki_defconfig
 
           # Append all custom GKI, Tensor G3, Net, and KSU configs before resolving dependencies.
-          cat << 'EOF' >> out/.config
+          cat <<EOF >> out/.config
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_A510=y
@@ -798,7 +809,11 @@ jobs:
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
           CONFIG_KSU=y
-          CONFIG_LOCALVERSION="-deepongi+"
+          CONFIG_KSU_DEBUG=n
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_LOCALVERSION_AUTO=n
+          ${KSU_LOCALVERSION}
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
 

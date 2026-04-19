@@ -285,6 +285,22 @@ jobs:
           echo "✅ Build tools configured"
           echo "::endgroup::"
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('kernel/.config') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Static analysis (shellcheck)
+        run: |
+          if command -v shellcheck >/dev/null; then
+            shellcheck **/*.sh || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
       - name: Smart Sync Kernel & SuSFS Sources
         run: |
           set -e
@@ -566,11 +582,13 @@ jobs:
           
           # 1. CLIDR uninitialized fix
           fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
+            if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
           
           # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
           echo "📶 Applying Wi-Fi patch..."
           fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+            if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
           
           # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.

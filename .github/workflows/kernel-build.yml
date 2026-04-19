@@ -528,20 +528,19 @@ jobs:
             "Custom core SuSFS patch" \
             "Default core SuSFS patch"
           
-          # Apply KSU-specific SuSFS patch only for variants that still need it.
-          # KernelSU-Next stable and ReSukiSU already carry the base integration.
-          if [ "${{ matrix.variant }}" != "resukisu" ] && [ "${{ matrix.variant }}" != "next" ]; then
-            cd KernelSU
-            
-            VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
-            DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          # Always attempt the KernelSU-side SuSFS integration patch.
+          # Some upstream variants drift over time; the helper will skip cleanly
+          # when the integration is already present.
+          cd KernelSU
 
-            apply_variant_or_default_patch \
-              "$VARIANT_KSU_PATCH" \
-              "$DEFAULT_KSU_PATCH" \
-              "Custom KernelSU SuSFS patch" \
-              "Default KernelSU SuSFS patch"
-          fi
+          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+
+          apply_variant_or_default_patch \
+            "$VARIANT_KSU_PATCH" \
+            "$DEFAULT_KSU_PATCH" \
+            "Custom KernelSU SuSFS patch" \
+            "Default KernelSU SuSFS patch"
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
 

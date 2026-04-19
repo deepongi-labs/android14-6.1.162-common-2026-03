@@ -420,6 +420,11 @@ jobs:
 
       - name: Build Kernel
         run: |
+          set -o pipefail
+          mkdir -p logs
+          LOG_FILE="$GITHUB_WORKSPACE/logs/build-${{ matrix.variant }}.log"
+          exec > >(tee -a "$LOG_FILE") 2>&1
+
           cd kernel
           export ARCH=arm64
           export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
@@ -540,6 +545,29 @@ jobs:
           path: |
             ${{ env.KERNEL_ZIP }}
             ${{ env.CHANGELOG_FILE }}
+
+      - name: Collect Failure Logs
+        if: failure()
+        run: |
+          ARTIFACT_DIR="failure-logs/${{ matrix.variant }}"
+          mkdir -p "$ARTIFACT_DIR"
+
+          [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
+          [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
+          [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
+
+          find kernel/out -maxdepth 3 -type f \
+            \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \
+            -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+      - name: Upload Failure Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
+          path: failure-logs/${{ matrix.variant }}
+          if-no-files-found: warn
 
   create_release:
     needs: [setup, build]

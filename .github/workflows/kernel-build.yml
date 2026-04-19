@@ -449,15 +449,16 @@ jobs:
           echo "🔧 Patching libbpf.c type casting..."
           sed -i 's/next_path = strchr(s, '"'"':'"'"');/next_path = (char *)strchr(s, '"'"':'"'"');/' tools/lib/bpf/libbpf.c
 
-      - name: Configure Kernel
+      - name: Build Kernel
         run: |
           cd kernel
           export ARCH=arm64
           export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CC="ccache ${{ env.CLANG_BIN }}/clang"
+          export CXX="ccache ${{ env.CLANG_BIN }}/clang++"
           export HOSTCC="ccache ${{ env.CLANG_BIN }}/clang"
           export HOSTCXX="ccache ${{ env.CLANG_BIN }}/clang++"
           export LD="${{ env.CLANG_BIN }}/ld.lld"
@@ -471,14 +472,17 @@ jobs:
           export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
+          MAKE_JOBS=$(nproc)
+          START_TIME=$SECONDS
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out gki_defconfig
-          
-          # Append all custom GKI, Tensor G3, Net, and KSU configs via cleanly formatted heredoc
+
+          # Append all custom GKI, Tensor G3, Net, and KSU configs before resolving dependencies.
           cat << 'EOF' >> out/.config
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
@@ -503,7 +507,7 @@ jobs:
           CONFIG_LOCALVERSION="-deepongi+"
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
-          
+
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
@@ -514,39 +518,13 @@ jobs:
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           EOF
           fi
-          
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out olddefconfig
-
-      - name: Build Kernel (Make)
-        run: |
-          cd kernel
-          export ARCH=arm64
-          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
-          export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
-          export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          export CC="ccache ${{ env.CLANG_BIN }}/clang"
-          export CXX="ccache ${{ env.CLANG_BIN }}/clang++"
-          export HOSTCC="ccache ${{ env.CLANG_BIN }}/clang"
-          export HOSTCXX="ccache ${{ env.CLANG_BIN }}/clang++"
-          export LD="${{ env.CLANG_BIN }}/ld.lld"
-          export HOSTLD="${{ env.CLANG_BIN }}/ld.lld"
-          export AR="${{ env.CLANG_BIN }}/llvm-ar"
-          export HOSTAR="${{ env.CLANG_BIN }}/llvm-ar"
-          export NM="${{ env.CLANG_BIN }}/llvm-nm"
-          export OBJCOPY="${{ env.CLANG_BIN }}/llvm-objcopy"
-          export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
-          export READELF="${{ env.CLANG_BIN }}/llvm-readelf"
-          export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
-          export CLANG_TRIPLE="aarch64-linux-gnu-"
-          
-          MAKE_JOBS=$(nproc)
-          START_TIME=$SECONDS
           
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             make -j$MAKE_JOBS O=out clean

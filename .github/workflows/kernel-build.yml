@@ -218,7 +218,7 @@ jobs:
             "tiann") KSU_REPO="tiann/KernelSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="KOWX712/KernelSU"; KSU_BRANCH="master"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="ReSukiSU/ReSukiSU"; KSU_BRANCH="main"; USE_SETUP_SH="true" ;;
-            "next") KSU_REPO="pershoot/KernelSU-Next"; KSU_BRANCH="dev-susfs"; USE_SETUP_SH="true" ;;
+            "next") KSU_REPO="rifsxd/KernelSU-Next"; KSU_BRANCH="next-susfs-a14-6.1-dev"; USE_SETUP_SH="true" ;;
           esac
           
           git clone --depth=1 --branch=$KSU_BRANCH https://github.com/$KSU_REPO.git KernelSU
@@ -343,7 +343,7 @@ jobs:
             "Default core SuSFS patch"
           
           # Apply KSU-specific SuSFS patch only for variants that still need it.
-          # KernelSU-Next dev-susfs and ReSukiSU already carry the base integration.
+          # RIFSXD KernelSU-Next and ReSukiSU already carry the base integration.
           if [ "${{ matrix.variant }}" != "resukisu" ] && [ "${{ matrix.variant }}" != "next" ]; then
             cd KernelSU
             
@@ -355,37 +355,6 @@ jobs:
               "$DEFAULT_KSU_PATCH" \
               "Custom KernelSU SuSFS patch" \
               "Default KernelSU SuSFS patch"
-          fi
-
-          # --- NEXT VARIANT FIXES ---
-          if [ "${{ matrix.variant }}" = "next" ]; then
-            cd KernelSU
-            echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
-            WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.1.0"
-
-            fetch_patch_or_fail() {
-              local url="$1"
-              local destination="$2"
-              curl --fail --location --silent --show-error "$url" -o "$destination"
-            }
-            
-            fetch_patch_or_fail "$WK_URL/fix_Makefile.patch" fix_Makefile.patch
-            fetch_patch_or_fail "$WK_URL/fix_kernel_umount.c.patch" fix_kernel_umount.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_init.c.patch" fix_init.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_setuid_hook.c.patch" fix_setuid_hook.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_sucompat.c.patch" fix_sucompat.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_supercall.c.patch" fix_supercall.c.patch
-            fetch_patch_or_fail "$WK_URL/ksu_toolkit.patch" ksu_toolkit.patch
-
-            apply_patch_or_fail fix_Makefile.patch "WildKernels Makefile fix"
-            apply_patch_or_fail fix_kernel_umount.c.patch "WildKernels kernel_umount fix"
-            apply_patch_or_fail fix_init.c.patch "WildKernels init.c fix"
-            apply_patch_or_fail fix_setuid_hook.c.patch "WildKernels setuid_hook.c fix"
-            apply_patch_or_fail fix_sucompat.c.patch "WildKernels sucompat fix"
-            apply_patch_or_fail fix_supercall.c.patch "WildKernels supercall fix"
-            apply_patch_or_fail ksu_toolkit.patch "WildKernels toolkit fix"
-            
-            echo "✅ WildKernels fixes applied successfully!"
           fi
 
       - name: Apply Remote Patches & Source Fixes
@@ -535,7 +504,7 @@ jobs:
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
-            gki_defconfig all
+            all
           
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
 

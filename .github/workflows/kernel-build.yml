@@ -386,18 +386,18 @@ jobs:
             
             fetch_patch_or_fail "$WK_URL/fix_Makefile.patch" fix_Makefile.patch
             fetch_patch_or_fail "$WK_URL/fix_kernel_umount.c.patch" fix_kernel_umount.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_ksu.c.patch" fix_ksu.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_ksud.c.patch" fix_ksud.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_init.c.patch" fix_init.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_setuid_hook.c.patch" fix_setuid_hook.c.patch
             fetch_patch_or_fail "$WK_URL/fix_sucompat.c.patch" fix_sucompat.c.patch
-            fetch_patch_or_fail "$WK_URL/fix_supercalls.c.patch" fix_supercalls.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_supercall.c.patch" fix_supercall.c.patch
             fetch_patch_or_fail "$WK_URL/ksu_toolkit.patch" ksu_toolkit.patch
 
             apply_patch_or_fail fix_Makefile.patch "WildKernels Makefile fix"
             apply_patch_or_fail fix_kernel_umount.c.patch "WildKernels kernel_umount fix"
-            apply_patch_or_fail fix_ksu.c.patch "WildKernels ksu.c fix"
-            apply_patch_or_fail fix_ksud.c.patch "WildKernels ksud fix"
+            apply_patch_or_fail fix_init.c.patch "WildKernels init.c fix"
+            apply_patch_or_fail fix_setuid_hook.c.patch "WildKernels setuid_hook.c fix"
             apply_patch_or_fail fix_sucompat.c.patch "WildKernels sucompat fix"
-            apply_patch_or_fail fix_supercalls.c.patch "WildKernels supercalls fix"
+            apply_patch_or_fail fix_supercall.c.patch "WildKernels supercall fix"
             apply_patch_or_fail ksu_toolkit.patch "WildKernels toolkit fix"
             
             echo "✅ WildKernels fixes applied successfully!"

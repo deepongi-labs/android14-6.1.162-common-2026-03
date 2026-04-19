@@ -575,15 +575,7 @@ jobs:
           
           # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.
           if [ -f "drivers/kernelsu/app_profile.c" ] && grep -q "char comm\\[TASK_COMM_LEN\\];" drivers/kernelsu/app_profile.c; then
-            python - <<'PY'
-from pathlib import Path
-path = Path("drivers/kernelsu/app_profile.c")
-text = path.read_text()
-needle = "char comm[TASK_COMM_LEN];"
-replacement = "static char comm[TASK_COMM_LEN];"
-if needle in text:
-    path.write_text(text.replace(needle, replacement, 1))
-PY
+            python -c 'from pathlib import Path; p=Path("drivers/kernelsu/app_profile.c"); t=p.read_text(); p.write_text(t.replace("char comm[TASK_COMM_LEN];", "static char comm[TASK_COMM_LEN];", 1))'
             echo "✅ app_profile stack workaround applied"
           else
             echo "⏭️  app_profile stack workaround not needed"

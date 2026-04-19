@@ -174,25 +174,18 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          {
-            echo "WORKFLOW_COMMIT_SHORT=$(git rev-parse --short HEAD)"
-            echo "WORKFLOW_COMMIT_MSG=$(git log -1 --format=%s)"
-            echo "WORKFLOW_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
-          } >> "$GITHUB_ENV"
-          cd "$WORK_ROOT/kernel"
-          {
-            echo "KERNEL_COMMIT_SHORT=$(git rev-parse --short HEAD)"
-            echo "KERNEL_COMMIT_MSG=$(git log -1 --format=%s)"
-            echo "KERNEL_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
-          } >> "$GITHUB_ENV"
-          cd "$WORK_ROOT/susfs4ksu"
-          {
-            echo "SUSFS_COMMIT_SHORT=$(git rev-parse --short HEAD)"
-            echo "SUSFS_COMMIT_MSG=$(git log -1 --format=%s)"
-            echo "SUSFS_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
-          } >> "$GITHUB_ENV"
-
-      - name: Show ccache status
+        cd "$GITHUB_WORKSPACE"
+        echo "WORKFLOW_COMMIT_SHORT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        echo "WORKFLOW_COMMIT_MSG=$(git log -1 --format=%s)" >> "$GITHUB_ENV"
+        echo "WORKFLOW_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+        cd "$WORK_ROOT/kernel"
+        echo "KERNEL_COMMIT_SHORT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        echo "KERNEL_COMMIT_MSG=$(git log -1 --format=%s)" >> "$GITHUB_ENV"
+        echo "KERNEL_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+        cd "$WORK_ROOT/susfs4ksu"
+        echo "SUSFS_COMMIT_SHORT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        echo "SUSFS_COMMIT_MSG=$(git log -1 --format=%s)" >> "$GITHUB_ENV"
+        echo "SUSFS_COMMIT_DATE=$(git log -1 --format=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
         shell: bash
         run: |
           set -euo pipefail

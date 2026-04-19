@@ -327,8 +327,9 @@ jobs:
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
           fi
           
-          # Apply KSU specific SuSFS patch (Skip for branches with SuSFS pre-integrated)
-          if [ "${{ matrix.variant }}" != "resukisu" ]; then
+          # Apply KSU-specific SuSFS patch only for variants that still need it.
+          # KernelSU-Next dev-susfs and ReSukiSU already carry the base integration.
+          if [ "${{ matrix.variant }}" != "resukisu" ] && [ "${{ matrix.variant }}" != "next" ]; then
             cd KernelSU
             
             VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
@@ -341,37 +342,37 @@ jobs:
               echo "📋 Applying DEFAULT 10_enable_susfs_for_ksu patch..."
               apply_patch_or_fail "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"
             fi
-            
-            # --- NEXT VARIANT FIXES ---
-            if [ "${{ matrix.variant }}" = "next" ]; then
-              echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
-              WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.0.0"
+          fi
 
-              fetch_patch_or_fail() {
-                local url="$1"
-                local destination="$2"
-                curl --fail --location --silent --show-error "$url" -o "$destination"
-              }
-              
-              fetch_patch_or_fail "$WK_URL/fix_Makefile.patch" fix_Makefile.patch
-              fetch_patch_or_fail "$WK_URL/fix_kernel_umount.c.patch" fix_kernel_umount.c.patch
-              fetch_patch_or_fail "$WK_URL/fix_ksu.c.patch" fix_ksu.c.patch
-              fetch_patch_or_fail "$WK_URL/fix_ksud.c.patch" fix_ksud.c.patch
-              fetch_patch_or_fail "$WK_URL/fix_sucompat.c.patch" fix_sucompat.c.patch
-              fetch_patch_or_fail "$WK_URL/fix_supercalls.c.patch" fix_supercalls.c.patch
-              fetch_patch_or_fail "$WK_URL/ksu_toolkit.patch" ksu_toolkit.patch
-              
-              apply_patch_or_fail fix_Makefile.patch "WildKernels Makefile fix"
-              apply_patch_or_fail fix_kernel_umount.c.patch "WildKernels kernel_umount fix"
-              apply_patch_or_fail fix_ksu.c.patch "WildKernels ksu.c fix"
-              apply_patch_or_fail fix_ksud.c.patch "WildKernels ksud fix"
-              apply_patch_or_fail fix_sucompat.c.patch "WildKernels sucompat fix"
-              apply_patch_or_fail fix_supercalls.c.patch "WildKernels supercalls fix"
-              apply_patch_or_fail ksu_toolkit.patch "WildKernels toolkit fix"
-              
-              echo "✅ WildKernels fixes applied successfully!"
-            fi
+          # --- NEXT VARIANT FIXES ---
+          if [ "${{ matrix.variant }}" = "next" ]; then
+            cd KernelSU
+            echo "🛠️ Downloading and applying WildKernels SuSFS compilation fixes for KernelSU-Next..."
+            WK_URL="https://raw.githubusercontent.com/WildKernels/kernel_patches/main/next/susfs_fix_patches/v2.1.0"
+
+            fetch_patch_or_fail() {
+              local url="$1"
+              local destination="$2"
+              curl --fail --location --silent --show-error "$url" -o "$destination"
+            }
             
+            fetch_patch_or_fail "$WK_URL/fix_Makefile.patch" fix_Makefile.patch
+            fetch_patch_or_fail "$WK_URL/fix_kernel_umount.c.patch" fix_kernel_umount.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_ksu.c.patch" fix_ksu.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_ksud.c.patch" fix_ksud.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_sucompat.c.patch" fix_sucompat.c.patch
+            fetch_patch_or_fail "$WK_URL/fix_supercalls.c.patch" fix_supercalls.c.patch
+            fetch_patch_or_fail "$WK_URL/ksu_toolkit.patch" ksu_toolkit.patch
+
+            apply_patch_or_fail fix_Makefile.patch "WildKernels Makefile fix"
+            apply_patch_or_fail fix_kernel_umount.c.patch "WildKernels kernel_umount fix"
+            apply_patch_or_fail fix_ksu.c.patch "WildKernels ksu.c fix"
+            apply_patch_or_fail fix_ksud.c.patch "WildKernels ksud fix"
+            apply_patch_or_fail fix_sucompat.c.patch "WildKernels sucompat fix"
+            apply_patch_or_fail fix_supercalls.c.patch "WildKernels supercalls fix"
+            apply_patch_or_fail ksu_toolkit.patch "WildKernels toolkit fix"
+            
+            echo "✅ WildKernels fixes applied successfully!"
           fi
 
       - name: Apply Remote Patches & Source Fixes

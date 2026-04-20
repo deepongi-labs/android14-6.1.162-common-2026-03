@@ -468,7 +468,27 @@ jobs:
           set -e
           mkdir -p "$GITHUB_WORKSPACE/logs"
           PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${{ matrix.variant }}.txt"
+          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${{ matrix.variant }}.log"
           : > "$PATCH_MANIFEST"
+          : > "$PATCH_FAILURE_LOG"
+
+          log_patch_failure() {
+            local patch_file="$1"
+            local description="$2"
+            local temp_log
+
+            temp_log="$(mktemp)"
+            patch -p1 --forward --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
+
+            {
+              echo "=== ${description} ==="
+              echo "Patch: $patch_file"
+              cat "$temp_log"
+              echo
+            } >> "$PATCH_FAILURE_LOG"
+
+            rm -f "$temp_log"
+          }
 
           apply_patch_or_fail() {
             local patch_file="$1"
@@ -483,6 +503,8 @@ jobs:
             else
               echo "❌ ${description} could not be applied cleanly: $patch_file"
               printf '%s | %s | failed\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+              log_patch_failure "$patch_file" "$description"
+              echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
               exit 1
             fi
           }
@@ -506,6 +528,7 @@ jobs:
               else
                 echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
                 printf '%s | %s | stale-fallback\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                log_patch_failure "$variant_patch" "$variant_desc"
               fi
             fi
 
@@ -589,6 +612,7 @@ jobs:
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
 
       - name: Apply Remote Patches & Source Fixes
         run: |
@@ -895,11 +919,13 @@ jobs:
           mkdir -p "$ARTIFACT_DIR"
 
           [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/patch-failure-${{ matrix.variant }}.log" ] && cp "logs/patch-failure-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
           [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
           [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
           [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
           [ -n "${{ env.PATCH_MANIFEST }}" ] && [ -f "${{ env.PATCH_MANIFEST }}" ] && cp "${{ env.PATCH_MANIFEST }}" "$ARTIFACT_DIR/"
           [ -f "success-metadata/source-manifest-${{ matrix.variant }}.txt" ] && cp "success-metadata/source-manifest-${{ matrix.variant }}.txt" "$ARTIFACT_DIR/"
+          find kernel -type f \( -name "*.rej" -o -name "*.orig" \) -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
 
           find kernel/out -maxdepth 3 -type f \
             \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \

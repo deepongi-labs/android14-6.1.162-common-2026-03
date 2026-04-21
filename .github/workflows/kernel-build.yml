@@ -184,11 +184,23 @@ jobs:
         id: set-matrix
         run: |
           VARIANT="${{ inputs.ksu_variant }}"
+          DISABLE_SUSFS="${{ inputs.disable_susfs }}"
 
           if [ "$VARIANT" = "all" ]; then
-            echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
-            echo "🎯 Building all stable variants"
+            if [ "$DISABLE_SUSFS" = "true" ]; then
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS disabled"
+            else
+              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building SuSFS-compatible variants"
+              echo "⏭️  Skipping 'next' because next-susfs currently carries its own incompatible SuSFS integration"
+            fi
           else
+            if [ "$VARIANT" = "next" ] && [ "$DISABLE_SUSFS" != "true" ]; then
+              echo "❌ ERROR: Cannot build 'next' with SuSFS enabled"
+              echo "💡 Re-run with disable_susfs=true or choose tiann/kowsu/resukisu"
+              exit 1
+            fi
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
             echo "🎯 Building single variant: $VARIANT"
           fi

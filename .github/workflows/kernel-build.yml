@@ -861,10 +861,26 @@ jobs:
       - name: Build Kernel
         if: env.DRY_RUN_ONLY != 'true'
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
           LOG_FILE="$GITHUB_WORKSPACE/logs/build-${{ matrix.variant }}.log"
           exec > >(tee -a "$LOG_FILE") 2>&1
+
+          summarize_build_failure() {
+            if [ ! -f "$LOG_FILE" ]; then
+              return 0
+            fi
+
+            echo "::group::Build failure summary (${KSU_VARIANT})"
+            echo "📄 Last 200 lines of $LOG_FILE"
+            tail -n 200 "$LOG_FILE" || true
+            echo
+            echo "🔎 Matching error signatures"
+            grep -nE 'error:|fatal error:|undefined reference|No rule to make target|FAILED:' "$LOG_FILE" | tail -n 80 || echo "No common error signature matched."
+            echo "::endgroup::"
+          }
+
+          trap 'status=$?; if [ "$status" -ne 0 ]; then summarize_build_failure; fi; exit "$status"' EXIT
 
           cd kernel
           export ARCH=arm64
@@ -961,6 +977,8 @@ jobs:
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             all
+
+          trap - EXIT
           
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
 
@@ -1021,6 +1039,13 @@ jobs:
           find kernel/out -maxdepth 3 -type f \
             \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \
             -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          for RUNNER_DIR in /actions-runner /home/runner/actions-runner /opt/actions-runner /mnt/Hawai/actions-runner; do
+            if [ -d "$RUNNER_DIR/_diag" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-diag"
+              cp -a "$RUNNER_DIR/_diag/." "$ARTIFACT_DIR/runner-diag/" 2>/dev/null || true
+            fi
+          done
 
       - name: Upload Failure Logs
         if: failure()

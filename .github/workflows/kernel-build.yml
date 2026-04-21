@@ -72,7 +72,7 @@ on:
       next_ref:
         description: 'Override KernelSU-Next ref'
         required: false
-        default: 'stable'
+        default: 'dev'
         type: string
   workflow_call:
     inputs:
@@ -191,16 +191,10 @@ jobs:
               echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants with SuSFS disabled"
             else
-              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building SuSFS-compatible variants"
-              echo "⏭️  Skipping 'next' because next-susfs currently carries its own incompatible SuSFS integration"
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS enabled"
             fi
           else
-            if [ "$VARIANT" = "next" ] && [ "$DISABLE_SUSFS" != "true" ]; then
-              echo "❌ ERROR: Cannot build 'next' with SuSFS enabled"
-              echo "💡 Re-run with disable_susfs=true or choose tiann/kowsu/resukisu"
-              exit 1
-            fi
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
             echo "🎯 Building single variant: $VARIANT"
           fi
@@ -675,6 +669,13 @@ jobs:
               "Default core SuSFS patch"
           fi
 
+          if [ "${{ matrix.variant }}" = "next" ]; then
+            WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/1_fix_base.c.patch" "WK SuSFS fix: base.c include (1)"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/2_fix_base.c.patch" "WK SuSFS fix: base.c include (2)"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_namespace.c.patch" "WK SuSFS fix: namespace.c prologue"
+          fi
+
           if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then
             ensure_namespace_susfs_prologue
           fi
@@ -754,6 +755,16 @@ jobs:
           if [ "${{ matrix.variant }}" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
+          fi
+
+          if [ "${{ matrix.variant }}" = "next" ]; then
+            WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
+            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

@@ -269,17 +269,20 @@ jobs:
             export CLANG_BIN="/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin"
             export ARM64_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
             export ARM32_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-"
+            export TOOLCHAIN_ID="clang23-gnu15.2"
             echo "Using local self-hosted toolchains."
           else
             echo "Falling back to distro toolchains from PATH."
             export CLANG_BIN="/usr/lib/llvm-17/bin"
             export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
             export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
+            export TOOLCHAIN_ID="llvm17-distro"
           fi
 
           echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
           echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
           echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "TOOLCHAIN_ID=${TOOLCHAIN_ID}" >> $GITHUB_ENV
 
           if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
             SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
@@ -289,6 +292,15 @@ jobs:
           fi
 
           echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+
+          # Help cache hits across different checkout paths on self-hosted runners.
+          ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
+          ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
+          ccache --set-config=compiler_check=content >/dev/null 2>&1 || true
+          ccache -M 50G >/dev/null 2>&1 || true
 
           command -v git >/dev/null
           command -v curl >/dev/null
@@ -306,8 +318,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ hashFiles('kernel/.config') }}
+          key: ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}
           restore-keys: |
+            ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}-
             ccache-${{ runner.os }}-
 
       - name: Static analysis (shellcheck)

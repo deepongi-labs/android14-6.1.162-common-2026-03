@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.5.0-enhanced (by deepongi@deepongi-labs)
+name: Build GKI Kernel with KernelSU Variants v4.4.2
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ on:
       enable_telegram:
         description: 'Enable Telegram notifications'
         required: false
-        default: true
+        default: false
         type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
@@ -39,72 +39,156 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run_only:
+        description: 'Validate source sync and patch application only'
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        description: 'Override SuSFS ref'
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        description: 'Override tiann KernelSU ref'
+        required: false
+        default: 'main'
+        type: string
+      kowsu_ref:
+        description: 'Override kowsu KernelSU ref'
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        description: 'Override ReSukiSU ref'
+        required: false
+        default: 'main'
+        type: string
+      next_ref:
+        description: 'Override KernelSU-Next ref'
+        required: false
+        default: 'stable'
+        type: string
+  workflow_call:
+    inputs:
+      ksu_variant:
+        required: false
+        default: 'all'
+        type: string
+      disable_susfs:
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        required: false
+        default: false
+        type: boolean
+      create_release:
+        required: false
+        default: true
+        type: boolean
+      debug:
+        required: false
+        default: false
+        type: boolean
+      dry_run_only:
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        required: false
+        default: 'main'
+        type: string
+      kowsu_ref:
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        required: false
+        default: 'main'
+        type: string
+      next_ref:
+        required: false
+        default: 'stable'
+        type: string
 
 permissions:
   contents: write
   packages: write
 
+concurrency:
+  group: kernel-build-workflow-${{ github.ref_name }}-${{ inputs.ksu_variant || 'all' }}
+  cancel-in-progress: false
+
 env:
+  # Mirror the local self-hosted toolchain layout used for manual builds.
   CLANG_BIN: /mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin
   ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
   ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
   CCACHE_DIR: /mnt/ccache/.ccache
-
-
-env:
-  CLANG_BIN: /mnt/Android/clang-22/bin
-  ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
-  ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
-  CCACHE_DIR: /mnt/ccache/.ccache
+  SOURCE_MIRROR_DIR: /mnt/Android/source-mirrors
+  KERNEL_REPO_URL: https://android.googlesource.com/kernel/common
+  SUSFS_REPO_URL: https://gitlab.com/simonpunk/susfs4ksu
+  TIANN_REPO_URL: https://github.com/tiann/KernelSU.git
+  KOWSU_REPO_URL: https://github.com/KOWX712/KernelSU.git
+  RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
+  NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
+  ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
+  PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
+  CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
+  WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
 
 jobs:
   setup:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, linux, x64]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
+      dry_run: ${{ steps.config.outputs.dry_run }}
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
       create_release: ${{ steps.config.outputs.create_release }}
+      kernel_ref: ${{ steps.config.outputs.kernel_ref }}
+      susfs_ref: ${{ steps.config.outputs.susfs_ref }}
+      tiann_ref: ${{ steps.config.outputs.tiann_ref }}
+      kowsu_ref: ${{ steps.config.outputs.kowsu_ref }}
+      resukisu_ref: ${{ steps.config.outputs.resukisu_ref }}
+      next_ref: ${{ steps.config.outputs.next_ref }}
     steps:
-      - name: Set Workflow Start Time
-        run: |
-          echo "WORKFLOW_START_TIME=$(date +%s)" >> $GITHUB_ENV
-          echo "::notice::Workflow started at $(date)"
       - name: Record Build Start Time
         id: timestamp
         run: |
+          echo "WORKFLOW_START_TIME=$(date +%s)" >> $GITHUB_ENV
           START_TIME=$(date +%s)
           echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
-          echo "🕐 Build started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "::notice::Workflow started at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
       - name: Set Build Matrix
         id: set-matrix
         run: |
-          VARIANT="${{ github.event.inputs.ksu_variant }}"
-          DISABLE_SUSFS="${{ github.event.inputs.disable_susfs }}"
-          
+          VARIANT="${{ inputs.ksu_variant }}"
+
           if [ "$VARIANT" = "all" ]; then
-            # Exclude 'next' from builds when SuSFS is enabled (default)
-            if [ "$DISABLE_SUSFS" = "true" ]; then
-              # SuSFS disabled: build all variants including next
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu","next"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all variants (SuSFS disabled): tiann, kowsu, mksu, sukisu, next"
-            else
-              # SuSFS enabled: exclude next variant
-              echo 'matrix={"variant":["tiann","kowsu","mksu","sukisu"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building SuSFS variants only: tiann, kowsu, mksu, sukisu"
-              echo "⏭️  Skipping 'next' variant (incompatible with SuSFS builds)"
-            fi
+            echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+            echo "🎯 Building all stable variants"
           else
-            # Single variant requested
-            if [ "$VARIANT" = "next" ] && [ "$DISABLE_SUSFS" != "true" ]; then
-              echo "❌ ERROR: Cannot build 'next' variant with SuSFS enabled"
-              echo "💡 Please either:"
-              echo "   1. Set disable_susfs=true to build 'next' variant"
-              echo "   2. Choose a different variant (tiann/kowsu/mksu/sukisu)"
-              exit 1
-            fi
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
             echo "🎯 Building single variant: $VARIANT"
           fi
@@ -112,899 +196,741 @@ jobs:
       - name: Set Build Config
         id: config
         run: |
-          ENABLE_SUSFS=true
-          FORCE_CLEAN=false
-          CREATE_RELEASE=true
-          
-          if [ "${{ github.event.inputs.disable_susfs }}" = "true" ]; then
-            ENABLE_SUSFS=false
+          ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
+          echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
+          echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
+          echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
+          echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
+          echo "susfs_ref=${{ inputs.susfs_ref }}" >> $GITHUB_OUTPUT
+          echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT
+          echo "kowsu_ref=${{ inputs.kowsu_ref }}" >> $GITHUB_OUTPUT
+          echo "resukisu_ref=${{ inputs.resukisu_ref }}" >> $GITHUB_OUTPUT
+          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref }}" = "stable" ]; then
+            echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
+          else
+            echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
           fi
-          if [ "${{ github.event.inputs.force_clean_build }}" = "true" ]; then
-            FORCE_CLEAN=true
-          fi
-          if [ "${{ github.event.inputs.create_release }}" = "false" ]; then
-            CREATE_RELEASE=false
-          fi
-          
-          echo "enable_susfs=$ENABLE_SUSFS" >> $GITHUB_OUTPUT
-          echo "force_clean=$FORCE_CLEAN" >> $GITHUB_OUTPUT
-          echo "create_release=$CREATE_RELEASE" >> $GITHUB_OUTPUT
 
   build:
     needs: setup
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 120
+    concurrency:
+      group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
-    
+
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
 
     steps:
-      - name: Checkout with Submodules
+      - name: Pre-Clean Build Artifacts
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf AnyKernel3 release-assets changelogs logs failure-logs success-metadata || true
+
+      - name: Checkout Workflow Repo
         uses: actions/checkout@v4
         with:
-          submodules: false
-          fetch-depth: 0
           clean: false
 
-      - name: Initialize and Update Submodules with Correct Branches
+      - name: Setup Build Tools & Dependencies
         run: |
-          SUBMODULE_START=$SECONDS
-          echo "📦 Initializing submodules in parallel..."
-          
-          # Initialize both submodules in parallel for faster checkout
-          git submodule update --init --recursive --remote --jobs 4 kernel &
-          PID1=$!
-          git submodule update --init --recursive --remote --jobs 4 susfs4ksu &
-          PID2=$!
-          
-          # Wait for both to complete
-          wait $PID1 && echo "✅ Kernel submodule ready"
-          wait $PID2 && echo "✅ SuSFS submodule ready"
-          
-          SUBMODULE_TIME=$((SECONDS - SUBMODULE_START))
-          echo "✅ All submodules initialized with correct branches"
-          echo "⏱️  Submodule checkout took: ${SUBMODULE_TIME}s"
-          echo "SUBMODULE_TIME=${SUBMODULE_TIME}s" >> $GITHUB_ENV
+          set -e
+          echo "::group::Runner Sanity"
+          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}"
+          df -h .
+          df -h /mnt/ccache 2>/dev/null || true
+          echo "CPU cores: $(nproc)"
+          echo "::endgroup::"
 
-      - name: Verify Submodules
-        run: |
-          echo "📋 Submodule status:"
-          git submodule status
-          echo "🎯 Kernel branch:"
-          cd kernel && git branch -v && cd ..
+          echo "::group::Toolchain Detection"
+          echo "🔧 Resolving build tools for self-hosted runner..."
 
-      - name: Clean Kernel Directory Properly
-        run: |
-          echo "🧹 Properly cleaning kernel directory..."
-          if [ -d "kernel" ]; then
-            cd kernel
-            # Hard reset to remove all changes
-            git reset --hard HEAD
-            git clean -fdx
-            # Remove any KernelSU and patches
-            rm -rf KernelSU drivers/kernelsu
-            # Remove ABI files that will be regenerated
-            rm -f android/abi_gki_protected_exports_* || true
-            cd ..
-          fi
-          echo "✅ Kernel directory fully reset"
-
-      - name: Store Workflow Commit Info
-        run: |
-          # Optimized: Single git log call
-          read -r WORKFLOW_COMMIT WORKFLOW_COMMIT_SHORT WORKFLOW_COMMIT_DATE WORKFLOW_COMMIT_MSG << EOF
-          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
-          EOF
-          
-          echo "WORKFLOW_COMMIT=$WORKFLOW_COMMIT" >> $GITHUB_ENV
-          echo "WORKFLOW_COMMIT_SHORT=$WORKFLOW_COMMIT_SHORT" >> $GITHUB_ENV
-          echo "WORKFLOW_COMMIT_DATE=$WORKFLOW_COMMIT_DATE" >> $GITHUB_ENV
-          echo "WORKFLOW_COMMIT_MSG=$WORKFLOW_COMMIT_MSG" >> $GITHUB_ENV
-          
-          echo "🔖 Workflow commit: $WORKFLOW_COMMIT_SHORT - $WORKFLOW_COMMIT_MSG"
-
-      - name: Verify Kernel Source
-        run: |
-          if [ -f "kernel/Makefile" ]; then
-            VERSION=$(grep "^VERSION" kernel/Makefile | cut -d' ' -f3)
-            PATCHLEVEL=$(grep "^PATCHLEVEL" kernel/Makefile | cut -d' ' -f3)
-            echo "✅ Kernel version: $VERSION.$PATCHLEVEL"
+          if [ -x "/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin/clang" ] && [ -d "/mnt/Hawai/toolchains" ]; then
+            export CLANG_BIN="/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin"
+            export ARM64_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
+            export ARM32_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-"
+            echo "Using local self-hosted toolchains."
           else
-            echo "❌ Kernel not available"
-            exit 1
+            echo "Falling back to distro toolchains from PATH."
+            export CLANG_BIN="/usr/lib/llvm-17/bin"
+            export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
+            export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
           fi
 
-      - name: Store Kernel Commit Info
-        run: |
-          cd kernel
-          # Optimized: Single git log call instead of multiple commands
-          read -r KERNEL_COMMIT KERNEL_COMMIT_SHORT KERNEL_COMMIT_DATE KERNEL_COMMIT_MSG << EOF
-          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
-          EOF
-          
-          echo "KERNEL_COMMIT=$KERNEL_COMMIT" >> $GITHUB_ENV
-          echo "KERNEL_COMMIT_SHORT=$KERNEL_COMMIT_SHORT" >> $GITHUB_ENV
-          echo "KERNEL_COMMIT_DATE=$KERNEL_COMMIT_DATE" >> $GITHUB_ENV
-          echo "KERNEL_COMMIT_MSG=$KERNEL_COMMIT_MSG" >> $GITHUB_ENV
-          
-          echo "🔖 Kernel commit: $KERNEL_COMMIT_SHORT - $KERNEL_COMMIT_MSG"
+          echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
+          echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
 
-      - name: Verify SuSFS Source
-        run: |
-          if [ -d "susfs4ksu/kernel_patches" ]; then
-            echo "✅ SuSFS verified"
+          if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
+            SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
           else
-            echo "❌ SuSFS not available"
-            exit 1
+            SELECTED_CCACHE_DIR="$HOME/.ccache"
+            mkdir -p "$SELECTED_CCACHE_DIR"
           fi
 
-      - name: Store SuSFS Commit Info
+          echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
+
+          command -v git >/dev/null
+          command -v curl >/dev/null
+          command -v patch >/dev/null
+          command -v make >/dev/null
+          command -v ccache >/dev/null
+          command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
+          test -x "${CLANG_BIN}/clang" || command -v clang >/dev/null
+          test -w "${SELECTED_CCACHE_DIR}"
+
+          echo "✅ Build tools configured"
+          echo "::endgroup::"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ hashFiles('kernel/.config') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Static analysis (shellcheck)
         run: |
-          cd susfs4ksu
-          # Optimized: Single git log call
-          read -r SUSFS_COMMIT SUSFS_COMMIT_SHORT SUSFS_COMMIT_DATE SUSFS_COMMIT_MSG << EOF
-          $(git log -1 --format="%H %h %cd %s" --date=format:'%Y-%m-%d %H:%M:%S')
-          EOF
-          
-          echo "SUSFS_COMMIT=$SUSFS_COMMIT" >> $GITHUB_ENV
-          echo "SUSFS_COMMIT_SHORT=$SUSFS_COMMIT_SHORT" >> $GITHUB_ENV
-          echo "SUSFS_COMMIT_DATE=$SUSFS_COMMIT_DATE" >> $GITHUB_ENV
-          echo "SUSFS_COMMIT_MSG=$SUSFS_COMMIT_MSG" >> $GITHUB_ENV
-          
-          echo "🔖 SuSFS commit: $SUSFS_COMMIT_SHORT - $SUSFS_COMMIT_MSG"
+          if command -v shellcheck >/dev/null; then
+            shellcheck **/*.sh || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: Smart Sync Kernel & SuSFS Sources
+        run: |
+          set -e
+          sync_repo_shallow() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+
+            echo "::group::Sync ${name}"
+            if [ -d "${target}/.git" ]; then
+              git -C "$target" remote set-url origin "$url"
+              git -C "$target" fetch --depth=1 origin "$ref"
+              git -C "$target" checkout --detach FETCH_HEAD
+              git -C "$target" reset --hard FETCH_HEAD
+              git -C "$target" clean -fdx
+            else
+              rm -rf "$target"
+              git clone --depth=1 --branch="$ref" "$url" "$target"
+              git -C "$target" checkout --detach
+            fi
+
+            echo "${name} -> $(git -C "$target" rev-parse --short HEAD)"
+            echo "::endgroup::"
+          }
+
+          echo "📦 Smart syncing kernel and SuSFS sources..."
+
+          # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
+          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
+          sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
+
+      - name: Store Commit Info (Workflow, Kernel, SuSFS)
+        run: |
+          record_commit_info() {
+            local prefix="$1"
+            local repo_path="$2"
+            local short_hash
+            local commit_date
+            local commit_msg
+
+            short_hash=$(git -C "$repo_path" log -1 --format='%h')
+            commit_date=$(git -C "$repo_path" log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')
+            commit_msg=$(git -C "$repo_path" log -1 --format='%s')
+
+            echo "${prefix}_COMMIT_SHORT=$short_hash" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_DATE=$commit_date" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_MSG=$commit_msg" >> "$GITHUB_ENV"
+          }
+
+          record_commit_info "WORKFLOW" "."
+          record_commit_info "KERNEL" "kernel"
+          record_commit_info "SUSFS" "susfs4ksu"
 
       - name: Show CCACHE Status
         run: |
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          echo "📂 CCACHE directory: $CCACHE_DIR"
-          echo "📈 CCACHE stats BEFORE build:"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
       - name: Setup KernelSU Variant
         run: |
+          set -e
           KSU_SETUP_START=$SECONDS
-          cd kernel
+          sync_variant_repo() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+            local mirror="${SOURCE_MIRROR_DIR}/${name}.git"
 
-          # Remove any existing KernelSU
-          rm -rf KernelSU drivers/kernelsu
-          
-          # Set variant-specific information
+            if [ ! -d "$mirror" ]; then
+              git clone --mirror "$url" "$mirror"
+            else
+              git -C "$mirror" remote set-url origin "$url"
+              git -C "$mirror" fetch --prune origin
+            fi
+
+            rm -rf "$target"
+            git clone --reference-if-able "$mirror" "$mirror" "$target"
+            git -C "$target" fetch --depth=1 origin "$ref"
+            git -C "$target" checkout --detach FETCH_HEAD
+          }
+
+          # Nuke the rogue KernelSU-Next folder as well to clean up the runner
+          cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
+
           case "${{ matrix.variant }}" in
-            "tiann")
-              echo "📦 Setting up Official KernelSU (tiann)..."
-              KSU_REPO="tiann/KernelSU"
-              KSU_BRANCH="main"
-              PATCH_DIR="KSU"
-              USE_SETUP_SH="true"
-              ;;
-            "kowsu")
-              echo "📦 Setting up KowSU (KOWX712)..."
-              KSU_REPO="KOWX712/KernelSU"
-              KSU_BRANCH="master"
-              PATCH_DIR="KowSU"
-              USE_SETUP_SH="true"
-              ;;
-            "mksu")
-              echo "📦 Setting up MKSU (5ec1cff)..."
-              KSU_REPO="5ec1cff/KernelSU"
-              KSU_BRANCH="main"
-              PATCH_DIR="5ec1cff"
-              USE_SETUP_SH="true"
-              ;;
-            "sukisu")
-              echo "📦 Setting up SukiSU-Ultra..."
-              KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
-              PATCH_DIR="sukisu"
-              
-              # Branch selection based on SuSFS mode
-              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-                KSU_BRANCH="tmp-builtin"
-                echo "🛡️ SuSFS Mode: Using tmp-builtin branch (SuSFS pre-integrated)"
-                USE_SETUP_SH="false"
-              else
-                KSU_BRANCH="main"
-                echo "🔓 No-SuSFS Mode: Using main branch (standard hooks)"
-                USE_SETUP_SH="true"
-              fi
-              ;;
-            "next")
-              echo "📦 Setting up KernelSU-Next..."
-              KSU_REPO="KernelSU-Next/KernelSU-Next"
-              KSU_BRANCH="dev"
-              PATCH_DIR="next"
-              USE_SETUP_SH="true"
-              ;;
+            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
+            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
+            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
           esac
-          
-          # Clone the KernelSU repository with error handling
-          echo "📥 Cloning $KSU_REPO on branch $KSU_BRANCH..."
-          if ! git clone --depth=1 --branch=$KSU_BRANCH \
-            https://github.com/$KSU_REPO.git KernelSU; then
-            echo "❌ Failed to clone $KSU_REPO on branch $KSU_BRANCH"
-            echo "This could be due to:"
-            echo "  - Network failure"
-            echo "  - Repository not found"
-            echo "  - Branch does not exist"
-            echo "  - Rate limit exceeded"
-            exit 1
-          fi
-          echo "✅ Successfully cloned $KSU_REPO"
-          
+
+          echo "::group::Sync KernelSU Variant"
+          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" KernelSU
+          echo "KernelSU repo: $KSU_REPO"
+          echo "KernelSU ref: $KSU_BRANCH"
+          echo "::endgroup::"
+
+          # We manually integrate KSU to prevent fork setup scripts from rogue cloning
           if [ "$USE_SETUP_SH" = "true" ]; then
-            # Execute setup.sh for standard variants (tiann, kowsu, mksu)
-            echo "🚀 Running setup.sh from kernel source..."
-            if [ -f "KernelSU/kernel/setup.sh" ]; then
-              chmod +x KernelSU/kernel/setup.sh
-              ./KernelSU/kernel/setup.sh .
-            else
-              echo "❌ KernelSU/kernel/setup.sh not found!"
-              echo "📁 Available files in KernelSU:"
-              find KernelSU -name "*.sh" -type f
-              exit 1
-            fi
+            echo "🔗 Manually symlinking KernelSU..."
+            ln -sf ../KernelSU/kernel drivers/kernelsu
           else
-            # Manual setup for sukisu (tmp-builtin branch has everything integrated)
-            echo "🔧 Manual setup for SukiSU-Ultra (tmp-builtin branch)..."
-            
-            # Setup KernelSU in kernel tree
-            ln -sf "$(pwd)/KernelSU/kernel" drivers/kernelsu
-            
-            # Verify symlink
-            if [ -d "drivers/kernelsu" ] && [ -f "drivers/kernelsu/Kconfig" ]; then
-              echo "✅ KernelSU symlink created successfully"
-            else
-              echo "⚠️ KernelSU symlink failed, trying copy instead..."
-              rm -rf drivers/kernelsu
-              cp -r KernelSU/kernel drivers/kernelsu
-              if [ -f "drivers/kernelsu/Kconfig" ]; then
-                echo "✅ KernelSU copied successfully"
-              else
-                echo "❌ KernelSU setup failed"
-                exit 1
-              fi
-            fi
-            
-            # Add to Makefile if not present
-            if ! grep -q "kernelsu" drivers/Makefile; then
-              echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-            fi
-            
-            # Add to Kconfig if not present
-            if ! grep -q "kernelsu" drivers/Kconfig; then
-              sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            fi
-            
-            echo "✅ SukiSU-Ultra manual setup completed"
+            echo "📋 Manually copying KernelSU (No symlink)..."
+            cp -r KernelSU/kernel drivers/kernelsu
           fi
-          
-          echo "PATCH_DIR=$PATCH_DIR" >> $GITHUB_ENV
-          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
-          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
-          
-          echo "✅ KernelSU setup completed for ${{ matrix.variant }}"
 
-      - name: Get KSU Version Info
+          # Add KSU to kernel makefiles
+          grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV && echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
+
+      - name: Get KSU Version Info & Commit
         run: |
           cd kernel/KernelSU
-          
-          echo "📊 Unshallowing repository for accurate commit count..."
-          # Unshallow the repository to get full history
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
-          
-          echo "🔢 Counting commits..."
-          
-          # Special version calculation for sukisu and next
-          if [ "${{ matrix.variant }}" = "sukisu" ]; then
-            # Always use main branch for version counting (regardless of which branch is checked out)
-            echo "📥 Fetching main branch for version counting..."
-            git fetch origin main:main --quiet || true
-            
-            # Count commits on main branch
-            KSU_COUNT=$(git rev-list --count main)
-            
-            # SukiSU formula: 40000 + main_commits - 2815
+
+          if [ "${{ matrix.variant }}" = "resukisu" ]; then
+            KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
-            
-            if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-              echo "✅ SukiSU version: r$KSU_VERSION (main: $KSU_COUNT commits) [tmp-builtin branch]"
-            else
-              echo "✅ SukiSU version: r$KSU_VERSION (main: $KSU_COUNT commits) [main branch]"
-            fi
           elif [ "${{ matrix.variant }}" = "next" ]; then
-            # KernelSU-Next uses dev branch commit count
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((KSU_COUNT + 30000))
-            
-            echo "✅ KernelSU-Next version: r$KSU_VERSION (commits: $KSU_COUNT) [dev branch]"
           else
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((KSU_COUNT + 30000))
-            
-            echo "✅ KernelSU version: r$KSU_VERSION (commits: $KSU_COUNT)"
           fi
-          
+
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KSU_COUNT=$KSU_COUNT" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHORT=$(git log -1 --format='%h')" >> $GITHUB_ENV
+          echo "KSU_COMMIT_DATE=$(git log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          echo "KSU_COMMIT_MSG=$(git log -1 --format='%s')" >> $GITHUB_ENV
 
-      - name: Verify KernelSU Setup
-        run: |
-          cd kernel
-          echo "🔍 Verifying KernelSU setup..."
-          
-          # Check if KernelSU files were created
-          if [ -d "drivers/kernelsu" ]; then
-            echo "✅ KernelSU drivers directory created"
-          else
-            echo "❌ KernelSU drivers directory not found"
-            exit 1
-          fi
-          
-          if [ -f ".config" ]; then
-            echo "✅ Kernel configuration exists"
-            # Check if KSU is enabled in config
-            if grep -q "CONFIG_KSU=y" .config || grep -q "CONFIG_KSU=m" .config; then
-              echo "✅ KernelSU configuration detected"
-            else
-              echo "⚠️ KernelSU not in config, may need manual enabling"
-            fi
-          fi
-          
-          KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))
-          echo "⏱️  KernelSU setup took: ${KSU_SETUP_TIME}s"
-          echo "KSU_SETUP_TIME=${KSU_SETUP_TIME}s" >> $GITHUB_ENV
-
-      - name: Store KernelSU Commit Info
-        run: |
-          cd kernel/KernelSU
-          # Optimized: Single git log call
-          read -r KSU_COMMIT KSU_COMMIT_SHORT KSU_COMMIT_DATE KSU_COMMIT_MSG KSU_COMMIT_AUTHOR << EOF
-          $(git log -1 --format="%H %h %cd %s %an" --date=format:'%Y-%m-%d %H:%M:%S')
-          EOF
-          
-          echo "KSU_COMMIT=$KSU_COMMIT" >> $GITHUB_ENV
-          echo "KSU_COMMIT_SHORT=$KSU_COMMIT_SHORT" >> $GITHUB_ENV
-          echo "KSU_COMMIT_DATE=$KSU_COMMIT_DATE" >> $GITHUB_ENV
-          echo "KSU_COMMIT_MSG=$KSU_COMMIT_MSG" >> $GITHUB_ENV
-          echo "KSU_COMMIT_AUTHOR=$KSU_COMMIT_AUTHOR" >> $GITHUB_ENV
-          
-          echo "🔖 KernelSU commit: $KSU_COMMIT_SHORT - $KSU_COMMIT_MSG"
-
-      - name: Generate Comprehensive Changelog - ${{ matrix.variant }}
-        if: needs.setup.outputs.create_release == 'true'
+      - name: Generate Comprehensive Changelog
         run: |
           mkdir -p changelogs
           CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
-          
-          echo "📋 Generating comprehensive changelog for ${{ matrix.variant }}..."
-          
-          # ============================================
-          # HEADER SECTION
-          # ============================================
-          cat > "$CHANGELOG_FILE" << 'HEADER_EOF'
+
+          cat << EOF > "$CHANGELOG_FILE"
           # 📋 Comprehensive Build Changelog
-          
-          HEADER_EOF
-          
-          # Add variant info
-          case "${{ matrix.variant }}" in
-            "tiann")
-              echo "**Variant:** Official KernelSU (tiann)" >> "$CHANGELOG_FILE"
-              ;;
-            "kowsu")
-              echo "**Variant:** KowSU Fork (KOWX712)" >> "$CHANGELOG_FILE"
-              ;;
-            "mksu")
-              echo "**Variant:** MKSU Fork (5ec1cff)" >> "$CHANGELOG_FILE"
-              ;;
-            "sukisu")
-              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-                echo "**Variant:** SukiSU-Ultra (tmp-builtin branch - SuSFS pre-integrated)" >> "$CHANGELOG_FILE"
-              else
-                echo "**Variant:** SukiSU-Ultra (main branch - standard hooks)" >> "$CHANGELOG_FILE"
-              fi
-              ;;
-            "next")
-              echo "**Variant:** KernelSU-Next (KernelSU-Next/dev branch)" >> "$CHANGELOG_FILE"
-              ;;
-          esac
-          
-          cat >> "$CHANGELOG_FILE" << HEADER_INFO
+
+          **Variant:** ${{ matrix.variant }}
           **Build Number:** #${{ github.run_number }}
-          **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           **KernelSU Version:** r${{ env.KSU_VERSION }}
           **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
-          
+
           ---
-          
-          HEADER_INFO
-          
-          # ============================================
-          # COMPONENT VERSIONS TABLE
-          # ============================================
-          cat >> "$CHANGELOG_FILE" << 'TABLE_HEADER'
           ## 📖 Component Versions
-          
           | Component | Current Commit | Date | Summary |
           |-----------|---------------|------|---------|
-          TABLE_HEADER
-          
-          echo "| **KernelSU (${{ matrix.variant }})** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
-          echo "| **Kernel (android14-6.1-2025-12)** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
-          echo "| **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
-          echo "| **Build Workflow** | \`${{ env.WORKFLOW_COMMIT_SHORT }}\` | ${{ env.WORKFLOW_COMMIT_DATE }} | ${{ env.WORKFLOW_COMMIT_MSG }} |" >> "$CHANGELOG_FILE"
-          
-          echo "" >> "$CHANGELOG_FILE"
-          echo "---" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          
-          # ============================================
-          # CHECK FOR PREVIOUS BUILD
-          # ============================================
-          cd kernel/KernelSU
-          PREVIOUS_TAG=$(git tag --list "${{ matrix.variant }}-build-*" --sort=-version:refname 2>/dev/null | head -n 1 || echo "")
-          
-          if [ -z "$PREVIOUS_TAG" ]; then
-            # ============================================
-            # INITIAL BUILD - Show recent commits
-            # ============================================
-            echo "## 🎉 Initial Build" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            echo "This is the first tracked build for the **${{ matrix.variant }}** variant. Below are the recent changes in each component:" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            
-            # KernelSU Recent Changes
-            echo "### 🔧 KernelSU - ${{ matrix.variant }} (Last 10 commits)" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            echo "**Repository:** https://github.com/${{ env.KSU_REPO }}" >> "../../$CHANGELOG_FILE"
-            echo "**Branch:** ${{ env.KSU_BRANCH }}" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            
-            # Kernel Recent Changes
-            cd ../../kernel
-            echo "### 🧬 Kernel - android14-6.1-2025-12 (Last 10 commits)" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "**Repository:** https://github.com/aosp-mirror/kernel_common" >> "../$CHANGELOG_FILE"
-            echo "**Branch:** android14-6.1-2025-12" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            
-            # SuSFS Recent Changes
-            cd ../susfs4ksu
-            echo "### 🛡️ SuSFS4KSU (Last 10 commits)" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "**Repository:** https://gitlab.com/simonpunk/susfs4ksu" >> "../$CHANGELOG_FILE"
-            echo "**Branch:** gki-android14-6.1-dev" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            git log -10 --pretty=format:"- **%h** - %s (%an, %ar)" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            
-            # Workflow Recent Changes
-            cd ..
-            echo "### ⚙️ Build Workflow (Last 5 commits)" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            echo "**Repository:** ${{ github.repository }}" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            git log -5 --pretty=format:"- **%h** - %s (%an, %ar)" -- .github/workflows/ >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            
-            echo "---" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            echo "_This is the initial tracked build. Future builds will show detailed changes since the last build._" >> "$CHANGELOG_FILE"
-            
-          else
-            # ============================================
-            # SUBSEQUENT BUILD - Show changes since last build
-            # ============================================
-            echo "## 🔄 Changes Since Last Build" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            echo "**Previous Build:** \`$PREVIOUS_TAG\`" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            
-            # Get previous commit from last build metadata
-            PREV_KSU_COMMIT=$(git rev-parse "$PREVIOUS_TAG" 2>/dev/null || echo "")
-            
-            if [ -n "$PREV_KSU_COMMIT" ]; then
-              COMMIT_RANGE="${PREV_KSU_COMMIT}..HEAD"
-              KSU_CHANGE_COUNT=$(git rev-list --count $COMMIT_RANGE 2>/dev/null || echo "0")
-            else
-              KSU_CHANGE_COUNT="unknown"
-              COMMIT_RANGE=""
-            fi
-            
-            # KernelSU Changes
-            echo "### 🔧 KernelSU - ${{ matrix.variant }}" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            
-            if [ -n "$COMMIT_RANGE" ] && [ "$KSU_CHANGE_COUNT" != "0" ]; then
-              echo "**Changes:** $KSU_CHANGE_COUNT commit(s)" >> "../../$CHANGELOG_FILE"
-              echo "" >> "../../$CHANGELOG_FILE"
-              git log $COMMIT_RANGE --pretty=format:"#### %h - %s%n%n**Author:** %an <%ae>  %n**Date:** %ad%n%n%b%n----%n" --date=format:'%Y-%m-%d %H:%M:%S' >> "../../$CHANGELOG_FILE"
-            else
-              echo "**Status:** No changes detected (or first build after tag migration)" >> "../../$CHANGELOG_FILE"
-              echo "" >> "../../$CHANGELOG_FILE"
-              echo "_Current commit:_ \`${{ env.KSU_COMMIT_SHORT }}\` - ${{ env.KSU_COMMIT_MSG }}" >> "../../$CHANGELOG_FILE"
-            fi
-            echo "" >> "../../$CHANGELOG_FILE"
-            echo "" >> "../../$CHANGELOG_FILE"
-            
-            # Note: For kernel, SuSFS, and workflow - we'll show current state since we don't have previous tracking
-            
-            cd ../../kernel
-            echo "### 🧬 Kernel - android14-6.1-2025-12" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "**Current State:** \`${{ env.KERNEL_COMMIT_SHORT }}\` - ${{ env.KERNEL_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "_Note: Kernel tracking will be enhanced in future builds. Showing current commit._" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            
-            cd ../susfs4ksu
-            echo "### 🛡️ SuSFS4KSU" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "**Current State:** \`${{ env.SUSFS_COMMIT_SHORT }}\` - ${{ env.SUSFS_COMMIT_MSG }}" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            echo "_Note: SuSFS tracking will be enhanced in future builds. Showing current commit._" >> "../$CHANGELOG_FILE"
-            echo "" >> "../$CHANGELOG_FILE"
-            
-            cd ..
-            echo "### ⚙️ Build Workflow" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            echo "**Current State:** \`${{ env.WORKFLOW_COMMIT_SHORT }}\` - ${{ env.WORKFLOW_COMMIT_MSG }}" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-            echo "_Note: Workflow tracking will be enhanced in future builds. Showing current commit._" >> "$CHANGELOG_FILE"
-            echo "" >> "$CHANGELOG_FILE"
-          fi
-          
-          # ============================================
-          # FOOTER SECTION - Links and References
-          # ============================================
-          echo "---" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "## 🔗 Component Links" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "### KernelSU (${{ matrix.variant }})" >> "$CHANGELOG_FILE"
-          echo "- **Repository:** https://github.com/${{ env.KSU_REPO }}" >> "$CHANGELOG_FILE"
-          echo "- **Branch:** ${{ env.KSU_BRANCH }}" >> "$CHANGELOG_FILE"
-          echo "- **Commit:** https://github.com/${{ env.KSU_REPO }}/commit/${{ env.KSU_COMMIT }}" >> "$CHANGELOG_FILE"
-          echo "- **Full History:** https://github.com/${{ env.KSU_REPO }}/commits/${{ env.KSU_BRANCH }}" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "### Kernel" >> "$CHANGELOG_FILE"
-          echo "- **Repository:** https://github.com/aosp-mirror/kernel_common" >> "$CHANGELOG_FILE"
-          echo "- **Branch:** android14-6.1-2025-12" >> "$CHANGELOG_FILE"
-          echo "- **Commit:** https://github.com/aosp-mirror/kernel_common/commit/${{ env.KERNEL_COMMIT }}" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "### SuSFS4KSU" >> "$CHANGELOG_FILE"
-          echo "- **Repository:** https://gitlab.com/simonpunk/susfs4ksu" >> "$CHANGELOG_FILE"
-          echo "- **Branch:** gki-android14-6.1-dev" >> "$CHANGELOG_FILE"
-          echo "- **Commit:** https://gitlab.com/simonpunk/susfs4ksu/-/commit/${{ env.SUSFS_COMMIT }}" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "### Build Workflow" >> "$CHANGELOG_FILE"
-          echo "- **Repository:** https://github.com/${{ github.repository }}" >> "$CHANGELOG_FILE"
-          echo "- **Commit:** https://github.com/${{ github.repository }}/commit/${{ env.WORKFLOW_COMMIT }}" >> "$CHANGELOG_FILE"
-          echo "- **Actions Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$CHANGELOG_FILE"
-          
-          echo "" >> "$CHANGELOG_FILE"
-          echo "---" >> "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
-          echo "_Generated automatically by GitHub Actions on $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> "$CHANGELOG_FILE"
-          
-          # Tag this build for future reference
-          cd kernel/KernelSU
-          git tag "${{ matrix.variant }}-build-${{ github.run_number }}" 2>/dev/null || true
-          
-          cd ../..
-          
-          # Display preview
-          echo "📋 Changelog preview (first 50 lines):"
-          head -n 50 "$CHANGELOG_FILE" || cat "$CHANGELOG_FILE"
-          
+          | **KernelSU** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |
+          | **Kernel** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |
+          | **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |
+
+          ---
+          EOF
+
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
-          
-          echo "✅ Comprehensive changelog generated successfully!"
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true' && matrix.variant != 'next'
+        if: env.ENABLE_SUSFS == 'true'
         run: |
-          echo "📦 Setting up SuSFS..."
-          
-          # Copy SuSFS files
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${{ matrix.variant }}.txt"
+          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${{ matrix.variant }}.log"
+          : > "$PATCH_MANIFEST"
+          : > "$PATCH_FAILURE_LOG"
+
+          log_patch_failure() {
+            local patch_file="$1"
+            local description="$2"
+            local temp_log
+
+            temp_log="$(mktemp)"
+            patch -p1 --forward --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
+
+            {
+              echo "=== ${description} ==="
+              echo "Patch: $patch_file"
+              cat "$temp_log"
+              echo
+            } >> "$PATCH_FAILURE_LOG"
+
+            rm -f "$temp_log"
+          }
+
+          apply_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+              printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ ${description} could not be applied cleanly: $patch_file"
+              printf '%s | %s | failed\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+              log_patch_failure "$patch_file" "$description"
+              echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
+              exit 1
+            fi
+          }
+
+          apply_variant_or_default_patch() {
+            local variant_patch="$1"
+            local default_patch="$2"
+            local variant_desc="$3"
+            local default_desc="$4"
+
+            if [ -f "$variant_patch" ]; then
+              if patch -p1 --forward --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "📋 Applying CUSTOM patch: $variant_desc"
+                patch -p1 --forward < "$variant_patch"
+                printf '%s | %s | applied\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "ℹ️ ${variant_desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              else
+                echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
+                printf '%s | %s | stale-fallback\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                log_patch_failure "$variant_patch" "$variant_desc"
+              fi
+            fi
+
+            apply_patch_or_fail "$default_patch" "$default_desc"
+          }
+
+          ensure_namespace_susfs_prologue() {
+            if grep -q 'susfs_is_current_ksu_domain' fs/namespace.c 2>/dev/null; then
+              echo "ℹ️ Namespace SuSFS prologue already present, skipping."
+              printf '%s | %s | already-present\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/namespace.c")' \
+              'text = path.read_text()' \
+              'include_old = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n"""' \
+              'include_new = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'ida_old = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n"""' \
+              'ida_new = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'if include_old not in text or ida_old not in text: raise SystemExit("namespace.c layout drifted; could not inject SuSFS prologue")' \
+              'path.write_text(text.replace(include_old, include_new, 1).replace(ida_old, ida_new, 1))' \
+              | python -
+
+            echo "📋 Applied namespace SuSFS prologue fix"
+            printf '%s | %s | applied\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
+          }
+
+          auto_merge_tiann_ksu_susfs_patch() {
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'def replace_once(path_str, old, new):' \
+              '    path = Path(path_str)' \
+              '    text = path.read_text()' \
+              '    if old not in text: raise SystemExit(f"missing expected conflict block in {path_str}")' \
+              '    path.write_text(text.replace(old, new, 1))' \
+              'replace_once("kernel/Kbuild", """<<<<<<< ours\nifeq ($(filter /%,$(src)),)\nKSU_KERNEL_DIR := $(srctree)/$(src)\nelse\nKSU_KERNEL_DIR := $(src)\nendif\n=======\n## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n>>>>>>> theirs\n""", """## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n""")' \
+              'replace_once("kernel/Kbuild", """\nccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include\n""", "\n")' \
+              'replace_once("kernel/feature/kernel_umount.c", """<<<<<<< ours\n    // There are 6 scenarios:\n    // 1. Normal app: zygote -> appuid\n    // 2. Isolated process forked from zygote: zygote -> isolated_process\n    // 3. App zygote forked from zygote: zygote -> appuid\n    // 4. Webview zygote forked from zygote: zygote -> WEBVIEW_ZYGOTE_UID (no need to handle, app cannot run custom code)\n    // 5. Isolated process forked from app zygote: appuid -> isolated_process (already handled by 3)\n    // 6. Isolated process forked from webview zygote (no need to handle, app cannot run custom code)\n    if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    // check old process'\''s selinux context, if it is not zygote, ignore it!\n    // because some su apps may setuid to untrusted_app but they are in global mount namespace\n    // when we umount for such process, that is a disaster!\n    // also handle case 4 and 5\n    bool is_zygote_child = is_zygote(current_cred());\n    if (!is_zygote_child) {\n        pr_info(\"handle umount ignore non zygote child: %d\\n\", current->pid);\n        return 0;\n    }\n=======\n>>>>>>> theirs\n""", "")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    struct task_struct *p = current;\n    struct task_struct *t;\n    struct root_profile *profile = NULL;\n=======\n    struct root_profile profile;\n>>>>>>> theirs\n""", """    struct root_profile *profile = NULL;\n""")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    for_each_thread (p, t) {\n        ksu_set_task_tracepoint_flag(t);\n    }\n\n    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n=======\n    setup_mount_ns(profile.namespaces);\n>>>>>>> theirs\n""", """    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n""")' \
+              | python -
+
+            git add kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c
+          }
+
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
-          
+
           cd kernel
-          
-          # Apply kernel SuSFS patch - check for variant-specific first
+
+          # Apply core SuSFS patch.
           VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
-          
-          if [ -f "$VARIANT_SUSFS_PATCH" ]; then
-            echo "📋 Applying variant-specific SuSFS patch from .github/patches/${{ matrix.variant }}/"
-            # Dry-run first to check if it will apply
-            if patch -p1 --dry-run --forward < "$VARIANT_SUSFS_PATCH" > /dev/null 2>&1; then
-              patch -p1 --forward < "$VARIANT_SUSFS_PATCH"
-              echo "✅ Patch applied successfully"
-            else
-              echo "⏭️  Patch skipped (likely already applied or not needed)"
-            fi
+
+          if [ "${{ matrix.variant }}" = "kowsu" ]; then
+            apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
-            echo "📋 Applying default SuSFS patch from susfs4ksu submodule"
-            if patch -p1 --dry-run --forward < "$DEFAULT_SUSFS_PATCH" > /dev/null 2>&1; then
-              patch -p1 --forward < "$DEFAULT_SUSFS_PATCH"
-              echo "✅ Patch applied successfully"
-            else
-              echo "⏭️  Patch skipped (likely already applied or not needed)"
-            fi
+            apply_variant_or_default_patch \
+              "$VARIANT_SUSFS_PATCH" \
+              "$DEFAULT_SUSFS_PATCH" \
+              "Custom core SuSFS patch" \
+              "Default core SuSFS patch"
           fi
-          
-          # Apply KernelSU-specific SuSFS patch
-          if [ "${{ matrix.variant }}" = "sukisu" ]; then
-            # Sukisu tmp-builtin branch has SuSFS pre-integrated, skip patching
-            if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-              echo "⏭️  Skipping 10_enable_susfs_for_ksu patch for sukisu tmp-builtin (pre-integrated)"
+
+          if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then
+            ensure_namespace_susfs_prologue
+          fi
+
+          # Always attempt the KernelSU-side SuSFS integration patch.
+          # Some upstream variants drift over time; the helper will skip cleanly
+          # when the integration is already present.
+          cd KernelSU
+
+          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+
+          try_apply_patch() {
+            local patch_file="$1"
+            local desc="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch: $desc"
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${desc} already present, skipping."
+              printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            return 1
+          }
+
+          if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+            echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+            printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+          elif [ "${{ matrix.variant }}" = "tiann" ]; then
+            if git apply --3way "$VARIANT_KSU_PATCH"; then
+              printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
-              # Sukisu main branch needs standard SuSFS patch
-              cd KernelSU
-              VARIANT_KSU_PATCH="../../.github/patches/sukisu/10_enable_susfs_for_ksu.patch"
-              DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-              
-              if [ -f "$VARIANT_KSU_PATCH" ]; then
-                echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/sukisu/"
-                if patch -p1 --dry-run --forward < "$VARIANT_KSU_PATCH" > /dev/null 2>&1; then
-                  patch -p1 --forward < "$VARIANT_KSU_PATCH"
-                  echo "✅ Patch applied successfully"
+              if grep -Eq '^(<<<<<<<|=======|>>>>>>>)' kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c 2>/dev/null; then
+                echo "⚠️ Tiann KernelSU SuSFS patch drift detected, applying known auto-merge."
+                auto_merge_tiann_ksu_susfs_patch
+                printf '%s | %s | applied-with-auto-merge\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              else
+                echo "❌ Custom KernelSU SuSFS patch could not be applied cleanly: $VARIANT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                exit 1
+              fi
+            fi
+          elif [ -f "$VARIANT_KSU_PATCH" ]; then
+            if ! try_apply_patch "$VARIANT_KSU_PATCH" "Custom KernelSU SuSFS patch"; then
+              echo "⚠️ Custom KernelSU SuSFS patch is stale, falling back to default: $VARIANT_KSU_PATCH"
+              printf '%s | %s | stale-fallback\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+                if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+                  echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                  printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
                 else
-                  echo "⏭️  Patch skipped (likely already applied or not needed)"
-                fi
-              else
-                echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
-                if patch -p1 --dry-run --forward < "$DEFAULT_KSU_PATCH" > /dev/null 2>&1; then
-                  patch -p1 --forward < "$DEFAULT_KSU_PATCH"
-                  echo "✅ Patch applied successfully"
-                else
-                  echo "⏭️  Patch skipped (likely already applied or not needed)"
+                  echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                  printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                  exit 1
                 fi
               fi
-              cd ..
             fi
           else
-            # Standard variants (tiann/kowsu/mksu) - always apply patch
-            cd KernelSU
-            VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
-            DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-            
-            if [ -f "$VARIANT_KSU_PATCH" ]; then
-              echo "📋 Applying variant-specific KSU SuSFS patch from .github/patches/${{ matrix.variant }}/"
-              if patch -p1 --dry-run --forward < "$VARIANT_KSU_PATCH" > /dev/null 2>&1; then
-                patch -p1 --forward < "$VARIANT_KSU_PATCH"
-                echo "✅ Patch applied successfully"
+            if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+              if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+                echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
               else
-                echo "⏭️  Patch skipped (likely already applied or not needed)"
-              fi
-            else
-              echo "📋 Applying default KSU SuSFS patch from susfs4ksu submodule"
-              if patch -p1 --dry-run --forward < "$DEFAULT_KSU_PATCH" > /dev/null 2>&1; then
-                patch -p1 --forward < "$DEFAULT_KSU_PATCH"
-                echo "✅ Patch applied successfully"
-              else
-                echo "⏭️  Patch skipped (likely already applied or not needed)"
+                echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                exit 1
               fi
             fi
-            cd ..
           fi
 
-      - name: Apply LKM Spoof Patch
-        if: matrix.variant != 'sukisu' && matrix.variant != 'kowsu' && matrix.variant != 'next'
+          if [ "${{ matrix.variant }}" = "next" ] && [ -f fix_susfs.py ]; then
+            python3 fix_susfs.py
+            printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
+          fi
+
+          echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+
+      - name: Apply Remote Patches & Source Fixes
         run: |
-          cd kernel/KernelSU
-          
-          # Apply LKM spoof patch (skip for sukisu and kowsu)
-          LKM_SPOOF_PATCH="../../.github/patches/${{ matrix.variant }}/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
-          if [ -f "$LKM_SPOOF_PATCH" ]; then
-            echo "📋 Applying LKM spoof patch from .github/patches/${{ matrix.variant }}/"
-            if patch -p1 --dry-run --forward < "$LKM_SPOOF_PATCH" > /dev/null 2>&1; then
-              patch -p1 --forward < "$LKM_SPOOF_PATCH"
-              echo "✅ Patch applied successfully"
+          set -e
+          fetch_patch_or_fail() {
+            local url="$1"
+            local destination="$2"
+            curl --fail --location --silent --show-error "$url" -o "$destination"
+          }
+
+          apply_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
             else
-              echo "⏭️  Patch skipped (likely already applied or not needed)"
+              echo "❌ ${description} could not be applied cleanly: $patch_file"
+              exit 1
             fi
+          }
+
+          apply_repo_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+            apply_patch_or_fail "$GITHUB_WORKSPACE/$patch_file" "$description"
+          }
+
+          cd kernel
+
+          # 0. Bypass GKI ABI symbol checks
+          echo "🚫 Removing GKI protected exports..."
+          rm -f android/abi_gki_protected_exports_* || true
+
+          # 1. CLIDR uninitialized fix
+          fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
+            if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
+          apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
+
+          # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
+          echo "📶 Applying Wi-Fi patch..."
+          fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+            if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
+          apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+
+          # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.
+          if [ -f "drivers/kernelsu/app_profile.c" ] && grep -q "char comm\\[TASK_COMM_LEN\\];" drivers/kernelsu/app_profile.c; then
+            python -c 'from pathlib import Path; p=Path("drivers/kernelsu/app_profile.c"); t=p.read_text(); p.write_text(t.replace("char comm[TASK_COMM_LEN];", "static char comm[TASK_COMM_LEN];", 1))'
+            echo "✅ app_profile stack workaround applied"
           else
-            echo "⚠️ LKM spoof patch not found: $LKM_SPOOF_PATCH"
+            echo "⏭️  app_profile stack workaround not needed"
           fi
 
-      - name: Apply Remote Patches
+          # 4. Fix localversion script appending dirty flags
+          apply_repo_patch_or_fail ".github/patches/global/fix_setlocalversion_dirty.patch" "setlocalversion dirty suffix fix"
+
+          # 5. Fix libbpf compilation error
+          echo "🔧 Patching libbpf.c type casting..."
+          apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
+
+      - name: Verify Patched Tree
         run: |
-          cd kernel
-          
-          # CLIDR fix (essential for all variants)
-          echo "📋 Applying fix-clidr-uninitialized.patch"
-          if curl -LSs "https://raw.githubusercontent.com/infectedmushi/kernel_patches/main/fix-clidr-uninitialized.patch" \
-            -o /tmp/fix-clidr.patch; then
-            if patch -p1 --dry-run --forward < /tmp/fix-clidr.patch > /dev/null 2>&1; then
-              patch -p1 --forward < /tmp/fix-clidr.patch
-              echo "✅ Patch applied successfully"
+          set -e
+          mkdir -p success-metadata
+
+          if [ -z "${PATCH_MANIFEST:-}" ]; then
+            PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+            mkdir -p "$(dirname "$PATCH_MANIFEST")"
+            : > "$PATCH_MANIFEST"
+            echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          fi
+
+          echo "::group::Patch Verification"
+
+          # Check for CONFIG_KSU in Kconfig (use grep instead of rg)
+          if grep -q 'CONFIG_KSU' kernel/drivers/Kconfig 2>/dev/null; then
+            echo "✅ CONFIG_KSU found in kernel/drivers/Kconfig"
+          else
+            echo "⚠️  CONFIG_KSU not immediately visible (may be in submodule)"
+          fi
+
+          # Verify SuSFS integration if enabled
+          if [ "${ENABLE_SUSFS}" = "true" ]; then
+            echo "🔍 Verifying SuSFS files..."
+
+            # Check for SuSFS files
+            if [ -f kernel/fs/susfs.c ]; then
+              echo "✅ kernel/fs/susfs.c exists"
             else
-              echo "⏭️  Patch skipped (likely already applied or not needed)"
+              echo "⚠️  kernel/fs/susfs.c not found"
             fi
-          else
-            echo "⚠️ Failed to download remote patch, continuing anyway"
+
+            if [ -f kernel/include/linux/susfs.h ]; then
+              echo "✅ kernel/include/linux/susfs.h exists"
+            else
+              echo "⚠️  kernel/include/linux/susfs.h not found"
+            fi
+
+            # Verify Makefile entry for SuSFS
+            if grep -q 'CONFIG_KSU_SUSFS.*susfs' kernel/fs/Makefile 2>/dev/null; then
+              echo "✅ SuSFS Makefile entry found"
+            else
+              echo "⚠️  SuSFS Makefile entry not found (will be added during compile)"
+            fi
+
+            # Verify Kconfig entry for SuSFS
+            if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
+              echo "✅ SuSFS Kconfig entry found"
+            else
+              echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
+            fi
+
+            # Verify hooks for non-resukisu/next variants
+            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ]; then
+              if grep -rq 'ksu_init_rc_hook\|ksu_execveat_hook\|ksu_input_hook' kernel/drivers/kernelsu 2>/dev/null; then
+                echo "✅ KSU hooks found"
+              else
+                echo "⚠️  KSU hooks not found in standard locations"
+              fi
+            fi
           fi
 
-      - name: Patch Scripts
-        run: |
-          cd kernel
-          sed -i '/# Check for uncommitted changes\./,/fi/d' ./scripts/setlocalversion
+          # Write success metadata
+          echo "📝 Writing build metadata..."
+          {
+            echo "variant=${KSU_VARIANT}"
+            echo "kernel_ref=android14-6.1-2026-03"
+            echo "susfs_ref=gki-android14-6.1-dev"
+            echo "ksu_repo=${KSU_REPO}"
+            echo "ksu_ref=${KSU_BRANCH}"
+            echo "enable_susfs=${ENABLE_SUSFS}"
+            echo "dry_run=${DRY_RUN_ONLY:-false}"
+            echo "patch_repo_sha=4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e"
+          } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
 
-      - name: Configure Kernel
+          echo "✅ Patch verification complete"
+          echo "::endgroup::"
+
+      - name: Stop After Patch Validation
+        if: env.DRY_RUN_ONLY == 'true'
         run: |
+          {
+            echo "## Dry Run Complete"
+            echo
+            echo "- Variant: \`${{ matrix.variant }}\`"
+            echo "- KernelSU repo: \`${{ env.KSU_REPO }}\`"
+            echo "- KernelSU ref: \`${{ env.KSU_BRANCH }}\`"
+            echo "- Kernel ref: \`${{ needs.setup.outputs.kernel_ref }}\`"
+            echo "- SuSFS ref: \`${{ needs.setup.outputs.susfs_ref }}\`"
+            echo "- Result: Patch and config verification passed; compile intentionally skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build Kernel
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          LOG_FILE="$GITHUB_WORKSPACE/logs/build-${{ matrix.variant }}.log"
+          exec > >(tee -a "$LOG_FILE") 2>&1
+
+          summarize_build_failure() {
+            if [ ! -f "$LOG_FILE" ]; then
+              return 0
+            fi
+
+            echo "::group::Build failure summary (${KSU_VARIANT})"
+            echo "📄 Last 200 lines of $LOG_FILE"
+            tail -n 200 "$LOG_FILE" || true
+            echo
+            echo "🔎 Matching error signatures"
+            grep -nE 'error:|fatal error:|undefined reference|No rule to make target|FAILED:' "$LOG_FILE" | tail -n 80 || echo "No common error signature matched."
+            echo "::endgroup::"
+          }
+
+          trap 'status=$?; if [ "$status" -ne 0 ]; then summarize_build_failure; fi; exit "$status"' EXIT
+
           cd kernel
           export ARCH=arm64
           export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
           export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
           export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
-          
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out gki_defconfig
-          
-          # Base configuration - Complete set
-          cat >> out/.config << 'EOF'
-          # CPU & Architecture - Tensor G3 Cores
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CC="ccache ${{ env.CLANG_BIN }}/clang"
+          export CXX="ccache ${{ env.CLANG_BIN }}/clang++"
+          export HOSTCC="ccache ${{ env.CLANG_BIN }}/clang"
+          export HOSTCXX="ccache ${{ env.CLANG_BIN }}/clang++"
+          export LD="${{ env.CLANG_BIN }}/ld.lld"
+          export HOSTLD="${{ env.CLANG_BIN }}/ld.lld"
+          export AR="${{ env.CLANG_BIN }}/llvm-ar"
+          export HOSTAR="${{ env.CLANG_BIN }}/llvm-ar"
+          export NM="${{ env.CLANG_BIN }}/llvm-nm"
+          export OBJCOPY="${{ env.CLANG_BIN }}/llvm-objcopy"
+          export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
+          export READELF="${{ env.CLANG_BIN }}/llvm-readelf"
+          export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
+          export CLANG_TRIPLE="aarch64-linux-gnu-"
+
+          MAKE_JOBS=$(nproc)
+          START_TIME=$SECONDS
+
+          if [ "${KSU_VARIANT}" = "tiann" ]; then
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
+          else
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
+          fi
+
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            O=out gki_defconfig
+
+          # Append all custom GKI, Tensor G3, Net, and KSU configs before resolving dependencies.
+          cat <<EOF >> out/.config
           CONFIG_ARM64_CORTEX_X3=y
           CONFIG_ARM64_CORTEX_A715=y
           CONFIG_ARM64_CORTEX_A510=y
           CONFIG_ARM64_VA_BITS=48
           CONFIG_ARM64_PA_BITS=48
-          CONFIG_ARM64_TAGGED_ADDR_ABI=y
-          CONFIG_ARM64_SVE=y
-          CONFIG_ARM64_BTI=y
-          CONFIG_ARM64_PTR_AUTH=y
-          CONFIG_ARM64_SME=y
-
-          # Scheduler & Performance
           CONFIG_SCHED_MC=y
           CONFIG_SCHED_CORE=y
           CONFIG_ENERGY_MODEL=y
-          CONFIG_UCLAMP_TASK=y
-          CONFIG_UCLAMP_TASK_GROUP=y
-
-          # CPU Frequency Scaling
           CONFIG_CPU_FREQ=y
-          CONFIG_CPUFREQ_DT=y
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-          CONFIG_OPP=y
-
-          # CPU Idle
-          CONFIG_CPU_IDLE=y
-          CONFIG_ARM_PSCI_CPUIDLE=y
-
-          # Thermal Management
           CONFIG_THERMAL=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_DEVFREQ_THERMAL=y
-          CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
-          CONFIG_THERMAL_GOV_STEP_WISE=y
-          CONFIG_THERMAL_GOV_FAIR_SHARE=y
-          CONFIG_THERMAL_EMULATION=y
-          CONFIG_THERMAL_WRITABLE_TRIPS=y
-
-          # Power & Performance
-          CONFIG_POWER_CAP=y
-          CONFIG_PERF_EVENTS=y
-          CONFIG_NUMA_BALANCING=y
-
-          # Memory Management
           CONFIG_CMA=y
-          CONFIG_CMA_AREAS=7
-
-          # Kernel Version
-          CONFIG_LOCALVERSION_AUTO=n
-
-          # Kprobes (required for KernelSU)
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
-
-          # Filesystem
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-
-          # Network - IPTables & Traffic Control
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP6_NF_MATCH_HL=y
-
-          # TCP Congestion Control
-          CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_NET_SCH_FQ=y
-          # CONFIG_TCP_CONG_BIC is not set
-          # CONFIG_TCP_CONG_WESTWOOD is not set
-          # CONFIG_TCP_CONG_HTCP is not set
-
-          # Compilation Optimization
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_LTO=y
-          CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
-
-          # IP Sets (firewall/routing)
           CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=256
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-
-          # CAKE Queue Discipline
           CONFIG_NET_SCH_CAKE=y
-
-          # KernelSU Base Config (all variants)
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_LOCALVERSION_AUTO=n
+          ${KSU_LOCALVERSION}
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
-          
-          # Variant-specific config
-          case "${{ matrix.variant }}" in
-            "tiann")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
-              ;;
-            "kowsu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
-              ;;
-            "mksu")
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
-              ;;
-            "sukisu")
-              # SukiSU-Ultra configuration
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
-              
-              # Only add inline hook config if using tmp-builtin (SuSFS mode)
-              if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-                echo 'CONFIG_KSU_SUSFS_SUS_KSTAT_USE_INLINE_HOOK=y' >> out/.config
-              fi
-              ;;
-            "next")
-              # KernelSU-Next configuration (experimental/development branch)
-              echo 'CONFIG_LOCALVERSION="-deepongi+"' >> out/.config
-              echo 'CONFIG_KSU_KPROBES_HOOK=n' >> out/.config
-              echo 'CONFIG_KSU_ALLOWLIST_WORKAROUND=n' >> out/.config
-              echo 'CONFIG_KSU_LSM_SECURITY_HOOKS=y' >> out/.config
-              ;;
-          esac
-          
-          # SuSFS configuration - All available features enabled (skip for next variant)
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ "${{ matrix.variant }}" != "next" ]; then
-            cat >> out/.config << 'EOF'
+
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -1016,1080 +942,215 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
-            
           fi
-          
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld O=out olddefconfig
 
-      - name: Build Kernel
-        run: |
-          cd kernel
-          export ARCH=arm64
-          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
-          export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
-          export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          
-          # CCache performance optimizations
-          export CCACHE_COMPRESS=true
-          export CCACHE_COMPRESSLEVEL=6
-          export CCACHE_MAXSIZE=50G
-          export CCACHE_SLOPPINESS="include_file_ctime,include_file_mtime,time_macros"
-          
-          export CC="ccache clang"
-          export CXX="ccache clang++"
-          
-          # Dynamic MAKE_JOBS calculation (memory-aware)
-          CORES=$(nproc)
-          MEMORY_GB=$(free -g | awk '/^Mem:/{print $2}')
-          # Each compile job needs ~2GB RAM, leave 2GB for system
-          MAX_JOBS=$(( (MEMORY_GB - 2) / 2 ))
-          # Use the smaller of cores or memory-based limit
-          if [ $MAX_JOBS -lt $CORES ]; then
-            MAKE_JOBS=$MAX_JOBS
-            echo "⚠️  Limited by RAM: Using $MAKE_JOBS jobs (have $CORES cores, ${MEMORY_GB}GB RAM)"
-          else
-            MAKE_JOBS=$CORES
-            echo "✅ Using $MAKE_JOBS jobs ($CORES cores available, ${MEMORY_GB}GB RAM)"
-          fi
-          # Ensure at least 1 job
-          [ $MAKE_JOBS -lt 1 ] && MAKE_JOBS=1
-          
-          START_TIME=$SECONDS
-          
-          # ⬇️ THIS IS WHERE YOU ADD THE CLEAN COMMAND ⬇️
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            O=out olddefconfig
+
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
-            echo "🧹 Performing clean build..."
-            make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld O=out clean
+            make -j$MAKE_JOBS O=out clean
           fi
-          
-          echo "🗿️ Building kernel for ${{ matrix.variant }}..."
-          echo "📂 Using CCACHE at: $CCACHE_DIR"
-          echo "🔧 Build configuration:"
-          echo "  - ARCH: $ARCH"
-          echo "  - CC: $CC"
-          echo "  - LLVM: 1 (full LLVM toolchain for LTO)"
-          echo "  - LLVM_IAS: 1 (LLVM integrated assembler)"
-          echo "  - LD: ld.lld (LLVM linker)"
-          echo "  - MAKE_JOBS: $MAKE_JOBS (auto-detected)"
-          echo "  - CCache: Optimized (compress=true, maxsize=50G)"
-          
-          # Build with full LLVM toolchain for LTO support
-          make -j$MAKE_JOBS LLVM=1 LLVM_IAS=1 LD=ld.lld HOSTLD=ld.lld O=out CC="$CC" 2>&1 | tee build.log
-          
-          BUILD_TIME=$((SECONDS - START_TIME))
-          BUILD_MINS=$((BUILD_TIME / 60))
-          BUILD_SECS=$((BUILD_TIME % 60))
-          echo "BUILD_TIME=${BUILD_MINS}m ${BUILD_SECS}s" >> $GITHUB_ENV
-          echo "MAKE_JOBS=$MAKE_JOBS" >> $GITHUB_ENV
 
-      - name: Record Build Duration
-        id: build-duration
+          make -j$MAKE_JOBS O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            all
+
+          trap - EXIT
+
+          echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
+
+      - name: Package Kernel (AnyKernel3)
+        if: env.DRY_RUN_ONLY != 'true'
         run: |
-          echo "duration=${{ env.BUILD_MINS || 'Unknown' }}m ${{ env.BUILD_SECS || 'Unknown' }}s" >> $GITHUB_OUTPUT
-
-      - name: Check CCACHE Performance
-        run: |
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          echo "📈 CCACHE stats AFTER build:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Get full ccache stats
-          ccache -s
-          
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 Extracting Performance Metrics..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Save ccache output to variable
-          CCACHE_OUTPUT=$(ccache -s 2>&1)
-          
-          # Extract cache size - CCache 4.12.1 format - get ONLY first match
-          # Format: "  Cache size (GB):   26.2 /   50.0 (52.36%)"
-          FINAL_CACHE_SIZE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Cache size" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1}')
-          
-          # Extract hit rate from FIRST "Hits:" line only (skip Local storage section)
-          # Use -m1 to get only the first match
-          HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p')
-          
-          # If not found, try alternative extraction
-          if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-            HIT_RATE=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1)
-          fi
-          
-          # Get cache hits and misses for detailed info - FIRST match only
-          CACHE_HITS=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
-          CACHE_MISSES=$(echo "$CCACHE_OUTPUT" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ')
-          
-          # Calculate total calls
-          CACHE_TOTAL=$((CACHE_HITS + CACHE_MISSES))
-          
-          echo "✅ CCache v4.12.1 detected"
-          echo "✅ Cache hits: ${CACHE_HITS:-0}"
-          echo "✅ Cache misses: ${CACHE_MISSES:-0}"
-          echo "✅ Total calls: ${CACHE_TOTAL:-0}"
-          
-          if [ -n "$HIT_RATE" ] && [ "$HIT_RATE" != "" ]; then
-            echo "✅ Hit rate extracted: $HIT_RATE"
-          else
-            echo "⚠️  Could not extract hit rate, trying calculation method..."
-            
-            # Calculate manually if needed
-            if [ -n "$CACHE_HITS" ] && [ -n "$CACHE_MISSES" ]; then
-              if [ "$CACHE_TOTAL" -gt 0 ]; then
-                HIT_RATE=$(awk "BEGIN {printf \"%.1f%%\", ($CACHE_HITS / $CACHE_TOTAL) * 100}")
-                echo "✅ Calculated hit rate: $HIT_RATE"
-              else
-                HIT_RATE="0%"
-                echo "⚠️  No cacheable calls made"
-              fi
-            else
-              HIT_RATE="N/A"
-              echo "❌ Could not extract hit/miss counts"
-            fi
-          fi
-          
-          # Export all values to GITHUB_ENV so they're available to next steps
-          echo "CCACHE_HIT_RATE=${HIT_RATE:-N/A}" >> $GITHUB_ENV
-          echo "CCACHE_HITS=${CACHE_HITS:-0}" >> $GITHUB_ENV
-          echo "CCACHE_MISSES=${CACHE_MISSES:-0}" >> $GITHUB_ENV
-          echo "FINAL_CACHE_SIZE=${FINAL_CACHE_SIZE:-N/A}" >> $GITHUB_ENV
-          
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ CCache stats exported to environment"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: Export Build Information
-        id: export-build-info
-        run: |
-          # Debug output (can be disabled by setting debug=false)
-          if [ "${{ github.event.inputs.debug || 'false' }}" = "true" ] || [ "${{ runner.debug }}" = "1" ]; then
-            echo "🔍 Debug - Environment variables:"
-            echo "  CCACHE_HIT_RATE='${{ env.CCACHE_HIT_RATE }}'"
-            echo "  CCACHE_HITS='${{ env.CCACHE_HITS }}'"
-            echo "  CCACHE_MISSES='${{ env.CCACHE_MISSES }}'"
-            echo "  FINAL_CACHE_SIZE='${{ env.FINAL_CACHE_SIZE }}'"
-            echo "  WORKFLOW_COMMIT_SHORT='${{ env.WORKFLOW_COMMIT_SHORT }}'"
-            echo "  WORKFLOW_COMMIT_MSG='${{ env.WORKFLOW_COMMIT_MSG }}'"
-          fi
-          
-          # Export CCache stats from environment variables (already set by Check CCACHE Performance)
-          echo "ccache_hit_rate=${{ env.CCACHE_HIT_RATE }}" >> $GITHUB_OUTPUT
-          echo "ccache_hits=${{ env.CCACHE_HITS }}" >> $GITHUB_OUTPUT
-          echo "ccache_misses=${{ env.CCACHE_MISSES }}" >> $GITHUB_OUTPUT
-          echo "ccache_size=${{ env.FINAL_CACHE_SIZE }}" >> $GITHUB_OUTPUT
-          
-          # Export commit info from environment
-          echo "commit_hash=${{ env.WORKFLOW_COMMIT_SHORT }}" >> $GITHUB_OUTPUT
-          echo "commit_message=${{ env.WORKFLOW_COMMIT_MSG }}" >> $GITHUB_OUTPUT
-          
-          echo "✅ Build information exported to job outputs"
-
-      - name: Package Kernel
-        run: |
-
-          # Clean up any previous AnyKernel3 directory
-          rm -rfv AnyKernel3 || true
-
-          # Get kernel version from Makefile
-          echo "📋 Extracting kernel version..."
           cd kernel
           KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
           cd ..
-          echo "✅ Kernel version: $KERNEL_VERSION"
-          
-          # Determine which AnyKernel3 branch to use based on variant
+
           case "${{ matrix.variant }}" in
-            "tiann")
-              AK3_BRANCH="KernelSU"
-              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
-              echo "📦 Using AnyKernel3 branch: KernelSU (for tiann variant)"
-              ;;
-            "kowsu")
-              AK3_BRANCH="KowSU" 
-              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
-              echo "📦 Using AnyKernel3 branch: KowSU (for kowsu variant)"
-              ;;
-            "mksu")
-              AK3_BRANCH="MKSU"
-              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
-              echo "📦 Using AnyKernel3 branch: MKSU (for mksu variant)"
-              ;;
-            "sukisu")
-              AK3_BRANCH="sukisu"
-              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
-              echo "📦 Using AnyKernel3 branch: sukisu (for SukiSU-Ultra variant)"
-              ;;
-            "next")
-              AK3_BRANCH="next"
-              AK3_REPO="deepongi-labs/AnyKernel3-p8a"
-              echo "📦 Using AnyKernel3 branch: next (for KernelSU-Next variant)"
-              ;;
+            "tiann") AK3_BRANCH="KernelSU" ;;
+            "kowsu") AK3_BRANCH="KowSU" ;;
+            "resukisu") AK3_BRANCH="resukisu" ;;
+            "next") AK3_BRANCH="next" ;;
           esac
-          
-          # Clone the appropriate AnyKernel3 branch with error handling
-          echo "📥 Cloning AnyKernel3 from $AK3_REPO on branch $AK3_BRANCH..."
-          if ! git clone --depth=1 --branch=$AK3_BRANCH \
-            https://github.com/$AK3_REPO AnyKernel3; then
-            echo "❌ Failed to clone AnyKernel3 from $AK3_REPO on branch $AK3_BRANCH"
-            exit 1
-          fi
-          echo "✅ Successfully cloned AnyKernel3"
-          
-          cd AnyKernel3
-          rm -rf .git .github
-          
-          # Copy kernel files
-          cp ../kernel/out/arch/arm64/boot/Image ./
-          [ -f ../kernel/out/arch/arm64/boot/dtbo.img ] && cp ../kernel/out/arch/arm64/boot/dtbo.img ./
-          [ -f ../kernel/out/arch/arm64/boot/dtb ] && cp ../kernel/out/arch/arm64/boot/dtb ./
-          
-          TIMESTAMP=$(date +%Y%m%d-%H%M)
-          VARIANT_UPPER=$(echo "${{ matrix.variant }}" | tr '[:lower:]' '[:upper:]')
-          
-          # Use both kernel version and KSU version in ZIP name
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
-            ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-SUSFS.zip"
-          else
-            ZIP_NAME="AK3-${KERNEL_VERSION}-${VARIANT_UPPER}-${TIMESTAMP}-r${{ env.KSU_VERSION }}-NOSUSFS.zip"
-          fi
-          
-          zip -r9 "../$ZIP_NAME" . -x "*.git*" "README.md" ".github/*"
+
+          git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
+
+          cd AnyKernel3 && rm -rf .git .github
+          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
+          zip -r9 "../$ZIP_NAME" .
           cd ..
-          
-          # Get file size
-          FILE_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
-          echo "FILE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
-          
-          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
-          md5sum "$ZIP_NAME" > "${ZIP_NAME}.md5"
-          
-          echo "✅ Packaged kernel: $ZIP_NAME ($FILE_SIZE)"
-          echo "📋 Using AnyKernel3 branch: $AK3_BRANCH from $AK3_REPO"
+
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
-          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
-
-      - name: Generate File Info for Release
-        id: generate-file-info
-        run: |
-          # Get actual file size and MD5
-          ACTUAL_SIZE=$(du -h "${{ env.KERNEL_ZIP }}" | cut -f1)
-          MD5_HASH=$(md5sum "${{ env.KERNEL_ZIP }}" | awk '{print $1}')
-          SHA256_HASH=$(sha256sum "${{ env.KERNEL_ZIP }}" | awk '{print $1}')
-          
-          # Set outputs
-          echo "FILE_SIZE=${ACTUAL_SIZE}" >> $GITHUB_OUTPUT
-          echo "MD5_HASH=${MD5_HASH}" >> $GITHUB_OUTPUT
-          echo "SHA256_HASH=${SHA256_HASH}" >> $GITHUB_OUTPUT
-          echo "VARIANT=${{ matrix.variant }}" >> $GITHUB_OUTPUT
-          echo "ZIP_NAME=${{ env.KERNEL_ZIP }}" >> $GITHUB_OUTPUT
-          echo "KSU_VERSION=r${{ env.KSU_VERSION }}" >> $GITHUB_OUTPUT
-          echo "KERNEL_VERSION=${{ env.KERNEL_VERSION }}" >> $GITHUB_OUTPUT
-          
-          echo "📊 File info for ${{ matrix.variant }}:"
-          echo "   Size: ${ACTUAL_SIZE}"
-          echo "   MD5: ${MD5_HASH}"
-          echo "   SHA256: ${SHA256_HASH}"
-
-      - name: Build Time Summary
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 BUILD TIME BREAKDOWN - ${{ matrix.variant }}"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "⏱️  Submodule checkout:  ${{ env.SUBMODULE_TIME || 'N/A' }}"
-          echo "⏱️  KernelSU setup:      ${{ env.KSU_SETUP_TIME || 'N/A' }}"
-          echo "⏱️  Kernel compilation:  ${{ env.BUILD_TIME || 'N/A' }}"
-          echo "⏱️  Parallel jobs used:  ${{ env.MAKE_JOBS || 'N/A' }}"
-          echo ""
-          echo "💾 CCache stats:         ${{ env.CCACHE_HIT_RATE || 'N/A' }}"
-          echo "📦 Final package:        ${{ env.KERNEL_ZIP || 'N/A' }}"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Upload Artifacts
+        if: env.DRY_RUN_ONLY != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
             ${{ env.KERNEL_ZIP }}
-            ${{ env.KERNEL_ZIP }}.sha256
-            ${{ env.KERNEL_ZIP }}.md5
-            kernel/build.log
             ${{ env.CHANGELOG_FILE }}
-          retention-days: 30
+            logs/build-${{ matrix.variant }}.log
+            kernel/out/.config
+            ${{ env.PATCH_MANIFEST }}
+            success-metadata/source-manifest-${{ matrix.variant }}.txt
+
+      - name: Collect Failure Logs
+        if: failure()
+        run: |
+          ARTIFACT_DIR="failure-logs/${{ matrix.variant }}"
+          mkdir -p "$ARTIFACT_DIR"
+
+          [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/patch-failure-${{ matrix.variant }}.log" ] && cp "logs/patch-failure-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
+          [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
+          [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
+          [ -n "${{ env.PATCH_MANIFEST }}" ] && [ -f "${{ env.PATCH_MANIFEST }}" ] && cp "${{ env.PATCH_MANIFEST }}" "$ARTIFACT_DIR/"
+          [ -f "success-metadata/source-manifest-${{ matrix.variant }}.txt" ] && cp "success-metadata/source-manifest-${{ matrix.variant }}.txt" "$ARTIFACT_DIR/"
+          find kernel -type f \( -name "*.rej" -o -name "*.orig" \) -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          find kernel/out -maxdepth 3 -type f \
+            \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \
+            -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          for RUNNER_DIR in /actions-runner /home/runner/actions-runner /home/deepongi/actions-runner /opt/actions-runner /mnt/Hawai/actions-runner; do
+            if [ -d "$RUNNER_DIR/_diag" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-diag"
+              cp -a "$RUNNER_DIR/_diag/." "$ARTIFACT_DIR/runner-diag/" 2>/dev/null || true
+            fi
+
+            if [ -d "$RUNNER_DIR/_work/_temp" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-temp"
+              cp -a "$RUNNER_DIR/_work/_temp/." "$ARTIFACT_DIR/runner-temp/" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload Failure Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
+          path: failure-logs/${{ matrix.variant }}
+          if-no-files-found: warn
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          {
+            echo "## Variant \`${{ matrix.variant }}\`"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Status | \`${{ job.status }}\` |"
+            echo "| Dry run | \`${{ env.DRY_RUN_ONLY }}\` |"
+            echo "| KernelSU repo | \`${{ env.KSU_REPO }}\` |"
+            echo "| KernelSU ref | \`${{ env.KSU_BRANCH }}\` |"
+            echo "| Kernel ref | \`${{ needs.setup.outputs.kernel_ref }}\` |"
+            echo "| SuSFS ref | \`${{ needs.setup.outputs.susfs_ref }}\` |"
+            echo "| KSU version | \`r${{ env.KSU_VERSION }}\` |"
+            echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
+            if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then
+              echo "| ZIP artifact | \`${{ env.KERNEL_ZIP }}\` |"
+            fi
+            if [ -n "${{ env.PATCH_MANIFEST }}" ]; then
+              echo "| Patch manifest | \`${{ env.PATCH_MANIFEST }}\` |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   create_release:
     needs: [setup, build]
-    runs-on: [self-hosted, Linux, X64]
-    if: needs.setup.outputs.create_release == 'true' && success()
-    outputs:
-      duration: ${{ env.BUILD_DURATION }}
+    runs-on: [self-hosted, linux, x64]
+    if: always() && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Calculate Build Duration
-        run: |
-          echo "🕐 Calculating build duration..."
-          
-          # Get start time from setup job output
-          START_TIME="${{ needs.setup.outputs.build_start_time }}"
-          echo "Start time from setup: $START_TIME"
-          
-          # Get current time
-          END_TIME=$(date +%s)
-          echo "End time: $END_TIME"
-          
-          if [ -n "$START_TIME" ] && [ "$START_TIME" != "null" ] && [ "$START_TIME" -gt 0 ]; then
-            DURATION=$((END_TIME - START_TIME))
-            DURATION_MINS=$((DURATION / 60))
-            DURATION_SECS=$((DURATION % 60))
-            
-            if [ $DURATION_MINS -eq 0 ]; then
-              BUILD_DURATION="${DURATION_SECS}s"
-            else
-              BUILD_DURATION="${DURATION_MINS}m ${DURATION_SECS}s"
-            fi
-            
-            echo "✅ Build duration: $BUILD_DURATION"
-          else
-            BUILD_DURATION="Unknown"
-            echo "⚠️ Could not calculate duration (start time: $START_TIME)"
-          fi
-          
-          echo "BUILD_DURATION=$BUILD_DURATION" >> $GITHUB_ENV
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
 
-      - name: Prepare Release Assets
+      - name: Create GitHub Release
         run: |
           cd release-assets
-          
-          # Flatten directory structure
           find . -type f -exec mv {} . \; 2>/dev/null || true
-          find . -type d -empty -delete
-          
-          echo "📦 Release assets:"
-          ls -lh
-          
-          # Remove any old RELEASE_NOTES.md file (we'll generate fresh in the release step)
-          rm -f RELEASE_NOTES.md 2>/dev/null || true
-          
-          # Count variants built
-          VARIANT_COUNT=$(ls -1 CHANGELOG-*.md 2>/dev/null | wc -l)
-          echo "VARIANT_COUNT=$VARIANT_COUNT" >> $GITHUB_ENV
-          
-          # Get build date
-          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          
-          # Determine which variants were built
-          VARIANTS_BUILT=""
-          [ -f "CHANGELOG-tiann.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}tiann "
-          [ -f "CHANGELOG-kowsu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}kowsu "
-          [ -f "CHANGELOG-mksu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}mksu "
-          [ -f "CHANGELOG-sukisu.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}sukisu "
-          [ -f "CHANGELOG-next.md" ] && VARIANTS_BUILT="${VARIANTS_BUILT}next "
-          VARIANTS_BUILT=$(echo "$VARIANTS_BUILT" | xargs)
-          echo "VARIANTS_BUILT=$VARIANTS_BUILT" >> $GITHUB_ENV
 
-      - name: Create Release with Enhanced Notes
-        id: create_release
-        run: |
-          cd release-assets
-          
-          echo "📝 Generating enhanced release notes for GitHub Releases page..."
-          
-          # Get actual file data from job outputs
-          TIANN_SIZE="${{ needs.build.outputs.tiann_size || 'Unknown' }}"
-          TIANN_MD5="${{ needs.build.outputs.tiann_md5 || 'Unknown' }}"
-          TIANN_SHA256="${{ needs.build.outputs.tiann_sha256 || 'Unknown' }}"
-          TIANN_KSU_VERSION="${{ needs.build.outputs.tiann_ksu_version || 'Unknown' }}"
-          TIANN_KERNEL_VERSION="${{ needs.build.outputs.tiann_kernel_version || '6.1.x' }}"
-          TIANN_ZIP="${{ needs.build.outputs.tiann_zip || '' }}"
-          
-          KOWSU_SIZE="${{ needs.build.outputs.kowsu_size || 'Unknown' }}"
-          KOWSU_MD5="${{ needs.build.outputs.kowsu_md5 || 'Unknown' }}"
-          KOWSU_SHA256="${{ needs.build.outputs.kowsu_sha256 || 'Unknown' }}"
-          KOWSU_KSU_VERSION="${{ needs.build.outputs.kowsu_ksu_version || 'Unknown' }}"
-          KOWSU_KERNEL_VERSION="${{ needs.build.outputs.kowsu_kernel_version || '6.1.x' }}"
-          KOWSU_ZIP="${{ needs.build.outputs.kowsu_zip || '' }}"
-          
-          MKSU_SIZE="${{ needs.build.outputs.mksu_size || 'Unknown' }}"
-          MKSU_MD5="${{ needs.build.outputs.mksu_md5 || 'Unknown' }}"
-          MKSU_SHA256="${{ needs.build.outputs.mksu_sha256 || 'Unknown' }}"
-          MKSU_KSU_VERSION="${{ needs.build.outputs.mksu_ksu_version || 'Unknown' }}"
-          MKSU_KERNEL_VERSION="${{ needs.build.outputs.mksu_kernel_version || '6.1.x' }}"
-          MKSU_ZIP="${{ needs.build.outputs.mksu_zip || '' }}"
-          
-          SUKISU_SIZE="${{ needs.build.outputs.sukisu_size || 'Unknown' }}"
-          SUKISU_MD5="${{ needs.build.outputs.sukisu_md5 || 'Unknown' }}"
-          SUKISU_SHA256="${{ needs.build.outputs.sukisu_sha256 || 'Unknown' }}"
-          SUKISU_KSU_VERSION="${{ needs.build.outputs.sukisu_ksu_version || 'Unknown' }}"
-          SUKISU_KERNEL_VERSION="${{ needs.build.outputs.sukisu_kernel_version || '6.1.x' }}"
-          SUKISU_ZIP="${{ needs.build.outputs.sukisu_zip || '' }}"
-          
-          NEXT_SIZE="${{ needs.build.outputs.next_size || 'Unknown' }}"
-          NEXT_MD5="${{ needs.build.outputs.next_md5 || 'Unknown' }}"
-          NEXT_SHA256="${{ needs.build.outputs.next_sha256 || 'Unknown' }}"
-          NEXT_KSU_VERSION="${{ needs.build.outputs.next_ksu_version || 'Unknown' }}"
-          NEXT_KERNEL_VERSION="${{ needs.build.outputs.next_kernel_version || '6.1.x' }}"
-          NEXT_ZIP="${{ needs.build.outputs.next_zip || '' }}"
-          
-          # Find actual ZIP files
-          [ -z "$TIANN_ZIP" ] && TIANN_ZIP=$(ls AK3-*-TIANN-*.zip 2>/dev/null | head -1 || echo "")
-          [ -z "$KOWSU_ZIP" ] && KOWSU_ZIP=$(ls AK3-*-KowSU-*.zip 2>/dev/null | head -1 || echo "")
-          [ -z "$MKSU_ZIP" ] && MKSU_ZIP=$(ls AK3-*-MKSU-*.zip 2>/dev/null | head -1 || echo "")
-          [ -z "$SUKISU_ZIP" ] && SUKISU_ZIP=$(ls AK3-*-SUKISU-*.zip 2>/dev/null | head -1 || echo "")
-          
-          # Use common kernel version
-          COMMON_KERNEL_VERSION="$TIANN_KERNEL_VERSION"
-          [ -z "$COMMON_KERNEL_VERSION" ] && COMMON_KERNEL_VERSION="6.1.x"
-          
-          # Get CCache stats from build job outputs (FIX)
-          CCACHE_HIT_RATE="${{ needs.build.outputs.ccache_hit_rate }}"
-          CCACHE_HITS="${{ needs.build.outputs.ccache_hits }}"
-          CCACHE_MISSES="${{ needs.build.outputs.ccache_misses }}"
-          CCACHE_SIZE="${{ needs.build.outputs.ccache_size }}"
-          
-          # If empty, set to N/A
-          CCACHE_HIT_RATE="${CCACHE_HIT_RATE:-N/A}"
-          CCACHE_HITS="${CCACHE_HITS:-0}"
-          CCACHE_MISSES="${CCACHE_MISSES:-0}"
-          CCACHE_SIZE="${CCACHE_SIZE:-N/A}"
-          
-          # Format CCache details like Telegram does
-          if [ "$CCACHE_HITS" != "0" ] || [ "$CCACHE_MISSES" != "0" ]; then
-            CCACHE_FORMATTED="${CCACHE_HIT_RATE} (${CCACHE_HITS} hits, ${CCACHE_MISSES} misses)"
-          else
-            CCACHE_FORMATTED="${CCACHE_HIT_RATE}"
+          # Safety check: Only create release if at least one ZIP was actually built
+          if ! ls *.zip 1> /dev/null 2>&1; then
+            echo "❌ No ZIP artifacts found! All matrix builds must have failed. Skipping release."
+            exit 0
           fi
-          
-          # Get commit information from build job outputs (FIX)
-          LAST_COMMIT_HASH="${{ needs.build.outputs.workflow_commit_hash }}"
-          LAST_COMMIT_MESSAGE="${{ needs.build.outputs.workflow_commit_message }}"
-          
-          # If empty, set defaults
-          LAST_COMMIT_HASH="${LAST_COMMIT_HASH:-unknown}"
-          LAST_COMMIT_MESSAGE="${LAST_COMMIT_MESSAGE:-No commit message}"
-          
-          # Extract variant commit information from changelogs
-          echo "📋 Extracting variant commit history from changelogs..."
-          
-          VARIANT_COMMITS=""
-          
-          # Function to extract commits from changelog
-          extract_variant_commits() {
-            local variant=$1
-            local changelog="CHANGELOG-${variant}.md"
-            
-            if [ ! -f "$changelog" ]; then
-              return
-            fi
-            
-            # Check if this is an initial build or has changes
-            if grep -q "## 🎉 Initial Build" "$changelog"; then
-              # Initial build - show last 5 commits
-              COMMITS=$(grep -A 50 "### 🔧 KernelSU - ${variant}" "$changelog" | grep "^- \*\*" | head -5)
-              if [ -n "$COMMITS" ]; then
-                # Format variant name with repo link
-                VARIANT_NAME=""
-                case "$variant" in
-                  "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
-                  "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
-                  "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
-                  "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
-                esac
-                
-                VARIANT_COMMITS="${VARIANT_COMMITS}
-          
-          ### ${VARIANT_NAME}
-          *Initial build - showing last 5 commits:*
-          ${COMMITS}"
-              fi
-            elif grep -q "## 🔄 Changes Since Last Build" "$changelog"; then
-              # Has changes - extract the commit details
-              CHANGE_COUNT=$(grep "**Changes:**" "$changelog" | grep -oE '[0-9]+ commit' | grep -oE '[0-9]+')
-              
-              if [ -n "$CHANGE_COUNT" ] && [ "$CHANGE_COUNT" != "0" ]; then
-                # Extract commits between the KernelSU section and next ###
-                COMMITS=$(sed -n '/### 🔧 KernelSU/,/^### /p' "$changelog" | grep -A 200 "#### " | grep -B 1 "^----$" | grep -v "^----$" | head -20)
-                
-                if [ -n "$COMMITS" ]; then
-                  # Format variant name properly with repo link
-                  VARIANT_NAME=""
-                  case "$variant" in
-                    "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
-                    "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
-                    "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
-                    "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
-                    "next") VARIANT_NAME="[next](https://github.com/KernelSU-Next/KernelSU-Next/tree/dev) (KernelSU-Next)" ;;
-                  esac
-                  
-                  VARIANT_COMMITS="${VARIANT_COMMITS}
-          
-          ### ${VARIANT_NAME}
-          *${CHANGE_COUNT} commit(s) since last build:*
-          
-          ${COMMITS}"
-                fi
-              else
-                # No changes
-                VARIANT_NAME=""
-                case "$variant" in
-                  "tiann") VARIANT_NAME="[tiann](https://github.com/tiann/KernelSU) (Official KernelSU)" ;;
-                  "kowsu") VARIANT_NAME="[kowsu](https://github.com/KOWX712/KernelSU) (KOWX712/KernelSU)" ;;
-                  "mksu") VARIANT_NAME="[mksu](https://github.com/5ec1cff/KernelSU) (5ec1cff/KernelSU)" ;;
-                  "sukisu") VARIANT_NAME="[sukisu](https://github.com/SukiSU-Ultra/SukiSU-Ultra) (SukiSU-Ultra)" ;;
-                  "next") VARIANT_NAME="[next](https://github.com/KernelSU-Next/KernelSU-Next/tree/dev) (KernelSU-Next)" ;;
-                esac
-                
-                VARIANT_COMMITS="${VARIANT_COMMITS}
-          
-          ### ${VARIANT_NAME}
-          *No changes since last build*"
-              fi
-            fi
-          }
-          
-          # Extract commits for each built variant
-          [ -f "CHANGELOG-tiann.md" ] && extract_variant_commits "tiann"
-          [ -f "CHANGELOG-kowsu.md" ] && extract_variant_commits "kowsu"
-          [ -f "CHANGELOG-mksu.md" ] && extract_variant_commits "mksu"
-          [ -f "CHANGELOG-sukisu.md" ] && extract_variant_commits "sukisu"
-          [ -f "CHANGELOG-next.md" ] && extract_variant_commits "next"
-          
-          # Build the release notes (no duplicate title, no build table)
-          RELEASE_NOTES="**Build Date:** ${{ env.BUILD_DATE }}  
-          **Build Time:** ${{ env.BUILD_DURATION }}  
-          **CCache:** $CCACHE_FORMATTED  
-          **Cache Size:** $CCACHE_SIZE GB  
-          **Kernel Version:** $COMMON_KERNEL_VERSION  
-          **SuSFS:** ${{ github.event.inputs.disable_susfs == 'true' && '❌ Disabled' || '✅ Enabled' }}  
-          **Last Commit:** \`$LAST_COMMIT_HASH\` - \"$LAST_COMMIT_MESSAGE\"
-          
-          ---
-          
-          ## 📝 Variant Updates${VARIANT_COMMITS}
-          
-          ---
-          
-          ## 📱 Supported Devices
-          - Pixel 8
-          - Pixel 8a  
-          - Pixel 8 Pro
-          
-          ## 🚀 Installation Methods
-          
-          ### **Method 1: Kernel Flasher (Recommended)**
-          Download [Kernel Flasher v1.6.0](https://github.com/fatalcoder524/KernelFlasher/releases/tag/v1.6.0) and flash the AK3 zip directly.
-          
-          ### **Method 2: Manual Flash (Magiskboot)**
-          \`\`\`bash
-          # Extract kernel from AK3 zip
-          unzip AK3-*.zip Image
-          
-          # Unpack stock boot image
-          magiskboot unpack boot.img
-          
-          # Replace kernel
-          mv -v Image kernel
-          
-          # Repack boot image
-          magiskboot repack boot.img
-          
-          # Flash to device
-          fastboot flash boot new-boot.img
-          \`\`\`
-          
-          ---
-          
-          **📖 Changelogs:** [View detailed changelogs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          **🐛 Report Issues:** [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues)
-          **📢 Telegram:** [@deepongi_labs](https://t.me/deepongi_labs)
-          
-          *Built with ❤️ by GitHub Actions*"
-          
-          echo "✅ Generated release notes with CCache: $CCACHE_FORMATTED"
-          
-          # Prepare files for release (exclude changelogs and build logs)
-          echo "📦 Preparing release assets..."
-          
-          # Remove files we don't want in the release
-          rm -f CHANGELOG-*.md build-*.log
-          
-          echo "📋 Files to be uploaded:"
-          ls -lh
-          
-          # Create the release using GitHub CLI
+
+          RELEASE_NOTES="**Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          **SuSFS:** ${{ inputs.disable_susfs && '❌ Disabled' || '✅ Enabled' }}
+
+          ### Devices Supported
+          - Pixel 8, 8a, 8 Pro
+
+          Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
+
+          # Added ./*.md to upload the changelogs alongside the zips!
           gh release create "build-${{ github.run_number }}" \
-            --title "Android 16 Kernel Build #${{ github.run_number }}" \
+            --title "Android 14 Kernel Build #${{ github.run_number }}" \
             --notes "$RELEASE_NOTES" \
             --repo "${{ github.repository }}" \
-            --draft=false \
-            --prerelease=false \
-            ./*
-          
-          echo "✅ Release created: build-${{ github.run_number }}"
+            ./*.zip ./*.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: [self-hosted, Linux, X64]
-    if: always()
+    runs-on: [self-hosted, linux, x64]
+    if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
-      - name: Extract and Prepare Build Information
-        if: always()
-        id: extract-info
+      - name: Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Get variant info from setup output
-          VARIANTS_BUILT="${{ needs.setup.outputs.matrix || '' }}"
-          echo "VARIANTS_BUILT=${VARIANTS_BUILT}" >> $GITHUB_ENV
-          
-          # Get release creation status
-          CREATE_RELEASE="${{ needs.setup.outputs.create_release || 'false' }}"
-          echo "CREATE_RELEASE=${CREATE_RELEASE}" >> $GITHUB_ENV
-          
-          # Get duration from create_release job
-          BUILD_DURATION="${{ needs.create_release.outputs.duration || 'Unknown' }}"
-          echo "BUILD_DURATION=${BUILD_DURATION}" >> $GITHUB_ENV
-          
-          # Determine which variants were actually built
-          BUILT_VARIANTS=""
-          [[ "${VARIANTS_BUILT}" == *"tiann"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}tiann "
-          [[ "${VARIANTS_BUILT}" == *"kowsu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}kowsu "
-          [[ "${VARIANTS_BUILT}" == *"mksu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}mksu "
-          [[ "${VARIANTS_BUILT}" == *"sukisu"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}sukisu "
-          [[ "${VARIANTS_BUILT}" == *"next"* ]] && BUILT_VARIANTS="${BUILT_VARIANTS}next "
-          
-          # Clean up and format variants
-          BUILT_VARIANTS=$(echo "${BUILT_VARIANTS}" | xargs)
-          echo "BUILT_VARIANTS_LIST=${BUILT_VARIANTS}" >> $GITHUB_ENV
-          
-          # Format variants with pipe separators for display
-          if [ -n "${BUILT_VARIANTS}" ]; then
-            VARIANTS_FORMATTED=$(echo "${BUILT_VARIANTS}" | sed 's/ / \| /g')
-            VARIANT_COUNT=$(echo "${BUILT_VARIANTS}" | wc -w)
-          else
-            VARIANTS_FORMATTED="none"
-            VARIANT_COUNT=0
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are not configured; skipping notification."
+            exit 0
           fi
-          echo "VARIANTS_FORMATTED=${VARIANTS_FORMATTED}" >> $GITHUB_ENV
-          echo "VARIANT_COUNT=${VARIANT_COUNT}" >> $GITHUB_ENV
-          
-          # Determine SUSFS status
-          if [ "${{ github.event.inputs.disable_susfs }}" = "true" ]; then
-            SUSFS_STATUS="❌ Disabled"
-          else
-            SUSFS_STATUS="✅ Enabled"
-          fi
-          echo "SUSFS_STATUS=${SUSFS_STATUS}" >> $GITHUB_ENV
 
-      - name: Download Build Artifacts
-        if: always()
-        uses: actions/download-artifact@v4
-        with:
-          path: notify-artifacts
-        continue-on-error: true
+          STATUS="${{ needs.build.result }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="⚠️"
+          [ "$STATUS" == "failure" ] && ICON="❌"
 
-      - name: Calculate Build Duration
-        if: always()
-        id: calculate-duration
-        run: |
-          # Try multiple methods to get build duration
-          DURATION="Unknown"
-          
-          # Method 1: Use GitHub API to get run duration
-          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
-            RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
-            
-            if [ "$HTTP_CODE" = "200" ]; then
-              DURATION_MS=$(echo "$RESPONSE_BODY" | grep -o '"run_duration_ms":[0-9]*' | cut -d':' -f2)
-              
-              if [ -n "$DURATION_MS" ] && [ "$DURATION_MS" != "null" ] && [ "$DURATION_MS" -gt 0 ]; then
-                TOTAL_SECONDS=$((DURATION_MS / 1000))
-                
-                if [ $TOTAL_SECONDS -lt 60 ]; then
-                  DURATION="${TOTAL_SECONDS}s"
-                elif [ $TOTAL_SECONDS -lt 3600 ]; then
-                  MINUTES=$((TOTAL_SECONDS / 60))
-                  SECONDS=$((TOTAL_SECONDS % 60))
-                  DURATION="${MINUTES}m ${SECONDS}s"
-                else
-                  HOURS=$((TOTAL_SECONDS / 3600))
-                  MINUTES=$(( (TOTAL_SECONDS % 3600) / 60 ))
-                  SECONDS=$((TOTAL_SECONDS % 60))
-                  DURATION="${HOURS}h ${MINUTES}m ${SECONDS}s"
-                fi
-              fi
-            fi
-          fi
-          
-          echo "BUILD_DURATION=${DURATION}" >> $GITHUB_ENV
+          # Format variables
+          IS_CLEAN="${{ inputs.force_clean_build && 'Yes' || 'No' }}"
+          IS_SUSFS="${{ inputs.disable_susfs && 'Disabled' || 'Enabled' }}"
+          DO_REL="${{ inputs.create_release && 'Yes' || 'No' }}"
 
-      - name: Get Kernel and KSU Versions
-        if: always()
-        id: get-versions
-        run: |
-          echo "🔍 Extracting KSU versions from artifact ZIP filenames..."
-          
-          # Default values
-          KERNEL_VERSION="6.1.x"
-          TIANN_KSU="Unknown"
-          KOWSU_KSU="Unknown"
-          MKSU_KSU="Unknown"
-          SUKISU_KSU="Unknown"
-          NEXT_KSU="Unknown"
-          
-          # Check if artifacts were downloaded
-          if [ -d "notify-artifacts" ]; then
-            cd notify-artifacts
-            
-            # Extract versions from ZIP filenames
-            # Format: AK3-6.1.157-TIANN-20241220-1234-r43826-SUSFS.zip
-            
-            for dir in kernel-*; do
-              if [ -d "$dir" ]; then
-                cd "$dir"
-                
-                # Find ZIP file and extract version
-                ZIP_FILE=$(ls AK3-*.zip 2>/dev/null | head -1)
-                
-                if [ -n "$ZIP_FILE" ]; then
-                  echo "📦 Found: $ZIP_FILE"
-                  
-                  # Extract kernel version (6.1.157)
-                  KERNEL_VERSION=$(echo "$ZIP_FILE" | sed -n 's/AK3-\([0-9]\+\.[0-9]\+\.[0-9]\+\)-.*/\1/p')
-                  
-                  # Extract KSU version (r43826)
-                  KSU_VER=$(echo "$ZIP_FILE" | sed -n 's/.*-\(r[0-9]\+\)-.*/\1/p')
-                  
-                  # Determine variant from filename
-                  if [[ "$ZIP_FILE" == *"-TIANN-"* ]]; then
-                    TIANN_KSU="$KSU_VER"
-                  elif [[ "$ZIP_FILE" == *"-KOWSU-"* ]]; then
-                    KOWSU_KSU="$KSU_VER"
-                  elif [[ "$ZIP_FILE" == *"-MKSU-"* ]]; then
-                    MKSU_KSU="$KSU_VER"
-                  elif [[ "$ZIP_FILE" == *"-SUKISU-"* ]]; then
-                    SUKISU_KSU="$KSU_VER"
-                  elif [[ "$ZIP_FILE" == *"-NEXT-"* ]]; then
-                    NEXT_KSU="$KSU_VER"
-                  fi
-                fi
-                
-                cd ..
-              fi
-            done
-            
-            cd ..
-          fi
-          
-          echo "✅ Extracted versions:"
-          echo "  Kernel: $KERNEL_VERSION"
-          echo "  TIANN: $TIANN_KSU"
-          echo "  KOWSU: $KOWSU_KSU"
-          echo "  MKSU: $MKSU_KSU"
-          echo "  SUKISU: $SUKISU_KSU"
-          echo "  NEXT: $NEXT_KSU"
-          
-          # Set environment variables
-          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
-          echo "TIANN_KSU_VERSION=${TIANN_KSU}" >> $GITHUB_ENV
-          echo "KOWSU_KSU_VERSION=${KOWSU_KSU}" >> $GITHUB_ENV
-          echo "MKSU_KSU_VERSION=${MKSU_KSU}" >> $GITHUB_ENV
-          echo "SUKISU_KSU_VERSION=${SUKISU_KSU}" >> $GITHUB_ENV
-          echo "NEXT_KSU_VERSION=${NEXT_KSU}" >> $GITHUB_ENV
-      - name: Get CCache Statistics
-        if: always()
-        id: get-ccache-stats
-        run: |
-          echo "🔍 Starting CCache statistics extraction..."
-          
-          # Initialize default values
-          CCACHE_HIT_RATE="N/A"
-          CCACHE_HITS="0"
-          CCACHE_MISSES="0"
-          CCACHE_SIZE="N/A"
-          
-          # Try to get ccache stats if ccache command exists
-          if command -v ccache &> /dev/null; then
-            CCACHE_STATS=$(ccache -s 2>&1 || true)
-            
-            if [ -n "$CCACHE_STATS" ]; then
-              echo "✅ CCache output received"
-              
-              # CCache 4.12.1 format - get only first match with -m1
-              HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | sed -n 's/.*(\([0-9]\+\.[0-9]\+%\)).*/\1/p' | head -1)
-              
-              # If not found, try alternative extraction
-              if [ -z "$HIT_RATE" ] || [ "$HIT_RATE" = "" ]; then
-                HIT_RATE=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk -F'(' '{print $2}' | cut -d')' -f1 | head -1)
-              fi
-              
-              # Clean up the value - ensure it's a single line
-              HIT_RATE=$(echo "$HIT_RATE" | tr -d '\n\r' | xargs)
-              CCACHE_HIT_RATE="${HIT_RATE:-N/A}"
-              echo "Extracted HIT_RATE: '$CCACHE_HIT_RATE'"
-              
-              # Get hits and misses - first match only
-              HITS=$(echo "$CCACHE_STATS" | grep -m1 "^  Hits:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' | head -1 || echo "0")
-              MISSES=$(echo "$CCACHE_STATS" | grep -m1 "^  Misses:" | awk '{print $2}' | cut -d'/' -f1 | tr -d ' ' | head -1 || echo "0")
-              
-              # Clean up values
-              CCACHE_HITS=$(echo "${HITS:-0}" | tr -d '\n\r' | xargs)
-              CCACHE_MISSES=$(echo "${MISSES:-0}" | tr -d '\n\r' | xargs)
-              echo "Extracted HITS: '$CCACHE_HITS', MISSES: '$CCACHE_MISSES'"
-              
-              # Get cache size (CCache 4.12.1 format) - first match only
-              SIZE_LINE=$(echo "$CCACHE_STATS" | grep -m1 "^  Cache size" || echo "")
-              if [ -n "$SIZE_LINE" ]; then
-                # Extract size: "Cache size (GB):   26.2 /   50.0 (52.36%)"
-                SIZE=$(echo "$SIZE_LINE" | sed 's/  Cache size (GB):[[:space:]]*//' | awk '{print $1}' | head -1)
-                CCACHE_SIZE=$(echo "${SIZE:-N/A}" | tr -d '\n\r' | xargs)
-                echo "Extracted SIZE: '$CCACHE_SIZE'"
-              fi
-            else
-              echo "⚠️ No CCache stats available"
-            fi
-          else
-            echo "⚠️ CCache command not found"
-          fi
-          
-          # Export to environment with clean values
-          echo "CCACHE_HIT_RATE=$CCACHE_HIT_RATE" >> $GITHUB_ENV
-          echo "CCACHE_HITS=$CCACHE_HITS" >> $GITHUB_ENV
-          echo "CCACHE_MISSES=$CCACHE_MISSES" >> $GITHUB_ENV
-          echo "CCACHE_SIZE=$CCACHE_SIZE" >> $GITHUB_ENV
-          
-          # Calculate emoji for hit rate
-          # Remove % sign and convert to integer
-          RATE_NUM=$(echo "$CCACHE_HIT_RATE" | sed 's/%//g' | awk '{print int($1+0.5)}' 2>/dev/null)
-          echo "Parsed RATE_NUM: $RATE_NUM from '$CCACHE_HIT_RATE'"
-          
-          if [ -n "$RATE_NUM" ] && [ "$RATE_NUM" -eq "$RATE_NUM" ] 2>/dev/null; then
-            if [ "$RATE_NUM" -ge 90 ]; then
-              CCACHE_EMOJI="🚀"
-            elif [ "$RATE_NUM" -ge 70 ]; then
-              CCACHE_EMOJI="⚡"
-            elif [ "$RATE_NUM" -ge 50 ]; then
-              CCACHE_EMOJI="📈"
-            elif [ "$RATE_NUM" -ge 20 ]; then
-              CCACHE_EMOJI="🐢"
-            else
-              CCACHE_EMOJI="🐌"
-            fi
-          else
-            CCACHE_EMOJI="❓"
-          fi
-          
-          echo "CCACHE_EMOJI=$CCACHE_EMOJI" >> $GITHUB_ENV
-          echo "Selected emoji: $CCACHE_EMOJI"
-
-      - name: Debug CCache Output
-        run: |
-          echo "🔍 Raw CCache output:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          ccache -s
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔍 CCache version:"
-          ccache --version
-
-      - name: Get Commit Information
-        if: always()
-        id: get-commit-info
-        run: |
-          # Try to get commit information
-          COMMIT_HASH=""
-          COMMIT_AUTHOR=""
-          COMMIT_MESSAGE=""
-          
-          if command -v git &> /dev/null; then
-            COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-            COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an" 2>/dev/null || echo "unknown")
-            COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s" 2>/dev/null || echo "No commit message")
-            
-            if [ ${#COMMIT_MESSAGE} -gt 80 ]; then
-              COMMIT_MESSAGE="${COMMIT_MESSAGE:0:77}..."
-            fi
-            
-            COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[_*`[]/\\&/g')
-          fi
-          
-          echo "COMMIT_HASH=${COMMIT_HASH}" >> $GITHUB_ENV
-          echo "COMMIT_AUTHOR=${COMMIT_AUTHOR}" >> $GITHUB_ENV
-          echo "COMMIT_MESSAGE=${COMMIT_MESSAGE}" >> $GITHUB_ENV
-
-      - name: Send Success Notification
-        if: ${{ needs.create_release.result == 'success' && needs.build.result == 'success' && github.event.inputs.enable_telegram == 'true' }}
-        id: notify-success
-        run: |
-          CURRENT_TIME=$(date +"%H:%M")
-          
-          # Build KSU info from actual versions - CORRECTED with proper alignment
-          KSU_INFO=""
-          if [ -n "${{ env.TIANN_KSU_VERSION }}" ] && [ "${{ env.TIANN_KSU_VERSION }}" != "Unknown" ]; then
-              KSU_INFO="✅ *tiann:* ${{ env.TIANN_KSU_VERSION }}"
-          fi
-          if [ -n "${{ env.KOWSU_KSU_VERSION }}" ] && [ "${{ env.KOWSU_KSU_VERSION }}" != "Unknown" ]; then
-            if [ -n "$KSU_INFO" ]; then
-              KSU_INFO="$KSU_INFO
-          ✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
-            else
-              KSU_INFO="✅ *kowsu:* ${{ env.KOWSU_KSU_VERSION }}"
-            fi
-          fi
-          if [ -n "${{ env.MKSU_KSU_VERSION }}" ] && [ "${{ env.MKSU_KSU_VERSION }}" != "Unknown" ]; then
-            if [ -n "$KSU_INFO" ]; then
-              KSU_INFO="$KSU_INFO
-          ✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
-            else
-              KSU_INFO="✅ *mksu:* ${{ env.MKSU_KSU_VERSION }}"
-            fi
-          fi
-          if [ -n "${{ env.SUKISU_KSU_VERSION }}" ] && [ "${{ env.SUKISU_KSU_VERSION }}" != "Unknown" ]; then
-            if [ -n "$KSU_INFO" ]; then
-              KSU_INFO="$KSU_INFO
-          ✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
-            else
-              KSU_INFO="✅ *sukisu:* ${{ env.SUKISU_KSU_VERSION }}"
-            fi
-          fi
-          if [ -n "${{ env.NEXT_KSU_VERSION }}" ] && [ "${{ env.NEXT_KSU_VERSION }}" != "Unknown" ]; then
-            if [ -n "$KSU_INFO" ]; then
-              KSU_INFO="$KSU_INFO
-          ✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
-            else
-              KSU_INFO="✅ *next:* ${{ env.NEXT_KSU_VERSION }}"
-            fi
-          fi
-          
-          # Get CCache hits and misses for more detailed info
-          CCACHE_HITS="${{ env.CCACHE_HITS || '0' }}"
-          CCACHE_MISSES="${{ env.CCACHE_MISSES || '0' }}"
-          CCACHE_SIZE="${{ env.CCACHE_SIZE || 'N/A' }}"
-          
-          # Calculate total calls and format with descriptive text
-          if [ "$CCACHE_HITS" -gt 0 ] || [ "$CCACHE_MISSES" -gt 0 ]; then
-            TOTAL_CALLS=$((CCACHE_HITS + CCACHE_MISSES))
-            CCACHE_DETAILS="${{ env.CCACHE_HIT_RATE || 'N/A' }} (${CCACHE_HITS} hits, ${CCACHE_MISSES} misses)"
-          else
-            CCACHE_DETAILS="${{ env.CCACHE_HIT_RATE || 'N/A' }}"
-          fi
-          
-          BUILD_DURATION="${{ needs.create_release.outputs.duration || env.BUILD_DURATION || 'Unknown' }}"
-          
-          MESSAGE="🚀 *Build #${{ github.run_number }} | SUCCESS*
+          # Use HTML parsing to completely avoid Markdown character breaking (hyphens/underscores)
+          cat << EOF > tg_message.txt
+          $ICON <b>Kernel Build ${STATUS^^}</b>
           ━━━━━━━━━━━━━━━━━━━━━
+          📱 <b>Target:</b> Pixel 8 / 8a / 8 Pro
+          🛠️ <b>Variant(s):</b> ${{ inputs.ksu_variant }}
+          🛡️ <b>SuSFS:</b> $IS_SUSFS
+          🧹 <b>Clean Build:</b> $IS_CLEAN
+          📦 <b>Release Created:</b> $DO_REL
+          👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
 
-          📦 *Variants:* ${{ env.VARIANT_COUNT }}/${{ github.event.inputs.disable_susfs == 'true' && '5' || '4' }} (${{ env.VARIANTS_FORMATTED }})
-          ⏱️ *Duration:* ${BUILD_DURATION}
-          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
-          📱 *Target:* Pixel 8a/8/8 Pro | Android 16 GKI
+          🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>
+          EOF
 
-          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
-          🎯 *CCache Hit-Rate:* ${CCACHE_DETAILS} ${{ env.CCACHE_EMOJI }}
-          💾 *Cache Size:* ${CCACHE_SIZE} GB
-
-          🔧 *KSU Versions:*
-          ${KSU_INFO}
-
-          ⬇️ *Downloads:*
-          [View Release](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-
-          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
-          💬 *Message:* \"${{ env.COMMIT_MESSAGE }}\"
-
-          🔗 *Links:*
-          ├─ [Release Page](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-          ├─ [Actions Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          └─ [Download All](https://github.com/${{ github.repository }}/releases/tag/build-${{ github.run_number }})
-
-          🕰️ ${CURRENT_TIME} | GitHub Actions"
-          
-          echo "Generated message preview:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "$MESSAGE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Send with retry
-          for ATTEMPT in 1 2 3; do
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-              -d text="$MESSAGE" \
-              -d parse_mode="Markdown" \
-              -d disable_web_page_preview=true && break
-            [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
-          done
-
-      - name: Send Failure Notification
-        if: ${{ (needs.create_release.result == 'failure' || needs.build.result == 'failure') && github.event.inputs.enable_telegram == 'true' }}
-        id: notify-failure
-        run: |
-          CURRENT_TIME=$(date +"%H:%M")
-          
-          # Determine failure stage
-          if [ "${{ needs.build.result }}" = "failure" ]; then
-            FAILED_STAGE="Build Process"
-            EMOJI="🔨"
-          elif [ "${{ needs.create_release.result }}" = "failure" ]; then
-            FAILED_STAGE="Release Creation"
-            EMOJI="📦"
-          else
-            FAILED_STAGE="Unknown Stage"
-            EMOJI="❓"
-          fi
-          
-          # Add duration context if failed early
-          DURATION_CONTEXT="${{ env.BUILD_DURATION }}"
-          if [ "$DURATION_CONTEXT" != "Unknown" ] && [[ "$DURATION_CONTEXT" == *"s" ]] && ! [[ "$DURATION_CONTEXT" == *"m"* ]]; then
-            DURATION_CONTEXT="${DURATION_CONTEXT} (failed early)"
-          fi
-          
-          MESSAGE="❌ *Build #${{ github.run_number }} | FAILED*
-          ━━━━━━━━━━━━━━━━━━━━━
-
-          $EMOJI *Failed Stage:* ${FAILED_STAGE}
-          ⏱️ *Duration:* ${DURATION_CONTEXT}
-          📦 *Target Variants:* ${{ env.VARIANTS_FORMATTED }}
-          🛡️ *SuSFS:* ${{ env.SUSFS_STATUS }}
-
-          🧬 *Kernel Version:* ${{ env.KERNEL_VERSION }}
-          ${{ env.CCACHE_EMOJI }} *CCache:* ${{ env.CCACHE_HIT_RATE }}
-
-          🚨 *Error Details:*
-          • Build process encountered an error
-          • Check specific variant logs below
-          • Last successful build: #$(({{ github.run_number }} - 1))
-
-          🔗 *Quick Actions:*
-          ├─ [View Error Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          ├─ [Retry This Build](https://github.com/${{ github.repository }}/actions/workflows/build.yml)
-          └─ [Compare with #$(({{ github.run_number }} - 1))](https://github.com/${{ github.repository }}/compare/build-$(({{ github.run_number }} - 1))...build-${{ github.run_number }})
-
-          📝 *Commit:* \`${{ env.COMMIT_HASH }}\` by ${{ env.COMMIT_AUTHOR }}
-
-          🕰️ ${CURRENT_TIME} | GitHub Actions"
-          
-          # Send with retry
-          for ATTEMPT in 1 2 3; do
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-              -d text="$MESSAGE" \
-              -d parse_mode="Markdown" \
-              -d disable_web_page_preview=true && break
-            [ $ATTEMPT -lt 3 ] && sleep $((ATTEMPT * 2))
-          done
+          # Safely URL-encode the file using --data-urlencode text@filename
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            --data-urlencode text@tg_message.txt \
+            -d parse_mode="HTML" \
+            -d disable_web_page_preview=true

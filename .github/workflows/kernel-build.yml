@@ -548,62 +548,36 @@ jobs:
               return 0
             fi
 
-            python - <<'PY'
-from pathlib import Path
-path = Path("fs/namespace.c")
-text = path.read_text()
-include_old = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n"""
-include_new = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""
-ida_old = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n"""
-ida_new = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""
-if include_old not in text or ida_old not in text:
-    raise SystemExit("namespace.c layout drifted; could not inject SuSFS prologue")
-text = text.replace(include_old, include_new, 1)
-text = text.replace(ida_old, ida_new, 1)
-path.write_text(text)
-PY
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/namespace.c")' \
+              'text = path.read_text()' \
+              'include_old = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n"""' \
+              'include_new = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_sdcard_android_data_decrypted __read_mostly;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'ida_old = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n"""' \
+              'ida_new = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nstatic DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'if include_old not in text or ida_old not in text: raise SystemExit("namespace.c layout drifted; could not inject SuSFS prologue")' \
+              'path.write_text(text.replace(include_old, include_new, 1).replace(ida_old, ida_new, 1))' \
+              | python -
 
             echo "📋 Applied namespace SuSFS prologue fix"
             printf '%s | %s | applied\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           }
 
           auto_merge_tiann_ksu_susfs_patch() {
-            python - <<'PY'
-from pathlib import Path
-
-def replace_once(path_str, old, new):
-    path = Path(path_str)
-    text = path.read_text()
-    if old not in text:
-        raise SystemExit(f"missing expected conflict block in {path_str}")
-    path.write_text(text.replace(old, new, 1))
-
-replace_once(
-    "kernel/Kbuild",
-    """<<<<<<< ours\nifeq ($(filter /%,$(src)),)\nKSU_KERNEL_DIR := $(srctree)/$(src)\nelse\nKSU_KERNEL_DIR := $(src)\nendif\n=======\n## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n>>>>>>> theirs\n""",
-    """## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n""",
-)
-replace_once(
-    "kernel/Kbuild",
-    """\nccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include\n""",
-    "\n",
-)
-replace_once(
-    "kernel/feature/kernel_umount.c",
-    """<<<<<<< ours\n    // There are 6 scenarios:\n    // 1. Normal app: zygote -> appuid\n    // 2. Isolated process forked from zygote: zygote -> isolated_process\n    // 3. App zygote forked from zygote: zygote -> appuid\n    // 4. Webview zygote forked from zygote: zygote -> WEBVIEW_ZYGOTE_UID (no need to handle, app cannot run custom code)\n    // 5. Isolated process forked from app zygote: appuid -> isolated_process (already handled by 3)\n    // 6. Isolated process forked from webview zygote (no need to handle, app cannot run custom code)\n    if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    // check old process's selinux context, if it is not zygote, ignore it!\n    // because some su apps may setuid to untrusted_app but they are in global mount namespace\n    // when we umount for such process, that is a disaster!\n    // also handle case 4 and 5\n    bool is_zygote_child = is_zygote(current_cred());\n    if (!is_zygote_child) {\n        pr_info(\"handle umount ignore non zygote child: %d\\n\", current->pid);\n        return 0;\n    }\n=======\n>>>>>>> theirs\n""",
-    "",
-)
-replace_once(
-    "kernel/policy/app_profile.c",
-    """<<<<<<< ours\n    struct task_struct *p = current;\n    struct task_struct *t;\n    struct root_profile *profile = NULL;\n=======\n    struct root_profile profile;\n>>>>>>> theirs\n""",
-    """    struct root_profile *profile = NULL;\n""",
-)
-replace_once(
-    "kernel/policy/app_profile.c",
-    """<<<<<<< ours\n    for_each_thread (p, t) {\n        ksu_set_task_tracepoint_flag(t);\n    }\n\n    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n=======\n    setup_mount_ns(profile.namespaces);\n>>>>>>> theirs\n""",
-    """    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n""",
-)
-PY
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'def replace_once(path_str, old, new):' \
+              '    path = Path(path_str)' \
+              '    text = path.read_text()' \
+              '    if old not in text: raise SystemExit(f"missing expected conflict block in {path_str}")' \
+              '    path.write_text(text.replace(old, new, 1))' \
+              'replace_once("kernel/Kbuild", """<<<<<<< ours\nifeq ($(filter /%,$(src)),)\nKSU_KERNEL_DIR := $(srctree)/$(src)\nelse\nKSU_KERNEL_DIR := $(src)\nendif\n=======\n## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n>>>>>>> theirs\n""", """## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n""")' \
+              'replace_once("kernel/Kbuild", """\nccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include\n""", "\n")' \
+              'replace_once("kernel/feature/kernel_umount.c", """<<<<<<< ours\n    // There are 6 scenarios:\n    // 1. Normal app: zygote -> appuid\n    // 2. Isolated process forked from zygote: zygote -> isolated_process\n    // 3. App zygote forked from zygote: zygote -> appuid\n    // 4. Webview zygote forked from zygote: zygote -> WEBVIEW_ZYGOTE_UID (no need to handle, app cannot run custom code)\n    // 5. Isolated process forked from app zygote: appuid -> isolated_process (already handled by 3)\n    // 6. Isolated process forked from webview zygote (no need to handle, app cannot run custom code)\n    if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    // check old process'\''s selinux context, if it is not zygote, ignore it!\n    // because some su apps may setuid to untrusted_app but they are in global mount namespace\n    // when we umount for such process, that is a disaster!\n    // also handle case 4 and 5\n    bool is_zygote_child = is_zygote(current_cred());\n    if (!is_zygote_child) {\n        pr_info(\"handle umount ignore non zygote child: %d\\n\", current->pid);\n        return 0;\n    }\n=======\n>>>>>>> theirs\n""", "")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    struct task_struct *p = current;\n    struct task_struct *t;\n    struct root_profile *profile = NULL;\n=======\n    struct root_profile profile;\n>>>>>>> theirs\n""", """    struct root_profile *profile = NULL;\n""")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    for_each_thread (p, t) {\n        ksu_set_task_tracepoint_flag(t);\n    }\n\n    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n=======\n    setup_mount_ns(profile.namespaces);\n>>>>>>> theirs\n""", """    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n""")' \
+              | python -
 
             git add kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c
           }

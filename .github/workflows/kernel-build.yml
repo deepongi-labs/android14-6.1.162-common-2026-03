@@ -576,6 +576,54 @@ jobs:
             printf '%s | %s | applied\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           }
 
+          ensure_namespace_susfs_helpers() {
+            if grep -q '^int susfs_get_non_sus_mnt_id_from_mnt' fs/namespace.c 2>/dev/null &&
+               grep -q '^struct vfsmount \*susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/namespace.c 2>/dev/null; then
+              echo "ℹ️ Namespace SuSFS helper definitions already present, skipping."
+              printf '%s | %s | already-present\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            printf '%s\n' \
+              '' \
+              '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
+              '/* Retrieve the nearest non-SuSFS mount ID from a mount. */' \
+              'int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt)' \
+              '{' \
+              '	struct mount *mnt = orig_mnt;' \
+              '	int mnt_id;' \
+              '' \
+              '	lock_mount_hash();' \
+              '	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              '	mnt_id = mnt->mnt_id;' \
+              '	unlock_mount_hash();' \
+              '	return mnt_id;' \
+              '}' \
+              '' \
+              '/* Retrieve the nearest non-SuSFS vfsmount and take references on it. */' \
+              'struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt)' \
+              '{' \
+              '	struct mount *mnt = real_mount(vfsmnt);' \
+              '' \
+              '	lock_mount_hash();' \
+              '	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              '	mntget(&mnt->mnt);' \
+              '	if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {' \
+              '		mntput(&mnt->mnt);' \
+              '		unlock_mount_hash();' \
+              '		return vfsmnt;' \
+              '	}' \
+              '	dget(mnt->mnt.mnt_root);' \
+              '	unlock_mount_hash();' \
+              '	return &mnt->mnt;' \
+              '}' \
+              '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
+              >> fs/namespace.c
+
+            echo "📋 Applied namespace SuSFS helper fix"
+            printf '%s | %s | applied\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
+          }
+
           auto_merge_tiann_ksu_susfs_patch() {
             printf '%s\n' \
               'from pathlib import Path' \
@@ -617,6 +665,7 @@ jobs:
           if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then
             ensure_namespace_susfs_prologue
           fi
+          ensure_namespace_susfs_helpers
 
           # Always attempt the KernelSU-side SuSFS integration patch.
           # Some upstream variants drift over time; the helper will skip cleanly

@@ -462,6 +462,7 @@ index f22f76d9c..4f3569655 100644
  
  #include "pnode.h"
  #include "internal.h"
+ #include <trace/hooks/blk.h>
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +extern bool susfs_is_current_ksu_domain(void);

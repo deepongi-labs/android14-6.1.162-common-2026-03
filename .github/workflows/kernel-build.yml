@@ -320,6 +320,7 @@ jobs:
               git -C "$target" remote set-url origin "$url"
               git -C "$target" fetch --depth=1 origin "$ref"
               git -C "$target" checkout --detach FETCH_HEAD
+              git -C "$target" reset --hard FETCH_HEAD
               git -C "$target" clean -fdx
             else
               rm -rf "$target"
@@ -676,6 +677,11 @@ jobs:
             fi
           fi
 
+          if [ "${{ matrix.variant }}" = "next" ] && [ -f fix_susfs.py ]; then
+            python3 fix_susfs.py
+            printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
+          fi
+
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
           echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
 
@@ -915,6 +921,10 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
           fi
 

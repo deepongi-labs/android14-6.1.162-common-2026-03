@@ -653,6 +653,37 @@ jobs:
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("kernel/fs/susfs.c")
+          text = path.read_text()
+
+          if "#include <linux/jump_label.h>" not in text:
+              text = text.replace(
+                  "#include <linux/fsnotify_backend.h>\n",
+                  "#include <linux/fsnotify_backend.h>\n#include <linux/jump_label.h>\n",
+                  1,
+              )
+
+          static_keys = """DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);
+          DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);
+          DEFINE_STATIC_KEY_TRUE(susfs_set_uname_key_true);
+          DEFINE_STATIC_KEY_TRUE(susfs_set_fake_cmdline_or_bootconfig_key_true);
+          DEFINE_STATIC_KEY_TRUE(susfs_avc_log_spoofing_key_true);
+          DEFINE_STATIC_KEY_FALSE(susfs_set_sdcard_android_data_decrypted_key_false);
+
+          """
+
+          if "DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false)" not in text:
+              marker = "extern bool susfs_is_current_ksu_domain(void);\n\n"
+              if marker not in text:
+                  raise SystemExit("susfs.c layout drifted; could not inject static branch keys")
+              text = text.replace(marker, static_keys + marker, 1)
+
+          path.write_text(text)
+          PY
+
           cd kernel
 
           # Apply core SuSFS patch.

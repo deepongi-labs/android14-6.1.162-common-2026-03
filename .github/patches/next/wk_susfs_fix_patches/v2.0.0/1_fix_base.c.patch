@@ -1,7 +1,7 @@
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
-@@ -101,6 +101,9 @@
- #include <linux/ksm.h>
+@@ -100,6 +100,9 @@
+ #include <linux/cn_proc.h>
  #include <linux/cpufreq_times.h>
  #include <linux/dma-buf.h>
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP

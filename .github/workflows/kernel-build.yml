@@ -717,7 +717,20 @@ jobs:
               '    path.write_text(text.replace(marker, marker + include, 1))' \
               | python -
             printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (1)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/2_fix_base.c.patch" "WK SuSFS fix: base.c include (2)"
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/proc/base.c")' \
+              'text = path.read_text()' \
+              'decl_marker = "\tunsigned int flags;\n"' \
+              'decl_insert = "\tunsigned int flags;\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\tstruct vm_area_struct *vma;\n#endif\n"' \
+              'block_marker = "\t\tif (write && copy_from_user(page, buf, this_len)) {\n"' \
+              'block_insert = """#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\tvma = find_vma(mm, addr);\n\t\tif (vma && vma->vm_file) {\n\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n\t\t\tif (unlikely(inode->i_mapping->flags & BIT_SUS_MAPS) && susfs_is_current_proc_umounted()) {\n\t\t\t\tif (write) {\n\t\t\t\t\tcopied = -EFAULT;\n\t\t\t\t} else {\n\t\t\t\t\tcopied = -EIO;\n\t\t\t\t}\n\t\t\t\t*ppos = addr;\n\t\t\t\tmmput(mm);\n\t\t\t\tgoto free;\n\t\t\t}\n\t\t}\n#endif\n\n"""' \
+              'if "susfs_is_current_proc_umounted()" not in text:' \
+              '    if decl_marker not in text or block_marker not in text: raise SystemExit("fs/proc/base.c layout drifted; could not inject SuSFS map guard")' \
+              '    text = text.replace(decl_marker, decl_insert, 1).replace(block_marker, block_insert + block_marker, 1)' \
+              '    path.write_text(text)' \
+              | python -
+            printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (2)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_namespace.c.patch" "WK SuSFS fix: namespace.c prologue"
           fi
 

@@ -677,9 +677,13 @@ jobs:
 
           if "DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false)" not in text:
               marker = "extern bool susfs_is_current_ksu_domain(void);\n\n"
-              if marker not in text:
-                  raise SystemExit("susfs.c layout drifted; could not inject static branch keys")
-              text = text.replace(marker, static_keys + marker, 1)
+              if marker in text:
+                  text = text.replace(marker, static_keys + marker, 1)
+              else:
+                  include_marker = "#include \"mount.h\"\n"
+                  if include_marker not in text:
+                      raise SystemExit("susfs.c layout drifted; could not inject static branch keys")
+                  text = text.replace(include_marker, include_marker + "\n" + static_keys, 1)
 
           path.write_text(text)
           PY

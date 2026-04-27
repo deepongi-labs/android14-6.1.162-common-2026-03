@@ -731,7 +731,23 @@ jobs:
               '    path.write_text(text)' \
               | python -
             printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (2)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_namespace.c.patch" "WK SuSFS fix: namespace.c prologue"
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/namespace.c")' \
+              'text = path.read_text()' \
+              'include = "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif\n"' \
+              'prologue = """#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_boot_completed_triggered __read_mostly;\n\nstatic DEFINE_IDA(susfs_ksu_mnt_group_ida);\nstatic atomic64_t susfs_ksu_mounts = ATOMIC64_INIT(0);\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif\n\n"""' \
+              'if "#include <linux/susfs_def.h>" not in text:' \
+              '    marker = "#include <linux/shmem_fs.h>\n"' \
+              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS include")' \
+              '    text = text.replace(marker, marker + include, 1)' \
+              'if "susfs_ksu_mounts" not in text:' \
+              '    marker = "#include \"internal.h\"\n\n"' \
+              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS prologue")' \
+              '    text = text.replace(marker, marker + prologue, 1)' \
+              'path.write_text(text)' \
+              | python -
+            printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
           if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then

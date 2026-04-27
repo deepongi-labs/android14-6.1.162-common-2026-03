@@ -741,7 +741,7 @@ jobs:
               '    marker = "#include <linux/shmem_fs.h>\n"' \
               '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS include")' \
               '    text = text.replace(marker, marker + include, 1)' \
-              'if "susfs_ksu_mounts" not in text:' \
+              'if "susfs_ksu_mounts" not in text and "susfs_is_current_ksu_domain" not in text:' \
               '    marker = "#include \"internal.h\"\n\n"' \
               '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS prologue")' \
               '    text = text.replace(marker, marker + prologue, 1)' \
@@ -1259,12 +1259,24 @@ jobs:
 
           Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
 
+          RELEASE_TAG="build-${{ github.run_number }}"
+          RELEASE_TITLE="Android 14 Kernel Build #${{ github.run_number }}"
+
           # Added ./*.md to upload the changelogs alongside the zips!
-          gh release create "build-${{ github.run_number }}" \
-            --title "Android 14 Kernel Build #${{ github.run_number }}" \
-            --notes "$RELEASE_NOTES" \
-            --repo "${{ github.repository }}" \
-            ./*.zip ./*.md
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "ℹ️ Release $RELEASE_TAG already exists; updating notes and replacing artifacts."
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}"
+            gh release upload "$RELEASE_TAG" --repo "${{ github.repository }}" --clobber ./*.zip ./*.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}" \
+              ./*.zip ./*.md
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.5.0
+name: Build GKI Kernel with KernelSU Variants v5.1.0
 
 on:
   workflow_dispatch:
@@ -62,24 +62,19 @@ on:
         required: false
         default: 'auto'
         type: string
-      include_adaptive_tuner:
-        description: 'Generate adaptive on-device tuner script'
+      include_runtime_tuner:
+        description: 'Generate on-device runtime tuner script'
         required: false
         default: true
         type: boolean
       governor_mode:
-        description: 'CPU governor strategy (stock or custom smartgov)'
+        description: 'CPU governor strategy (stock or custom dynamic schedutil)'
         required: false
-        default: 'pixel8_smartgov'
+        default: 'pixel8_dynamic_schedutil'
         type: choice
         options:
-          - pixel8_smartgov
+          - pixel8_dynamic_schedutil
           - stock_schedutil
-      enable_kerneltoast_optimizations:
-        description: 'Legacy toggle for kerneltoast patchset (deprecated; use kerneltoast_patch_policy)'
-        required: false
-        default: true
-        type: boolean
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
@@ -162,18 +157,14 @@ on:
         required: false
         default: 'auto'
         type: string
-      include_adaptive_tuner:
+      include_runtime_tuner:
         required: false
         default: true
         type: boolean
       governor_mode:
         required: false
-        default: 'pixel8_smartgov'
+        default: 'pixel8_dynamic_schedutil'
         type: string
-      enable_kerneltoast_optimizations:
-        required: false
-        default: true
-        type: boolean
       kerneltoast_patch_policy:
         required: false
         default: 'strict'
@@ -256,9 +247,8 @@ jobs:
       tuning_profile: ${{ steps.config.outputs.tuning_profile }}
       lto_mode: ${{ steps.config.outputs.lto_mode }}
       make_jobs: ${{ steps.config.outputs.make_jobs }}
-      include_adaptive_tuner: ${{ steps.config.outputs.include_adaptive_tuner }}
+      include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
       governor_mode: ${{ steps.config.outputs.governor_mode }}
-      enable_kerneltoast_optimizations: ${{ steps.config.outputs.enable_kerneltoast_optimizations }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
     steps:
       - name: Record Build Start Time
@@ -327,25 +317,19 @@ jobs:
             exit 1
           fi
 
-          echo "include_adaptive_tuner=${{ inputs.include_adaptive_tuner }}" >> $GITHUB_OUTPUT
+          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.governor_mode }}" in
-            pixel8_smartgov|stock_schedutil) ;;
+            pixel8_dynamic_schedutil|stock_schedutil) ;;
             *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
           esac
           echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
-          echo "enable_kerneltoast_optimizations=${{ inputs.enable_kerneltoast_optimizations }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.kerneltoast_patch_policy }}" in
             strict|best_effort|off) ;;
             *) echo "❌ Invalid kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}"; exit 1 ;;
           esac
-
-          if [ "${{ inputs.enable_kerneltoast_optimizations }}" != "true" ]; then
-            echo "kerneltoast_patch_policy=off" >> $GITHUB_OUTPUT
-          else
-            echo "kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}" >> $GITHUB_OUTPUT
-          fi
+          echo "kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}" >> $GITHUB_OUTPUT
 
   build:
     needs: setup
@@ -366,9 +350,8 @@ jobs:
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
       LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
       MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
-      ADAPTIVE_TUNER: ${{ needs.setup.outputs.include_adaptive_tuner }}
+      RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
-      ENABLE_KERNELTOAST_OPTIMIZATIONS: ${{ needs.setup.outputs.enable_kerneltoast_optimizations }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
 
     steps:
@@ -424,12 +407,25 @@ jobs:
           echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
-          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
+          echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=${SELECTED_CCACHE_DIR}/tmp" >> $GITHUB_ENV
 
           # Help cache hits across different checkout paths on self-hosted runners.
+          mkdir -p "${SELECTED_CCACHE_DIR}/tmp"
           ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
           ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
-          ccache --set-config=compiler_check=content >/dev/null 2>&1 || true
+          ccache --set-config=compiler_check=mtime >/dev/null 2>&1 || true
+          ccache --set-config=compression=true >/dev/null 2>&1 || true
+          ccache --set-config=compression_level=6 >/dev/null 2>&1 || true
+          ccache --set-config=hard_link=true >/dev/null 2>&1 || true
+          ccache --set-config=file_clone=true >/dev/null 2>&1 || true
+          ccache --set-config=sloppiness=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro >/dev/null 2>&1 || true
+          ccache --set-config=temporary_dir="${SELECTED_CCACHE_DIR}/tmp" >/dev/null 2>&1 || true
           ccache -M 50G >/dev/null 2>&1 || true
 
           command -v git >/dev/null
@@ -445,6 +441,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Cache ccache
+        if: ${{ !startsWith(env.CCACHE_DIR, '/mnt/ccache') }}
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -519,6 +516,11 @@ jobs:
         run: |
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Reset CCACHE Counters
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -z || true
 
       - name: Setup KernelSU Variant
         run: |
@@ -733,32 +735,32 @@ jobs:
               '/* Retrieve the nearest non-SuSFS mount ID from a mount. */' \
               'int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt)' \
               '{' \
-              '	struct mount *mnt = orig_mnt;' \
-              '	int mnt_id;' \
+              ' struct mount *mnt = orig_mnt;' \
+              ' int mnt_id;' \
               '' \
-              '	lock_mount_hash();' \
-              '	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
-              '	mnt_id = mnt->mnt_id;' \
-              '	unlock_mount_hash();' \
-              '	return mnt_id;' \
+              ' lock_mount_hash();' \
+              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              ' mnt_id = mnt->mnt_id;' \
+              ' unlock_mount_hash();' \
+              ' return mnt_id;' \
               '}' \
               '' \
               '/* Retrieve the nearest non-SuSFS vfsmount and take references on it. */' \
               'struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt)' \
               '{' \
-              '	struct mount *mnt = real_mount(vfsmnt);' \
+              ' struct mount *mnt = real_mount(vfsmnt);' \
               '' \
-              '	lock_mount_hash();' \
-              '	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
-              '	mntget(&mnt->mnt);' \
-              '	if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {' \
-              '		mntput(&mnt->mnt);' \
-              '		unlock_mount_hash();' \
-              '		return vfsmnt;' \
-              '	}' \
-              '	dget(mnt->mnt.mnt_root);' \
-              '	unlock_mount_hash();' \
-              '	return &mnt->mnt;' \
+              ' lock_mount_hash();' \
+              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              ' mntget(&mnt->mnt);' \
+              ' if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {' \
+              '   mntput(&mnt->mnt);' \
+              '   unlock_mount_hash();' \
+              '   return vfsmnt;' \
+              ' }' \
+              ' dget(mnt->mnt.mnt_root);' \
+              ' unlock_mount_hash();' \
+              ' return &mnt->mnt;' \
               '}' \
               '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
               >> fs/namespace.c
@@ -1169,9 +1171,8 @@ jobs:
             echo "tuning_profile=${TUNING_PROFILE}"
             echo "lto_mode=${LTO_MODE}"
             echo "make_jobs=${MAKE_JOBS_OVERRIDE}"
-            echo "adaptive_tuner=${ADAPTIVE_TUNER}"
+            echo "runtime_tuner=${RUNTIME_TUNER}"
             echo "governor_mode=${GOVERNOR_MODE}"
-            echo "kerneltoast_optimizations=${ENABLE_KERNELTOAST_OPTIMIZATIONS}"
             echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
             echo "patch_repo_sha=4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e"
           } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
@@ -1373,6 +1374,7 @@ jobs:
           trap - EXIT
 
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
       - name: Package Kernel (AnyKernel3)
         if: env.DRY_RUN_ONLY != 'true'
@@ -1400,16 +1402,16 @@ jobs:
 
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Generate Pixel 8 Adaptive Tuner Script
+      - name: Generate Pixel 8 Runtime Tuner Script
         if: env.DRY_RUN_ONLY != 'true'
         run: |
           mkdir -p success-metadata
-          TUNER_SCRIPT="success-metadata/pixel8-adaptive-tuner-${{ matrix.variant }}.sh"
+          TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
           GOV_MODE="${GOVERNOR_MODE}"
-          if [ "${ADAPTIVE_TUNER}" != "true" ]; then
+          if [ "${RUNTIME_TUNER}" != "true" ]; then
             cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
-          # Adaptive tuner generation disabled for this run.
+          # Runtime tuner generation disabled for this run.
           # Governor mode: __GOV_MODE__
           exit 0
           EOF
@@ -1419,8 +1421,8 @@ jobs:
           fi
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
-          # Pixel 8 adaptive tuner for responsiveness + battery life.
-          # Custom mode "pixel8_smartgov" builds on schedutil with dynamic cluster caps.
+          # Pixel 8 runtime tuner for responsiveness + battery life.
+          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
@@ -1446,7 +1448,7 @@ jobs:
             write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_max_freq"
           }
 
-          apply_pixel8_smartgov() {
+          apply_pixel8_dynamic_schedutil() {
             local mode="$1"
             case "$mode" in
               eco)
@@ -1505,8 +1507,8 @@ jobs:
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "pixel8_smartgov" ]; then
-              apply_pixel8_smartgov "$profile_mode"
+            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
+              apply_pixel8_dynamic_schedutil "$profile_mode"
             else
               # stock schedutil with adaptive response limits only
               if [ "$profile_mode" = "eco" ]; then
@@ -1539,7 +1541,7 @@ jobs:
             logs/build-${{ matrix.variant }}.log
             kernel/out/.config
             kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
-            success-metadata/pixel8-adaptive-tuner-${{ matrix.variant }}.sh
+            success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh
             ${{ env.PATCH_MANIFEST }}
             success-metadata/source-manifest-${{ matrix.variant }}.txt
 
@@ -1600,9 +1602,8 @@ jobs:
             echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
             echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
             echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
-            echo "| Adaptive tuner script | \`${{ env.ADAPTIVE_TUNER }}\` |"
+            echo "| Runtime tuner script | \`${{ env.RUNTIME_TUNER }}\` |"
             echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
-            echo "| kerneltoast optimizations | \`${{ env.ENABLE_KERNELTOAST_OPTIMIZATIONS }}\` |"
             echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"
             echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
             if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then

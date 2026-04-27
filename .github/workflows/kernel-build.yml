@@ -836,7 +836,17 @@ jobs:
 
           if [ "${{ matrix.variant }}" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            if patch -p1 --forward --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
+              apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            elif patch -p1 --reverse --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
+              echo "ℹ️ WK SuSFS fix: kernel_compat already present, skipping."
+              printf '%s | %s | already-present\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
+            elif grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
+              echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
+              printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
+            else
+              apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            fi
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"

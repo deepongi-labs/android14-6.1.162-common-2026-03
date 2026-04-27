@@ -492,8 +492,8 @@ jobs:
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/logs"
-          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${{ matrix.variant }}.txt"
-          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${{ matrix.variant }}.log"
+          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${KSU_VARIANT}.log"
           : > "$PATCH_MANIFEST"
           : > "$PATCH_FAILURE_LOG"
 
@@ -691,10 +691,10 @@ jobs:
           cd kernel
 
           # Apply core SuSFS patch.
-          VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
+          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "${{ matrix.variant }}" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -704,7 +704,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -750,7 +750,7 @@ jobs:
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
             ensure_namespace_susfs_prologue
           fi
           ensure_namespace_susfs_helpers
@@ -760,7 +760,7 @@ jobs:
           # when the integration is already present.
           cd KernelSU
 
-          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
           try_apply_patch() {
@@ -784,10 +784,10 @@ jobs:
           if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-          elif [ "${{ matrix.variant }}" = "next" ]; then
+          elif [ "$KSU_VARIANT" = "next" ]; then
             echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
             printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-          elif [ "${{ matrix.variant }}" = "tiann" ]; then
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
@@ -829,12 +829,12 @@ jobs:
             fi
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ] && [ -f fix_susfs.py ]; then
+          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             if patch -p1 --forward --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
               apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"

@@ -83,7 +83,7 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict
@@ -176,7 +176,7 @@ on:
         type: boolean
       kerneltoast_patch_policy:
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: string
       dry_run_only:
         required: false
@@ -984,7 +984,7 @@ jobs:
             elif patch -p1 --reverse --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
               echo "ℹ️ WK SuSFS fix: kernel_compat already present, skipping."
               printf '%s | %s | already-present\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
-            elif grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
+            elif ! grep -q 'ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
               echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
               printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
             else

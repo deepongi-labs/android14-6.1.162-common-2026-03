@@ -62,7 +62,7 @@ on:
         required: false
         default: 'auto'
         type: string
-      include_ai_tuner:
+      include_adaptive_tuner:
         description: 'Generate adaptive on-device tuner script'
         required: false
         default: true
@@ -162,7 +162,7 @@ on:
         required: false
         default: 'auto'
         type: string
-      include_ai_tuner:
+      include_adaptive_tuner:
         required: false
         default: true
         type: boolean
@@ -256,7 +256,7 @@ jobs:
       tuning_profile: ${{ steps.config.outputs.tuning_profile }}
       lto_mode: ${{ steps.config.outputs.lto_mode }}
       make_jobs: ${{ steps.config.outputs.make_jobs }}
-      include_ai_tuner: ${{ steps.config.outputs.include_ai_tuner }}
+      include_adaptive_tuner: ${{ steps.config.outputs.include_adaptive_tuner }}
       governor_mode: ${{ steps.config.outputs.governor_mode }}
       enable_kerneltoast_optimizations: ${{ steps.config.outputs.enable_kerneltoast_optimizations }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
@@ -327,7 +327,7 @@ jobs:
             exit 1
           fi
 
-          echo "include_ai_tuner=${{ inputs.include_ai_tuner }}" >> $GITHUB_OUTPUT
+          echo "include_adaptive_tuner=${{ inputs.include_adaptive_tuner }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.governor_mode }}" in
             pixel8_smartgov|stock_schedutil) ;;
@@ -366,7 +366,7 @@ jobs:
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
       LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
       MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
-      AI_TUNER: ${{ needs.setup.outputs.include_ai_tuner }}
+      ADAPTIVE_TUNER: ${{ needs.setup.outputs.include_adaptive_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       ENABLE_KERNELTOAST_OPTIMIZATIONS: ${{ needs.setup.outputs.enable_kerneltoast_optimizations }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
@@ -1169,7 +1169,7 @@ jobs:
             echo "tuning_profile=${TUNING_PROFILE}"
             echo "lto_mode=${LTO_MODE}"
             echo "make_jobs=${MAKE_JOBS_OVERRIDE}"
-            echo "ai_tuner=${AI_TUNER}"
+            echo "adaptive_tuner=${ADAPTIVE_TUNER}"
             echo "governor_mode=${GOVERNOR_MODE}"
             echo "kerneltoast_optimizations=${ENABLE_KERNELTOAST_OPTIMIZATIONS}"
             echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
@@ -1400,16 +1400,16 @@ jobs:
 
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Generate Adaptive Pixel 8 Tuner Script
+      - name: Generate Pixel 8 Adaptive Tuner Script
         if: env.DRY_RUN_ONLY != 'true'
         run: |
           mkdir -p success-metadata
-          TUNER_SCRIPT="success-metadata/pixel8-ai-tuner-${{ matrix.variant }}.sh"
+          TUNER_SCRIPT="success-metadata/pixel8-adaptive-tuner-${{ matrix.variant }}.sh"
           GOV_MODE="${GOVERNOR_MODE}"
-          if [ "${AI_TUNER}" != "true" ]; then
+          if [ "${ADAPTIVE_TUNER}" != "true" ]; then
             cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
-          # AI tuner generation disabled for this run.
+          # Adaptive tuner generation disabled for this run.
           # Governor mode: __GOV_MODE__
           exit 0
           EOF
@@ -1539,7 +1539,7 @@ jobs:
             logs/build-${{ matrix.variant }}.log
             kernel/out/.config
             kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
-            success-metadata/pixel8-ai-tuner-${{ matrix.variant }}.sh
+            success-metadata/pixel8-adaptive-tuner-${{ matrix.variant }}.sh
             ${{ env.PATCH_MANIFEST }}
             success-metadata/source-manifest-${{ matrix.variant }}.txt
 
@@ -1600,7 +1600,7 @@ jobs:
             echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
             echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
             echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
-            echo "| AI tuner script | \`${{ env.AI_TUNER }}\` |"
+            echo "| Adaptive tuner script | \`${{ env.ADAPTIVE_TUNER }}\` |"
             echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
             echo "| kerneltoast optimizations | \`${{ env.ENABLE_KERNELTOAST_OPTIMIZATIONS }}\` |"
             echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"

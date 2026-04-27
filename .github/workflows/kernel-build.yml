@@ -363,6 +363,12 @@ jobs:
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
+      KERNEL_REF: ${{ needs.setup.outputs.kernel_ref }}
+      SUSFS_REF: ${{ needs.setup.outputs.susfs_ref }}
+      TIANN_REF: ${{ needs.setup.outputs.tiann_ref }}
+      KOWSU_REF: ${{ needs.setup.outputs.kowsu_ref }}
+      RESUKISU_REF: ${{ needs.setup.outputs.resukisu_ref }}
+      NEXT_REF: ${{ needs.setup.outputs.next_ref }}
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
       LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
       MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
@@ -386,7 +392,7 @@ jobs:
         run: |
           set -e
           echo "::group::Runner Sanity"
-          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}"
+          mkdir -p "$SOURCE_MIRROR_DIR"
           df -h .
           df -h /mnt/ccache 2>/dev/null || true
           echo "CPU cores: $(nproc)"
@@ -504,8 +510,8 @@ jobs:
           echo "📦 Smart syncing kernel and SuSFS sources..."
 
           # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
-          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
-          sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
+          sync_repo_shallow "kernel-common" "$KERNEL_REPO_URL" "$KERNEL_REF" "kernel"
+          sync_repo_shallow "susfs4ksu" "$SUSFS_REPO_URL" "$SUSFS_REF" "susfs4ksu"
 
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
         run: |
@@ -531,7 +537,7 @@ jobs:
 
       - name: Show CCACHE Status
         run: |
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_DIR="$CCACHE_DIR"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
       - name: Reset CCACHE Counters
@@ -566,15 +572,15 @@ jobs:
           # Nuke the rogue KernelSU-Next folder as well to clean up the runner
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
-          case "${{ matrix.variant }}" in
-            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
-            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
-            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
-            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
+          case "$KSU_VARIANT" in
+            "tiann") KSU_REPO="$TIANN_REPO_URL"; KSU_BRANCH="$TIANN_REF"; USE_SETUP_SH="true" ;;
+            "kowsu") KSU_REPO="$KOWSU_REPO_URL"; KSU_BRANCH="$KOWSU_REF"; USE_SETUP_SH="true" ;;
+            "resukisu") KSU_REPO="$RESUKISU_REPO_URL"; KSU_BRANCH="$RESUKISU_REF"; USE_SETUP_SH="true" ;;
+            "next") KSU_REPO="$NEXT_REPO_URL"; KSU_BRANCH="$NEXT_REF"; USE_SETUP_SH="true" ;;
           esac
 
           echo "::group::Sync KernelSU Variant"
-          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" KernelSU
+          sync_variant_repo "ksu-$KSU_VARIANT" "$KSU_REPO" "$KSU_BRANCH" KernelSU
           echo "KernelSU repo: $KSU_REPO"
           echo "KernelSU ref: $KSU_BRANCH"
           echo "::endgroup::"
@@ -600,10 +606,10 @@ jobs:
           cd kernel/KernelSU
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
 
-          if [ "${{ matrix.variant }}" = "resukisu" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ]; then
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
-          elif [ "${{ matrix.variant }}" = "next" ]; then
+          elif [ "$KSU_VARIANT" = "next" ]; then
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((KSU_COUNT + 30000))
           else
@@ -619,23 +625,28 @@ jobs:
       - name: Generate Comprehensive Changelog
         run: |
           mkdir -p changelogs
-          CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
+          CHANGELOG_FILE="changelogs/CHANGELOG-${KSU_VARIANT}.md"
+          if [ "${ENABLE_SUSFS}" = "true" ]; then
+            SUSFS_LABEL="Enabled"
+          else
+            SUSFS_LABEL="Disabled"
+          fi
 
           cat << EOF > "$CHANGELOG_FILE"
           # 📋 Comprehensive Build Changelog
 
-          **Variant:** ${{ matrix.variant }}
-          **Build Number:** #${{ github.run_number }}
-          **KernelSU Version:** r${{ env.KSU_VERSION }}
-          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+          **Variant:** ${KSU_VARIANT}
+          **Build Number:** #${GITHUB_RUN_NUMBER}
+          **KernelSU Version:** r${KSU_VERSION}
+          **SuSFS:** ${SUSFS_LABEL}
 
           ---
           ## 📖 Component Versions
           | Component | Current Commit | Date | Summary |
           |-----------|---------------|------|---------|
-          | **KernelSU** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |
-          | **Kernel** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |
-          | **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |
+          | **KernelSU** | \`${KSU_COMMIT_SHORT}\` | ${KSU_COMMIT_DATE} | ${KSU_COMMIT_MSG} |
+          | **Kernel** | \`${KERNEL_COMMIT_SHORT}\` | ${KERNEL_COMMIT_DATE} | ${KERNEL_COMMIT_MSG} |
+          | **SuSFS4KSU** | \`${SUSFS_COMMIT_SHORT}\` | ${SUSFS_COMMIT_DATE} | ${SUSFS_COMMIT_MSG} |
 
           ---
           EOF
@@ -647,8 +658,8 @@ jobs:
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/logs"
-          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${{ matrix.variant }}.txt"
-          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${{ matrix.variant }}.log"
+          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${KSU_VARIANT}.log"
           : > "$PATCH_MANIFEST"
           : > "$PATCH_FAILURE_LOG"
 
@@ -846,10 +857,10 @@ jobs:
           cd kernel
 
           # Apply core SuSFS patch.
-          VARIANT_SUSFS_PATCH="../.github/patches/${{ matrix.variant }}/50_add_susfs_in_gki-android14-6.1.patch"
+          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "${{ matrix.variant }}" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -859,7 +870,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -905,7 +916,7 @@ jobs:
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "${{ matrix.variant }}" = "resukisu" ] || [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
             ensure_namespace_susfs_prologue
           fi
           ensure_namespace_susfs_helpers
@@ -915,7 +926,7 @@ jobs:
           # when the integration is already present.
           cd KernelSU
 
-          VARIANT_KSU_PATCH="../../.github/patches/${{ matrix.variant }}/10_enable_susfs_for_ksu.patch"
+          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
           try_apply_patch() {
@@ -939,7 +950,7 @@ jobs:
           if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-          elif [ "${{ matrix.variant }}" = "next" ]; then
+          elif [ "$KSU_VARIANT" = "next" ]; then
             echo "🔍 Validating KernelSU-Next SuSFS integration..."
             if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
               :
@@ -953,7 +964,7 @@ jobs:
               printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
               exit 1
             fi
-          elif [ "${{ matrix.variant }}" = "tiann" ]; then
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
@@ -995,12 +1006,12 @@ jobs:
             fi
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ] && [ -f fix_susfs.py ]; then
+          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "${{ matrix.variant }}" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             if patch -p1 --forward --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
               apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
@@ -1088,23 +1099,23 @@ jobs:
           rm -f android/abi_gki_protected_exports_* || true
 
           # 1. CLIDR uninitialized fix
-          fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
+          fetch_patch_or_fail "$CLIDR_PATCH_URL" /tmp/fix-clidr.patch
             if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
 
           # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
           echo "📶 Applying Wi-Fi patch..."
-          fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+          fetch_patch_or_fail "$WIFI_PATCH_URL" /tmp/wifi-fix.patch
             if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
 
           # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
           if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
             echo "🚀 Applying selected kerneltoast scheduler/power commits (${KERNELTOAST_PATCH_POLICY})..."
-            apply_remote_patch_with_policy "${{ env.KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL }}" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
-            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL }}" "kt-sched-cass-uclamp-packing.patch" "kerneltoast: sched/cass uclamp packing threshold"
-            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL }}" "kt-schedutil-ignore-fie-ratelimit.patch" "kerneltoast: schedutil ignore FIE rate-limit on scale-up"
-            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL }}" "kt-schedutil-default-ratelimit.patch" "kerneltoast: schedutil default rate-limit 2000us"
+            apply_remote_patch_with_policy "$KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
+            apply_remote_patch_with_policy "$KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL" "kt-sched-cass-uclamp-packing.patch" "kerneltoast: sched/cass uclamp packing threshold"
+            apply_remote_patch_with_policy "$KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL" "kt-schedutil-ignore-fie-ratelimit.patch" "kerneltoast: schedutil ignore FIE rate-limit on scale-up"
+            apply_remote_patch_with_policy "$KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL" "kt-schedutil-default-ratelimit.patch" "kerneltoast: schedutil default rate-limit 2000us"
           else
             echo "⏭️  kerneltoast patchset disabled by policy"
           fi
@@ -1219,11 +1230,11 @@ jobs:
           {
             echo "## Dry Run Complete"
             echo
-            echo "- Variant: \`${{ matrix.variant }}\`"
-            echo "- KernelSU repo: \`${{ env.KSU_REPO }}\`"
-            echo "- KernelSU ref: \`${{ env.KSU_BRANCH }}\`"
-            echo "- Kernel ref: \`${{ needs.setup.outputs.kernel_ref }}\`"
-            echo "- SuSFS ref: \`${{ needs.setup.outputs.susfs_ref }}\`"
+            echo "- Variant: \`${KSU_VARIANT}\`"
+            echo "- KernelSU repo: \`${KSU_REPO}\`"
+            echo "- KernelSU ref: \`${KSU_BRANCH}\`"
+            echo "- Kernel ref: \`${KERNEL_REF}\`"
+            echo "- SuSFS ref: \`${SUSFS_REF}\`"
             echo "- Result: Patch and config verification passed; compile intentionally skipped."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1232,7 +1243,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p logs
-          LOG_FILE="$GITHUB_WORKSPACE/logs/build-${{ matrix.variant }}.log"
+          LOG_FILE="$GITHUB_WORKSPACE/logs/build-${KSU_VARIANT}.log"
           exec > >(tee -a "$LOG_FILE") 2>&1
 
           summarize_build_failure() {
@@ -1253,23 +1264,23 @@ jobs:
 
           cd kernel
           export ARCH=arm64
-          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
-          export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
-          export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          export CC="ccache ${{ env.CLANG_BIN }}/clang"
-          export CXX="ccache ${{ env.CLANG_BIN }}/clang++"
-          export HOSTCC="ccache ${{ env.CLANG_BIN }}/clang"
-          export HOSTCXX="ccache ${{ env.CLANG_BIN }}/clang++"
-          export LD="${{ env.CLANG_BIN }}/ld.lld"
-          export HOSTLD="${{ env.CLANG_BIN }}/ld.lld"
-          export AR="${{ env.CLANG_BIN }}/llvm-ar"
-          export HOSTAR="${{ env.CLANG_BIN }}/llvm-ar"
-          export NM="${{ env.CLANG_BIN }}/llvm-nm"
-          export OBJCOPY="${{ env.CLANG_BIN }}/llvm-objcopy"
-          export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
-          export READELF="${{ env.CLANG_BIN }}/llvm-readelf"
-          export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
+          export PATH="${CLANG_BIN}:/usr/lib/ccache:$PATH"
+          export CROSS_COMPILE="$ARM64_TOOLCHAIN"
+          export CROSS_COMPILE_COMPAT="$ARM32_TOOLCHAIN"
+          export CCACHE_DIR="$CCACHE_DIR"
+          export CC="ccache ${CLANG_BIN}/clang"
+          export CXX="ccache ${CLANG_BIN}/clang++"
+          export HOSTCC="ccache ${CLANG_BIN}/clang"
+          export HOSTCXX="ccache ${CLANG_BIN}/clang++"
+          export LD="${CLANG_BIN}/ld.lld"
+          export HOSTLD="${CLANG_BIN}/ld.lld"
+          export AR="${CLANG_BIN}/llvm-ar"
+          export HOSTAR="${CLANG_BIN}/llvm-ar"
+          export NM="${CLANG_BIN}/llvm-nm"
+          export OBJCOPY="${CLANG_BIN}/llvm-objcopy"
+          export OBJDUMP="${CLANG_BIN}/llvm-objdump"
+          export READELF="${CLANG_BIN}/llvm-readelf"
+          export STRIP="${CLANG_BIN}/llvm-strip"
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
           if [ "${MAKE_JOBS_OVERRIDE}" = "auto" ]; then
@@ -1371,7 +1382,7 @@ jobs:
 
           cat "$PROFILE_FRAGMENT" >> out/.config
 
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          if [ "$ENABLE_SUSFS" = "true" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -1393,7 +1404,7 @@ jobs:
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out olddefconfig
 
-          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+          if [ "$FORCE_CLEAN" = "true" ]; then
             make -j$MAKE_JOBS O=out clean
           fi
 
@@ -1416,20 +1427,20 @@ jobs:
           KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
           cd ..
 
-          case "${{ matrix.variant }}" in
+          case "$KSU_VARIANT" in
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;
             "next") AK3_BRANCH="next" ;;
           esac
 
-          git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+          git clone --depth=1 --branch=$AK3_BRANCH "$ANYKERNEL_REPO_URL" AnyKernel3 || git clone --depth=1 --branch=main "$ANYKERNEL_REPO_URL" AnyKernel3
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
 
           cd AnyKernel3 && rm -rf .git .github
-          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
+          ZIP_NAME="AK3-${KERNEL_VERSION}-${KSU_VARIANT}-r${KSU_VERSION}.zip"
           zip -r9 "../$ZIP_NAME" .
           cd ..
 
@@ -1439,7 +1450,7 @@ jobs:
         if: env.DRY_RUN_ONLY != 'true'
         run: |
           mkdir -p success-metadata
-          TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
+          TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${KSU_VARIANT}.sh"
           GOV_MODE="${GOVERNOR_MODE}"
           if [ "${RUNTIME_TUNER}" != "true" ]; then
             cat << 'EOF' > "$TUNER_SCRIPT"
@@ -1581,16 +1592,16 @@ jobs:
       - name: Collect Failure Logs
         if: failure()
         run: |
-          ARTIFACT_DIR="failure-logs/${{ matrix.variant }}"
+          ARTIFACT_DIR="failure-logs/${KSU_VARIANT}"
           mkdir -p "$ARTIFACT_DIR"
 
-          [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
-          [ -f "logs/patch-failure-${{ matrix.variant }}.log" ] && cp "logs/patch-failure-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/build-${KSU_VARIANT}.log" ] && cp "logs/build-${KSU_VARIANT}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/patch-failure-${KSU_VARIANT}.log" ] && cp "logs/patch-failure-${KSU_VARIANT}.log" "$ARTIFACT_DIR/"
           [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
           [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
-          [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
-          [ -n "${{ env.PATCH_MANIFEST }}" ] && [ -f "${{ env.PATCH_MANIFEST }}" ] && cp "${{ env.PATCH_MANIFEST }}" "$ARTIFACT_DIR/"
-          [ -f "success-metadata/source-manifest-${{ matrix.variant }}.txt" ] && cp "success-metadata/source-manifest-${{ matrix.variant }}.txt" "$ARTIFACT_DIR/"
+          [ -f "${CHANGELOG_FILE:-}" ] && cp "$CHANGELOG_FILE" "$ARTIFACT_DIR/"
+          [ -n "${PATCH_MANIFEST:-}" ] && [ -f "$PATCH_MANIFEST" ] && cp "$PATCH_MANIFEST" "$ARTIFACT_DIR/"
+          [ -f "success-metadata/source-manifest-${KSU_VARIANT}.txt" ] && cp "success-metadata/source-manifest-${KSU_VARIANT}.txt" "$ARTIFACT_DIR/"
           find kernel -type f \( -name "*.rej" -o -name "*.orig" \) -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
 
           find kernel/out -maxdepth 3 -type f \
@@ -1621,30 +1632,30 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Variant \`${{ matrix.variant }}\`"
+            echo "## Variant \`${KSU_VARIANT}\`"
             echo
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Status | \`${{ job.status }}\` |"
-            echo "| Dry run | \`${{ env.DRY_RUN_ONLY }}\` |"
-            echo "| KernelSU repo | \`${{ env.KSU_REPO }}\` |"
-            echo "| KernelSU ref | \`${{ env.KSU_BRANCH }}\` |"
-            echo "| Kernel ref | \`${{ needs.setup.outputs.kernel_ref }}\` |"
-            echo "| SuSFS ref | \`${{ needs.setup.outputs.susfs_ref }}\` |"
-            echo "| KSU version | \`r${{ env.KSU_VERSION }}\` |"
-            echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
-            echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
-            echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
-            echo "| Runtime tuner script | \`${{ env.RUNTIME_TUNER }}\` |"
-            echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
-            echo "| kerneltoast optimizations | \`${{ env.ENABLE_KERNELTOAST_OPTIMIZATIONS }}\` |"
-            echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"
-            echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
-            if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then
-              echo "| ZIP artifact | \`${{ env.KERNEL_ZIP }}\` |"
+            echo "| Status | \`${STATUS:-unknown}\` |"
+            echo "| Dry run | \`${DRY_RUN_ONLY}\` |"
+            echo "| KernelSU repo | \`${KSU_REPO:-unset}\` |"
+            echo "| KernelSU ref | \`${KSU_BRANCH:-unset}\` |"
+            echo "| Kernel ref | \`${KERNEL_REF}\` |"
+            echo "| SuSFS ref | \`${SUSFS_REF}\` |"
+            echo "| KSU version | \`r${KSU_VERSION:-unknown}\` |"
+            echo "| Tuning profile | \`${TUNING_PROFILE}\` |"
+            echo "| LTO mode | \`${LTO_MODE}\` |"
+            echo "| Make jobs | \`${MAKE_JOBS_OVERRIDE}\` |"
+            echo "| Runtime tuner script | \`${RUNTIME_TUNER}\` |"
+            echo "| Governor mode | \`${GOVERNOR_MODE}\` |"
+            echo "| kerneltoast optimizations | \`${ENABLE_KERNELTOAST_OPTIMIZATIONS}\` |"
+            echo "| kerneltoast patch policy | \`${KERNELTOAST_PATCH_POLICY}\` |"
+            echo "| Build log | \`logs/build-${KSU_VARIANT}.log\` |"
+            if [ "$DRY_RUN_ONLY" != "true" ] && [ -n "${KERNEL_ZIP:-}" ]; then
+              echo "| ZIP artifact | \`${KERNEL_ZIP}\` |"
             fi
-            if [ -n "${{ env.PATCH_MANIFEST }}" ]; then
-              echo "| Patch manifest | \`${{ env.PATCH_MANIFEST }}\` |"
+            if [ -n "${PATCH_MANIFEST:-}" ]; then
+              echo "| Patch manifest | \`${PATCH_MANIFEST}\` |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

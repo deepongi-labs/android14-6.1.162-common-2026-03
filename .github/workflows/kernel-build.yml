@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v4.4.2
+name: Build GKI Kernel with KernelSU Variants v4.5.0
 
 on:
   workflow_dispatch:
@@ -39,6 +39,56 @@ on:
         required: false
         default: false
         type: boolean
+      tuning_profile:
+        description: 'Pixel 8 tuning profile'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - balanced
+          - performance
+          - battery
+      lto_mode:
+        description: 'LTO mode (thin/full/none)'
+        required: false
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      make_jobs:
+        description: 'Override make parallel jobs (auto or integer)'
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        description: 'Generate on-device runtime tuner script'
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        description: 'CPU governor strategy (stock or custom dynamic schedutil)'
+        required: false
+        default: 'pixel8_dynamic_schedutil'
+        type: choice
+        options:
+          - pixel8_dynamic_schedutil
+          - stock_schedutil
+      enable_kerneltoast_optimizations:
+        description: 'Legacy toggle for kerneltoast patchset (deprecated; use kerneltoast_patch_policy)'
+        required: false
+        default: true
+        type: boolean
+      kerneltoast_patch_policy:
+        description: 'Policy for kerneltoast patchset application'
+        required: false
+        default: 'strict'
+        type: choice
+        options:
+          - strict
+          - best_effort
+          - off
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false
@@ -100,6 +150,34 @@ on:
         required: false
         default: false
         type: boolean
+      tuning_profile:
+        required: false
+        default: 'balanced'
+        type: string
+      lto_mode:
+        required: false
+        default: 'thin'
+        type: string
+      make_jobs:
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        required: false
+        default: 'pixel8_dynamic_schedutil'
+        type: string
+      enable_kerneltoast_optimizations:
+        required: false
+        default: true
+        type: boolean
+      kerneltoast_patch_policy:
+        required: false
+        default: 'strict'
+        type: string
       dry_run_only:
         required: false
         default: false
@@ -154,6 +232,10 @@ env:
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
   WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
+  KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/48a3fd5e41.patch
+  KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/201c5c7c99.patch
+  KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/56040db35c.patch
+  KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/627184a51c.patch
 
 jobs:
   setup:
@@ -171,6 +253,13 @@ jobs:
       kowsu_ref: ${{ steps.config.outputs.kowsu_ref }}
       resukisu_ref: ${{ steps.config.outputs.resukisu_ref }}
       next_ref: ${{ steps.config.outputs.next_ref }}
+      tuning_profile: ${{ steps.config.outputs.tuning_profile }}
+      lto_mode: ${{ steps.config.outputs.lto_mode }}
+      make_jobs: ${{ steps.config.outputs.make_jobs }}
+      include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
+      governor_mode: ${{ steps.config.outputs.governor_mode }}
+      enable_kerneltoast_optimizations: ${{ steps.config.outputs.enable_kerneltoast_optimizations }}
+      kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -218,6 +307,46 @@ jobs:
             echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
           fi
 
+          case "${{ inputs.tuning_profile }}" in
+            balanced|performance|battery) ;;
+            *) echo "❌ Invalid tuning_profile: ${{ inputs.tuning_profile }}"; exit 1 ;;
+          esac
+          echo "tuning_profile=${{ inputs.tuning_profile }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.lto_mode }}" in
+            thin|full|none) ;;
+            *) echo "❌ Invalid lto_mode: ${{ inputs.lto_mode }}"; exit 1 ;;
+          esac
+          echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
+
+          MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[0-9]+$ ]]; then
+            echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer)"
+            exit 1
+          fi
+
+          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.governor_mode }}" in
+            pixel8_dynamic_schedutil|stock_schedutil) ;;
+            *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
+          esac
+          echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
+          echo "enable_kerneltoast_optimizations=${{ inputs.enable_kerneltoast_optimizations }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.kerneltoast_patch_policy }}" in
+            strict|best_effort|off) ;;
+            *) echo "❌ Invalid kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}"; exit 1 ;;
+          esac
+
+          if [ "${{ inputs.enable_kerneltoast_optimizations }}" != "true" ]; then
+            echo "kerneltoast_patch_policy=off" >> $GITHUB_OUTPUT
+          else
+            echo "kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}" >> $GITHUB_OUTPUT
+          fi
+
   build:
     needs: setup
     runs-on: [self-hosted, linux, x64]
@@ -234,6 +363,13 @@ jobs:
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
+      TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
+      LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
+      MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
+      RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
+      GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
+      ENABLE_KERNELTOAST_OPTIMIZATIONS: ${{ needs.setup.outputs.enable_kerneltoast_optimizations }}
+      KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -288,12 +424,25 @@ jobs:
           echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
-          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
+          echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=${SELECTED_CCACHE_DIR}/tmp" >> $GITHUB_ENV
 
           # Help cache hits across different checkout paths on self-hosted runners.
+          mkdir -p "${SELECTED_CCACHE_DIR}/tmp"
           ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
           ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
-          ccache --set-config=compiler_check=content >/dev/null 2>&1 || true
+          ccache --set-config=compiler_check=mtime >/dev/null 2>&1 || true
+          ccache --set-config=compression=true >/dev/null 2>&1 || true
+          ccache --set-config=compression_level=6 >/dev/null 2>&1 || true
+          ccache --set-config=hard_link=true >/dev/null 2>&1 || true
+          ccache --set-config=file_clone=true >/dev/null 2>&1 || true
+          ccache --set-config=sloppiness=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro >/dev/null 2>&1 || true
+          ccache --set-config=temporary_dir="${SELECTED_CCACHE_DIR}/tmp" >/dev/null 2>&1 || true
           ccache -M 50G >/dev/null 2>&1 || true
 
           command -v git >/dev/null
@@ -309,6 +458,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Cache ccache
+        if: ${{ !startsWith(env.CCACHE_DIR, '/mnt/ccache') }}
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -383,6 +533,11 @@ jobs:
         run: |
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Reset CCACHE Counters
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -z || true
 
       - name: Setup KernelSU Variant
         run: |
@@ -886,6 +1041,35 @@ jobs:
             apply_patch_or_fail "$GITHUB_WORKSPACE/$patch_file" "$description"
           }
 
+          apply_remote_patch_with_policy() {
+            local url="$1"
+            local local_name="$2"
+            local description="$3"
+
+            local destination="/tmp/${local_name}"
+            if ! curl --fail --location --silent --show-error "$url" -o "$destination"; then
+              if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
+                echo "❌ ${description} download failed in strict mode: ${url}"
+                exit 1
+              fi
+              echo "⚠️  Skipping ${description}: failed to download ${url}"
+              return 0
+            fi
+
+            if patch -p1 --forward --dry-run < "$destination" >/dev/null 2>&1; then
+              patch -p1 --forward < "$destination"
+              echo "✅ Applied ${description}"
+            elif patch -p1 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+            else
+              if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
+                echo "❌ ${description} failed to apply cleanly in strict mode"
+                exit 1
+              fi
+              echo "⚠️  Skipping ${description}: patch drift against current kernel ref"
+            fi
+          }
+
           cd kernel
 
           # 0. Bypass GKI ABI symbol checks
@@ -902,6 +1086,17 @@ jobs:
           fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
             if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+
+          # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
+          if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
+            echo "🚀 Applying selected kerneltoast scheduler/power commits (${KERNELTOAST_PATCH_POLICY})..."
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL }}" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL }}" "kt-sched-cass-uclamp-packing.patch" "kerneltoast: sched/cass uclamp packing threshold"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL }}" "kt-schedutil-ignore-fie-ratelimit.patch" "kerneltoast: schedutil ignore FIE rate-limit on scale-up"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL }}" "kt-schedutil-default-ratelimit.patch" "kerneltoast: schedutil default rate-limit 2000us"
+          else
+            echo "⏭️  kerneltoast patchset disabled by policy"
+          fi
 
           # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.
           if [ -f "drivers/kernelsu/app_profile.c" ] && grep -q "char comm\\[TASK_COMM_LEN\\];" drivers/kernelsu/app_profile.c; then
@@ -990,6 +1185,13 @@ jobs:
             echo "ksu_ref=${KSU_BRANCH}"
             echo "enable_susfs=${ENABLE_SUSFS}"
             echo "dry_run=${DRY_RUN_ONLY:-false}"
+            echo "tuning_profile=${TUNING_PROFILE}"
+            echo "lto_mode=${LTO_MODE}"
+            echo "make_jobs=${MAKE_JOBS_OVERRIDE}"
+            echo "runtime_tuner=${RUNTIME_TUNER}"
+            echo "governor_mode=${GOVERNOR_MODE}"
+            echo "kerneltoast_optimizations=${ENABLE_KERNELTOAST_OPTIMIZATIONS}"
+            echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
             echo "patch_repo_sha=4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e"
           } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
 
@@ -1055,7 +1257,11 @@ jobs:
           export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
-          MAKE_JOBS=$(nproc)
+          if [ "${MAKE_JOBS_OVERRIDE}" = "auto" ]; then
+            MAKE_JOBS=$(nproc)
+          else
+            MAKE_JOBS="${MAKE_JOBS_OVERRIDE}"
+          fi
           START_TIME=$SECONDS
 
           if [ "${KSU_VARIANT}" = "tiann" ]; then
@@ -1089,7 +1295,6 @@ jobs:
           CONFIG_HAVE_KPROBES=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_NET_SCH_FQ=y
-          CONFIG_LTO_CLANG_THIN=y
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
           CONFIG_KSU=y
@@ -1100,6 +1305,56 @@ jobs:
           ${KSU_LOCALVERSION}
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
+
+          PROFILE_FRAGMENT=out/pixel8-profile-${TUNING_PROFILE}.config
+          : > "$PROFILE_FRAGMENT"
+
+          case "${TUNING_PROFILE}" in
+            performance)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          CONFIG_UCLAMP_TASK=y
+          EOF
+              ;;
+            battery)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_250=y
+          CONFIG_HZ=250
+          CONFIG_CPU_IDLE=y
+          EOF
+              ;;
+            balanced)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          EOF
+              ;;
+          esac
+
+          case "${LTO_MODE}" in
+            thin)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_CLANG_THIN=y
+          CONFIG_LTO_CLANG_FULL=n
+          EOF
+              ;;
+            full)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_CLANG_THIN=n
+          CONFIG_LTO_CLANG_FULL=y
+          EOF
+              ;;
+            none)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_NONE=y
+          CONFIG_LTO_CLANG_THIN=n
+          CONFIG_LTO_CLANG_FULL=n
+          EOF
+              ;;
+          esac
+
+          cat "$PROFILE_FRAGMENT" >> out/.config
 
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
@@ -1137,6 +1392,7 @@ jobs:
           trap - EXIT
 
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
       - name: Package Kernel (AnyKernel3)
         if: env.DRY_RUN_ONLY != 'true'
@@ -1164,6 +1420,134 @@ jobs:
 
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
+      - name: Generate Pixel 8 Runtime Tuner Script
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          mkdir -p success-metadata
+          TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
+          GOV_MODE="${GOVERNOR_MODE}"
+          if [ "${RUNTIME_TUNER}" != "true" ]; then
+            cat << 'EOF' > "$TUNER_SCRIPT"
+          #!/system/bin/sh
+          # Runtime tuner generation disabled for this run.
+          # Governor mode: __GOV_MODE__
+          exit 0
+          EOF
+            sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
+            chmod +x "$TUNER_SCRIPT"
+            exit 0
+          fi
+          cat << 'EOF' > "$TUNER_SCRIPT"
+          #!/system/bin/sh
+          # Pixel 8 runtime tuner for responsiveness + battery life.
+          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
+          # Run as root (KernelSU/Magisk service.d) on boot.
+
+          set -u
+          GOV_MODE="__GOV_MODE__"
+
+          write_if_exists() {
+            local value="$1"
+            shift
+            for node in "$@"; do
+              [ -e "$node" ] && echo "$value" > "$node" 2>/dev/null || true
+            done
+          }
+
+          apply_schedutil_defaults() {
+            write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+          }
+
+          set_policy_limits() {
+            local policy="$1"
+            local minf="$2"
+            local maxf="$3"
+            write_if_exists "$minf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_min_freq"
+            write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_max_freq"
+          }
+
+          apply_pixel8_dynamic_schedutil() {
+            local mode="$1"
+            case "$mode" in
+              eco)
+                set_policy_limits policy0 300000 1700000
+                set_policy_limits policy4 500000 2000000
+                set_policy_limits policy6 500000 2100000
+                set_policy_limits policy7 500000 2200000
+                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 60000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+              turbo)
+                set_policy_limits policy0 600000 2100000
+                set_policy_limits policy4 700000 2600000
+                set_policy_limits policy6 700000 2700000
+                set_policy_limits policy7 900000 2918000
+                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+              *)
+                set_policy_limits policy0 300000 1900000
+                set_policy_limits policy4 500000 2300000
+                set_policy_limits policy6 500000 2400000
+                set_policy_limits policy7 700000 2700000
+                write_if_exists 9000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+            esac
+          }
+
+          is_screen_off() {
+            local brightness
+            brightness=$(cat /sys/class/backlight/panel0-backlight/brightness 2>/dev/null || echo 1)
+            [ "$brightness" -eq 0 ] && return 0
+            return 1
+          }
+
+          apply_schedutil_defaults
+
+          while true; do
+            batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
+            batt_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
+            load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+            load_int=${load_one%.*}
+
+            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
+              profile_mode="eco"
+              write_if_exists 60 /proc/sys/vm/swappiness
+              write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
+            elif [ "${load_int:-0}" -ge 5 ] && [ "$batt_temp" -le 390 ]; then
+              profile_mode="turbo"
+              write_if_exists 110 /proc/sys/vm/swappiness
+              write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
+            else
+              profile_mode="balanced"
+              write_if_exists 90 /proc/sys/vm/swappiness
+              write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
+            fi
+
+            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
+              apply_pixel8_dynamic_schedutil "$profile_mode"
+            else
+              # stock schedutil with adaptive response limits only
+              if [ "$profile_mode" = "eco" ]; then
+                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 50000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              elif [ "$profile_mode" = "turbo" ]; then
+                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              else
+                write_if_exists 8000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              fi
+            fi
+
+            sleep 20
+          done
+          EOF
+
+          sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
+          chmod +x "$TUNER_SCRIPT"
+
       - name: Upload Artifacts
         if: env.DRY_RUN_ONLY != 'true'
         uses: actions/upload-artifact@v4
@@ -1174,6 +1558,8 @@ jobs:
             ${{ env.CHANGELOG_FILE }}
             logs/build-${{ matrix.variant }}.log
             kernel/out/.config
+            kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
+            success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh
             ${{ env.PATCH_MANIFEST }}
             success-metadata/source-manifest-${{ matrix.variant }}.txt
 
@@ -1231,6 +1617,13 @@ jobs:
             echo "| Kernel ref | \`${{ needs.setup.outputs.kernel_ref }}\` |"
             echo "| SuSFS ref | \`${{ needs.setup.outputs.susfs_ref }}\` |"
             echo "| KSU version | \`r${{ env.KSU_VERSION }}\` |"
+            echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
+            echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
+            echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
+            echo "| Runtime tuner script | \`${{ env.RUNTIME_TUNER }}\` |"
+            echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
+            echo "| kerneltoast optimizations | \`${{ env.ENABLE_KERNELTOAST_OPTIMIZATIONS }}\` |"
+            echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"
             echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
             if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then
               echo "| ZIP artifact | \`${{ env.KERNEL_ZIP }}\` |"

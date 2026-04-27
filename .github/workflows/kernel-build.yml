@@ -450,14 +450,10 @@ jobs:
           echo "✅ Build tools configured"
           echo "::endgroup::"
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}-
-            ccache-${{ runner.os }}-
+      - name: Use Local ccache
+        run: |
+          echo "Using persistent runner ccache at ${CCACHE_DIR}"
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
 
       - name: Static analysis (shellcheck)
         run: |

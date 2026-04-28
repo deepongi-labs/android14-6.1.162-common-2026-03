@@ -70,10 +70,10 @@ on:
       governor_mode:
         description: 'CPU governor strategy (stock or custom dynamic schedutil)'
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'dynasched'
         type: choice
         options:
-          - pixel8_dynamic_schedutil
+          - dynasched
           - stock_schedutil
       enable_kerneltoast_optimizations:
         description: 'Legacy toggle for kerneltoast patchset (deprecated; use kerneltoast_patch_policy)'
@@ -168,7 +168,7 @@ on:
         type: boolean
       governor_mode:
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'dynasched'
         type: string
       enable_kerneltoast_optimizations:
         required: false
@@ -330,7 +330,7 @@ jobs:
           echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.governor_mode }}" in
-            pixel8_dynamic_schedutil|stock_schedutil) ;;
+            dynasched|stock_schedutil) ;;
             *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
           esac
           echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
@@ -1480,7 +1480,7 @@ jobs:
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
           # Pixel 8 runtime tuner for responsiveness + battery life.
-          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
+          # Custom mode "dynasched" builds on schedutil with dynamic cluster caps.
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
@@ -1565,7 +1565,7 @@ jobs:
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
+            if [ "$GOV_MODE" = "dynasched" ]; then
               apply_pixel8_dynamic_schedutil "$profile_mode"
             else
               # stock schedutil with adaptive response limits only

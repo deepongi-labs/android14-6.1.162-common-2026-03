@@ -1178,6 +1178,13 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
+              if [ "${KSU_VARIANT}" = "next" ]; then
+                if grep -q 'KernelSU-Next SuSFS integration | .* | stale-continue' "${PATCH_MANIFEST}" 2>/dev/null; then
+                  echo "⚠️  SuSFS Kconfig entry is missing for next variant due stale integration patches; continuing to compile for live validation."
+                else
+                  echo "⚠️  SuSFS Kconfig entry missing for next variant; continuing to compile for live validation."
+                fi
+              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 

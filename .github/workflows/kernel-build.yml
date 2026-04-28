@@ -89,6 +89,11 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: 'Alias for dry_run_only'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -171,6 +176,10 @@ on:
         default: 'strict'
         type: string
       dry_run_only:
+        required: false
+        default: false
+        type: boolean
+      dry_run:
         required: false
         default: false
         type: boolean
@@ -285,8 +294,13 @@ jobs:
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
-          echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
-          echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
+          DRY_RUN_REQUESTED="${{ (inputs.dry_run_only || inputs.dry_run) && 'true' || 'false' }}"
+          echo "dry_run=${DRY_RUN_REQUESTED}" >> $GITHUB_OUTPUT
+          if [ "${DRY_RUN_REQUESTED}" = "true" ]; then
+            echo "create_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "create_release=${{ inputs.create_release && 'true' || 'false' }}" >> $GITHUB_OUTPUT
+          fi
           echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${{ inputs.susfs_ref }}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT

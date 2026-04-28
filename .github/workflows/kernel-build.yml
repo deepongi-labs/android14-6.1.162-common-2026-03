@@ -664,6 +664,23 @@ jobs:
             fi
           }
 
+          apply_patch_or_tolerate_stale() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+              printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            else
+              echo "⚠️ ${description} is stale; skipping."
+              printf '%s | %s | stale-skip\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+              log_patch_failure "$patch_file" "$description"
+            fi
+          }
+
           apply_variant_or_default_patch() {
             local variant_patch="$1"
             local default_patch="$2"
@@ -1000,7 +1017,7 @@ jobs:
             else
               try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
             fi
-            
+
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"

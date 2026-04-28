@@ -695,6 +695,23 @@ jobs:
             fi
           }
 
+          apply_patch_or_tolerate_stale() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+              printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            else
+              echo "⚠️ ${description} is stale; skipping."
+              printf '%s | %s | stale-skip\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+              log_patch_failure "$patch_file" "$description"
+            fi
+          }
+
           apply_variant_or_default_patch() {
             local variant_patch="$1"
             local default_patch="$2"
@@ -1016,13 +1033,13 @@ jobs:
               echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
               printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
             else
-              apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+              apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
             fi
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
+            apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
+            apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
+            apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
+            apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
+            apply_patch_or_tolerate_stale "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

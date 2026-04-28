@@ -122,7 +122,7 @@ on:
       next_ref:
         description: 'Override KernelSU-Next ref'
         required: false
-        default: 'stable'
+        default: 'dev'
         type: string
   workflow_call:
     inputs:
@@ -204,7 +204,7 @@ on:
         type: string
       next_ref:
         required: false
-        default: 'stable'
+        default: 'dev'
         type: string
 
 permissions:

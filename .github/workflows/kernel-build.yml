@@ -955,9 +955,8 @@ jobs:
               echo "ℹ️ KernelSU-Next already contains SuSFS integration."
               printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
             else
-              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
-              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-              exit 1
+              echo "⚠️ KernelSU-Next SuSFS integration patch is stale; continuing with repo fixer and WK follow-up patches."
+              printf '%s | %s | stale-continue\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
             fi
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then

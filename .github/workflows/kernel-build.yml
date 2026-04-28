@@ -915,8 +915,18 @@ jobs:
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
-            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+            echo "🔍 Validating KernelSU-Next SuSFS integration..."
+            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
+              :
+            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
+              :
+            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
+              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+            else
+              echo "⚠️ KernelSU-Next SuSFS integration patch is stale; continuing with repo fixer and WK follow-up patches."
+              printf '%s | %s | stale-continue\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+            fi
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"

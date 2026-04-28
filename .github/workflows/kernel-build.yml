@@ -29,6 +29,11 @@ on:
         required: false
         default: true
         type: boolean
+      test_telegram_notification:
+        description: 'Send a test Telegram notification even for dry-run'
+        required: false
+        default: false
+        type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
@@ -132,6 +137,10 @@ on:
       enable_telegram:
         required: false
         default: true
+        type: boolean
+      test_telegram_notification:
+        required: false
+        default: false
         type: boolean
       create_release:
         required: false
@@ -1715,7 +1724,7 @@ jobs:
   notify:
     needs: [setup, create_release, build]
     runs-on: [self-hosted, linux, x64]
-    if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
+    if: always() && inputs.enable_telegram && (needs.setup.outputs.dry_run != 'true' || inputs.test_telegram_notification)
     steps:
       - name: Send Telegram Notification
         env:
@@ -1731,6 +1740,10 @@ jobs:
           ICON="✅"
           [ "$STATUS" != "success" ] && ICON="⚠️"
           [ "$STATUS" == "failure" ] && ICON="❌"
+          if [ "${{ inputs.test_telegram_notification }}" = "true" ]; then
+            STATUS="test"
+            ICON="ℹ️"
+          fi
 
           # Format variables
           IS_CLEAN="${{ inputs.force_clean_build && 'Yes' || 'No' }}"
@@ -1746,6 +1759,7 @@ jobs:
           🛡️ <b>SuSFS:</b> $IS_SUSFS
           🧹 <b>Clean Build:</b> $IS_CLEAN
           📦 <b>Release Created:</b> $DO_REL
+          🧪 <b>Telegram Test:</b> ${{ inputs.test_telegram_notification && 'Yes' || 'No' }}
           👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
 
           🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>

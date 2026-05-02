@@ -856,17 +856,17 @@ jobs:
             sed -i 's/\([[:space:]]*static[[:space:]][A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]\+\)\(copy_config_to_buf[[:space:]]*(\)/\1__maybe_unused \2/' fs/susfs.c
             printf '%s | %s | applied\n' "SuSFS copy_config_to_buf warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
           fi
-          if [ "$KSU_VARIANT" = "next" ] && ! grep -q '__weak susfs_is_current_ksu_domain' fs/susfs.c 2>/dev/null; then
+          if [ "$KSU_VARIANT" = "next" ] && ! grep -q '^bool susfs_is_current_ksu_domain' fs/susfs.c 2>/dev/null; then
             cat >> fs/susfs.c <<'EOF'
 
           #ifdef CONFIG_KSU_SUSFS
-          bool __weak susfs_is_current_ksu_domain(void)
+          bool susfs_is_current_ksu_domain(void)
           {
             return false;
           }
           #endif
           EOF
-            printf '%s | %s | applied\n' "SuSFS weak domain fallback" "fs/susfs.c" >> "$PATCH_MANIFEST"
+            printf '%s | %s | applied\n' "SuSFS domain fallback" "fs/susfs.c" >> "$PATCH_MANIFEST"
           fi
 
           if [ "$KSU_VARIANT" = "next" ]; then

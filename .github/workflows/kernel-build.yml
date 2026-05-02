@@ -859,12 +859,10 @@ jobs:
           if [ "$KSU_VARIANT" = "next" ] && ! grep -q '^bool susfs_is_current_ksu_domain' fs/susfs.c 2>/dev/null; then
             cat >> fs/susfs.c <<'EOF'
 
-          #ifdef CONFIG_KSU_SUSFS
           bool susfs_is_current_ksu_domain(void)
           {
             return false;
           }
-          #endif
           EOF
             printf '%s | %s | applied\n' "SuSFS domain fallback" "fs/susfs.c" >> "$PATCH_MANIFEST"
           fi

@@ -1,0 +1,56 @@
+name: Build Kernel Manager App
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "kernel-manager-app/**"
+      - ".github/workflows/manager-build.yml"
+  pull_request:
+    paths:
+      - "kernel-manager-app/**"
+      - ".github/workflows/manager-build.yml"
+
+concurrency:
+  group: manager-build-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-manager:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set Up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set Up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build Debug and Release APKs
+        run: gradle -p kernel-manager-app assembleDebug assembleRelease
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-manager-debug-apk
+          path: kernel-manager-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-manager-release-apk
+          path: kernel-manager-app/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

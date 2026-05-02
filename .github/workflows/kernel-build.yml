@@ -27,7 +27,7 @@ on:
       enable_telegram:
         description: 'Enable Telegram notifications'
         required: false
-        default: false
+        default: true
         type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
@@ -131,7 +131,7 @@ on:
         type: boolean
       enable_telegram:
         required: false
-        default: false
+        default: true
         type: boolean
       create_release:
         required: false

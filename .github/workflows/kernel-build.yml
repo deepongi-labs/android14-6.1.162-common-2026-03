@@ -978,16 +978,20 @@ jobs:
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if ! grep -q 'susfs_run_sus_path_loop' ../fs/susfs.c 2>/dev/null; then
-            echo "ℹ️ Current SuSFS defers sus_path_loop internally; removing stale direct KernelSU hook calls."
-            python3 - <<'PY'
+          echo "ℹ️ Removing stale direct sus_path_loop KernelSU hook calls when present."
+          python3 - <<'PY'
           from pathlib import Path
+          import re
 
           replacements = (
               ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(void);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
               ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(uid_t uid);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
               ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n    susfs_run_sus_path_loop();\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
               ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tsusfs_run_sus_path_loop(new_uid.val);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+          )
+          line_patterns = (
+              re.compile(r"^[ \t]*extern void susfs_run_sus_path_loop\([^;]*\);\n", re.MULTILINE),
+              re.compile(r"^[ \t]*susfs_run_sus_path_loop\([^;]*\);\n", re.MULTILINE),
           )
 
           changed = []
@@ -996,6 +1000,8 @@ jobs:
               original = text
               for old, new in replacements:
                   text = text.replace(old, new)
+              for pattern in line_patterns:
+                  text = pattern.sub("", text)
               if text != original:
                   path.write_text(text)
                   changed.append(str(path))
@@ -1003,8 +1009,7 @@ jobs:
           if changed:
               print("\n".join(changed))
           PY
-            printf '%s | %s | applied\n' "SuSFS deferred sus_path_loop compatibility" "KernelSU" >> "$PATCH_MANIFEST"
-          fi
+          printf '%s | %s | applied\n' "SuSFS deferred sus_path_loop compatibility" "KernelSU" >> "$PATCH_MANIFEST"
 
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"

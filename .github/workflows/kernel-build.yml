@@ -267,11 +267,11 @@ jobs:
 
           if [ "$VARIANT" = "all" ]; then
             if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all variants with SuSFS disabled"
+              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all boot-safe variants with SuSFS disabled"
             else
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all variants with SuSFS enabled"
+              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all boot-safe variants with SuSFS enabled"
             fi
           else
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
@@ -549,6 +549,13 @@ jobs:
 
           # Nuke the rogue KernelSU-Next folder as well to clean up the runner
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
+
+          if [ "${{ matrix.variant }}" = "next" ]; then
+            echo "❌ KernelSU-Next artifacts are temporarily disabled."
+            echo "The latest KernelSU-Next build passed CI but was reported to reboot at the first Google logo."
+            echo "Failing closed to avoid publishing another unsafe flashable package until the SuSFS drift is fixed without fallback shims."
+            exit 1
+          fi
 
           case "${{ matrix.variant }}" in
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;

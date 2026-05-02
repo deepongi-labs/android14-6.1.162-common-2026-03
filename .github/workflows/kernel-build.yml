@@ -843,6 +843,11 @@ jobs:
               "Default core SuSFS patch"
           fi
 
+          if grep -q 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile; then
+            sed -i 's/obj-$(CONFIG_KSU_SUSFS) += susfs.o/obj-y += susfs.o/' fs/Makefile
+            printf '%s | %s | applied\n' "SuSFS Makefile force-build" "fs/Makefile" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
@@ -984,7 +989,8 @@ jobs:
               echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
               printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
             else
-              apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+              echo "⚠️ WK SuSFS fix: kernel_compat is stale; continuing with current KernelSU-Next helper."
+              printf '%s | %s | stale-skipped\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
             fi
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
             apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"

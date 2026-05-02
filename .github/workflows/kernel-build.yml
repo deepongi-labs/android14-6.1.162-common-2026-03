@@ -849,7 +849,7 @@ jobs:
           fi
 
           if grep -q 'copied_size' fs/susfs.c 2>/dev/null && ! grep -q 'copied_size __maybe_unused' fs/susfs.c 2>/dev/null; then
-            sed -i 's/\([[:space:]]*int copied_size\)\([[:space:]]*=\)/\1 __maybe_unused\2/' fs/susfs.c
+            sed -i 's/\([[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]copied_size\)\([[:space:]]*[=;]\)/\1 __maybe_unused\2/' fs/susfs.c
             printf '%s | %s | applied\n' "SuSFS copied_size warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
           fi
 

@@ -848,6 +848,11 @@ jobs:
             printf '%s | %s | applied\n' "SuSFS Makefile force-build" "fs/Makefile" >> "$PATCH_MANIFEST"
           fi
 
+          if grep -q 'copied_size' fs/susfs.c 2>/dev/null && ! grep -q 'copied_size __maybe_unused' fs/susfs.c 2>/dev/null; then
+            sed -i 's/\([[:space:]]*int copied_size\)\([[:space:]]*=\)/\1 __maybe_unused\2/' fs/susfs.c
+            printf '%s | %s | applied\n' "SuSFS copied_size warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \

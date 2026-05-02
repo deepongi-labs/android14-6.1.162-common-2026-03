@@ -78,7 +78,7 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict
@@ -167,7 +167,7 @@ on:
         type: string
       kerneltoast_patch_policy:
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: string
       dry_run_only:
         required: false

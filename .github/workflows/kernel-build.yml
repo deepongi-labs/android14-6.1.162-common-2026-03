@@ -852,6 +852,10 @@ jobs:
             sed -i 's/\([[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]copied_size\)\([[:space:]]*[=;]\)/\1 __maybe_unused\2/' fs/susfs.c
             printf '%s | %s | applied\n' "SuSFS copied_size warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
           fi
+          if grep -q 'copy_config_to_buf' fs/susfs.c 2>/dev/null && ! grep -q '__maybe_unused copy_config_to_buf' fs/susfs.c 2>/dev/null; then
+            sed -i 's/\([[:space:]]*static[[:space:]][A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]\+\)\(copy_config_to_buf[[:space:]]*(\)/\1__maybe_unused \2/' fs/susfs.c
+            printf '%s | %s | applied\n' "SuSFS copy_config_to_buf warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
+          fi
 
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"

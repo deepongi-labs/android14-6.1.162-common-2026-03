@@ -267,11 +267,11 @@ jobs:
 
           if [ "$VARIANT" = "all" ]; then
             if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all boot-safe variants with SuSFS disabled"
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS disabled"
             else
-              echo 'matrix={"variant":["tiann","kowsu","resukisu"]}' >> $GITHUB_OUTPUT
-              echo "🎯 Building all boot-safe variants with SuSFS enabled"
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS enabled"
             fi
           else
             echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
@@ -344,6 +344,7 @@ jobs:
 
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
+      EFFECTIVE_ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs == 'true' && matrix.variant != 'next' && 'true' || 'false' }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
@@ -550,13 +551,6 @@ jobs:
           # Nuke the rogue KernelSU-Next folder as well to clean up the runner
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
-          if [ "${{ matrix.variant }}" = "next" ]; then
-            echo "❌ KernelSU-Next artifacts are temporarily disabled."
-            echo "The latest KernelSU-Next build passed CI but was reported to reboot at the first Google logo."
-            echo "Failing closed to avoid publishing another unsafe flashable package until the SuSFS drift is fixed without fallback shims."
-            exit 1
-          fi
-
           case "${{ matrix.variant }}" in
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
@@ -618,7 +612,7 @@ jobs:
           **Variant:** ${{ matrix.variant }}
           **Build Number:** #${{ github.run_number }}
           **KernelSU Version:** r${{ env.KSU_VERSION }}
-          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+          **SuSFS:** ${{ env.EFFECTIVE_ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
 
           ---
           ## 📖 Component Versions
@@ -634,7 +628,7 @@ jobs:
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true'
+        if: env.EFFECTIVE_ENABLE_SUSFS == 'true'
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/logs"
@@ -1199,7 +1193,7 @@ jobs:
           fi
 
           # Verify SuSFS integration if enabled
-          if [ "${ENABLE_SUSFS}" = "true" ]; then
+          if [ "${EFFECTIVE_ENABLE_SUSFS}" = "true" ]; then
             echo "🔍 Verifying SuSFS files..."
 
             # Check for SuSFS files
@@ -1247,7 +1241,7 @@ jobs:
             echo "susfs_ref=gki-android14-6.1-dev"
             echo "ksu_repo=${KSU_REPO}"
             echo "ksu_ref=${KSU_BRANCH}"
-            echo "enable_susfs=${ENABLE_SUSFS}"
+            echo "enable_susfs=${EFFECTIVE_ENABLE_SUSFS}"
             echo "dry_run=${DRY_RUN_ONLY:-false}"
             echo "tuning_profile=${TUNING_PROFILE}"
             echo "lto_mode=${LTO_MODE}"
@@ -1419,7 +1413,7 @@ jobs:
 
           cat "$PROFILE_FRAGMENT" >> out/.config
 
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          if [ "${{ env.EFFECTIVE_ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y

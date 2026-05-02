@@ -978,8 +978,51 @@ jobs:
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
+          if ! grep -q 'susfs_run_sus_path_loop' ../fs/susfs.c 2>/dev/null; then
+            echo "ℹ️ Current SuSFS defers sus_path_loop internally; removing stale direct KernelSU hook calls."
+            python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = (
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(void);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(uid_t uid);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n    susfs_run_sus_path_loop();\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tsusfs_run_sus_path_loop(new_uid.val);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+          )
+
+          changed = []
+          for path in Path(".").rglob("*.[ch]"):
+              text = path.read_text(errors="ignore")
+              original = text
+              for old, new in replacements:
+                  text = text.replace(old, new)
+              if text != original:
+                  path.write_text(text)
+                  changed.append(str(path))
+
+          if changed:
+              print("\n".join(changed))
+          PY
+            printf '%s | %s | applied\n' "SuSFS deferred sus_path_loop compatibility" "KernelSU" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            apply_wk_patch_or_skip() {
+              local patch_file="$1"
+              local desc="$2"
+
+              if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+                apply_patch_or_fail "$patch_file" "$desc"
+              elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+                echo "ℹ️ ${desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              else
+                echo "⚠️ ${desc} is stale for current KernelSU-Next; skipping."
+                printf '%s | %s | stale-skipped\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              fi
+            }
+
             if patch -p1 --forward --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
               apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
             elif patch -p1 --reverse --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
@@ -992,11 +1035,11 @@ jobs:
               echo "⚠️ WK SuSFS fix: kernel_compat is stale; continuing with current KernelSU-Next helper."
               printf '%s | %s | stale-skipped\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
             fi
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
-            apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

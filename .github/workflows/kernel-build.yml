@@ -344,7 +344,7 @@ jobs:
 
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
-      EFFECTIVE_ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs == 'true' && matrix.variant != 'next' && 'true' || 'false' }}
+      EFFECTIVE_ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}

@@ -1020,6 +1020,19 @@ jobs:
           PY
           printf '%s | %s | applied\n' "SuSFS deferred sus_path_loop compatibility" "KernelSU" >> "$PATCH_MANIFEST"
 
+          if [ "$KSU_VARIANT" = "next" ] && ! grep -Rqs '^bool susfs_is_current_ksu_domain' kernel; then
+            cat >> kernel/core_hook.c <<'EOF'
+
+          #ifdef CONFIG_KSU_SUSFS
+          bool susfs_is_current_ksu_domain(void)
+          {
+            return false;
+          }
+          #endif
+          EOF
+            printf '%s | %s | applied\n' "KernelSU-Next SuSFS domain fallback" "kernel/core_hook.c" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             apply_wk_patch_or_skip() {

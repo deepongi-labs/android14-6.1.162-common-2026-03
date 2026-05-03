@@ -2,6 +2,16 @@ name: Build Kernel Manager App
 
 on:
   workflow_dispatch:
+    inputs:
+      build_variant:
+        description: "APK variant to compile"
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - debug
+          - release
   push:
     paths:
       - "kernel-manager-app/**"
@@ -19,6 +29,8 @@ jobs:
   build-manager:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      BUILD_VARIANT: ${{ inputs.build_variant || 'both' }}
 
     steps:
       - name: Checkout
@@ -38,10 +50,17 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: Build Debug and Release APKs
-        run: gradle -p kernel-manager-app assembleDebug assembleRelease
+      - name: Build Selected APK Variant
+        run: |
+          case "${BUILD_VARIANT}" in
+            debug) gradle -p kernel-manager-app assembleDebug ;;
+            release) gradle -p kernel-manager-app assembleRelease ;;
+            both) gradle -p kernel-manager-app assembleDebug assembleRelease ;;
+            *) echo "Invalid build_variant: ${BUILD_VARIANT}" && exit 1 ;;
+          esac
 
       - name: Upload Debug APK
+        if: env.BUILD_VARIANT == 'debug' || env.BUILD_VARIANT == 'both'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-manager-debug-apk
@@ -49,6 +68,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Release APK
+        if: env.BUILD_VARIANT == 'release' || env.BUILD_VARIANT == 'both'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-manager-release-apk

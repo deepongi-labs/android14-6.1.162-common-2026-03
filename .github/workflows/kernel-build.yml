@@ -964,6 +964,22 @@ jobs:
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
+            python3 - <<'PY'
+            from pathlib import Path
+
+            target = Path("kernel/hook/setuid_hook.c")
+            if not target.exists():
+                raise SystemExit(f"missing expected file: {target}")
+
+            text = target.read_text()
+            if "susfs_run_sus_path_loop" in text:
+                text = text.replace("susfs_run_sus_path_loop();", "(void)0; /* symbol not available in this variant */")
+                target.write_text(text)
+            PY
+            printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."

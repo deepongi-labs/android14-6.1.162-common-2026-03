@@ -29,11 +29,6 @@ on:
         required: false
         default: true
         type: boolean
-      test_telegram_notification:
-        description: 'Send a test Telegram notification even for dry-run'
-        required: false
-        default: false
-        type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
@@ -70,10 +65,10 @@ on:
       governor_mode:
         description: 'CPU governor strategy'
         required: false
-        default: 'dyna_sched'
+        default: 'pixel8_dynamic_schedutil'
         type: choice
         options:
-          - dyna_sched
+          - pixel8_dynamic_schedutil
           - stock_schedutil
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
@@ -86,11 +81,6 @@ on:
           - off
       dry_run_only:
         description: 'Validate source sync and patch application only'
-        required: false
-        default: false
-        type: boolean
-      dry_run:
-        description: 'Alias for dry_run_only'
         required: false
         default: false
         type: boolean
@@ -143,10 +133,6 @@ on:
         required: false
         default: true
         type: boolean
-      test_telegram_notification:
-        required: false
-        default: false
-        type: boolean
       create_release:
         required: false
         default: true
@@ -169,17 +155,13 @@ on:
         type: boolean
       governor_mode:
         required: false
-        default: 'dyna_sched'
+        default: 'pixel8_dynamic_schedutil'
         type: string
       kerneltoast_patch_policy:
         required: false
         default: 'strict'
         type: string
       dry_run_only:
-        required: false
-        default: false
-        type: boolean
-      dry_run:
         required: false
         default: false
         type: boolean
@@ -294,13 +276,8 @@ jobs:
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
-          DRY_RUN_REQUESTED="${{ (inputs.dry_run_only || inputs.dry_run) && 'true' || 'false' }}"
-          echo "dry_run=${DRY_RUN_REQUESTED}" >> $GITHUB_OUTPUT
-          if [ "${DRY_RUN_REQUESTED}" = "true" ]; then
-            echo "create_release=false" >> $GITHUB_OUTPUT
-          else
-            echo "create_release=${{ inputs.create_release && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          fi
+          echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
+          echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
           echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${{ inputs.susfs_ref }}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT
@@ -335,7 +312,7 @@ jobs:
           echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.governor_mode }}" in
-            dyna_sched|stock_schedutil) ;;
+            pixel8_dynamic_schedutil|stock_schedutil) ;;
             *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
           esac
           echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
@@ -687,23 +664,6 @@ jobs:
             fi
           }
 
-          apply_patch_or_tolerate_stale() {
-            local patch_file="$1"
-            local description="$2"
-
-            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
-              patch -p1 --forward < "$patch_file"
-              printf '%s | %s | applied\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
-            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
-              echo "ℹ️ ${description} already present, skipping."
-              printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
-            else
-              echo "⚠️ ${description} is stale; skipping."
-              printf '%s | %s | stale-skip\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
-              log_patch_failure "$patch_file" "$description"
-            fi
-          }
-
           apply_variant_or_default_patch() {
             local variant_patch="$1"
             local default_patch="$2"
@@ -955,18 +915,8 @@ jobs:
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "🔍 Validating KernelSU-Next SuSFS integration..."
-            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
-              :
-            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
-              :
-            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
-              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
-              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-            else
-              echo "⚠️ KernelSU-Next SuSFS integration patch is stale; continuing with repo fixer and WK follow-up patches."
-              printf '%s | %s | stale-continue\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-            fi
+            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
+            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
@@ -1040,7 +990,7 @@ jobs:
             else
               try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
             fi
-
+            
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
             try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
@@ -1201,13 +1151,6 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
-              if [ "${KSU_VARIANT}" = "next" ]; then
-                if grep -q 'KernelSU-Next SuSFS integration | .* | stale-continue' "${PATCH_MANIFEST}" 2>/dev/null; then
-                  echo "⚠️  SuSFS Kconfig entry is missing for next variant due stale integration patches; continuing to compile for live validation."
-                else
-                  echo "⚠️  SuSFS Kconfig entry missing for next variant; continuing to compile for live validation."
-                fi
-              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
@@ -1338,15 +1281,10 @@ jobs:
           CONFIG_CMA=y
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
-          CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
-          CONFIG_TCP_CONG_HTCP=y
-          CONFIG_TCP_CONG_WESTWOOD=y
-          CONFIG_DEFAULT_CUBIC=y
           CONFIG_NET_SCH_FQ=y
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
-          CONFIG_RD_LZMA=y
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
           CONFIG_TMPFS_XATTR=y
@@ -1490,7 +1428,7 @@ jobs:
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
           # Pixel 8 runtime tuner for responsiveness + battery life.
-          # Custom mode "dyna_sched" builds on schedutil with dynamic cluster caps.
+          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
@@ -1575,7 +1513,7 @@ jobs:
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "dyna_sched" ]; then
+            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
               apply_pixel8_dynamic_schedutil "$profile_mode"
             else
               # stock schedutil with adaptive response limits only
@@ -1738,7 +1676,7 @@ jobs:
   notify:
     needs: [setup, create_release, build]
     runs-on: [self-hosted, linux, x64]
-    if: always() && inputs.enable_telegram && (needs.setup.outputs.dry_run != 'true' || inputs.test_telegram_notification)
+    if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Send Telegram Notification
         env:
@@ -1754,10 +1692,6 @@ jobs:
           ICON="✅"
           [ "$STATUS" != "success" ] && ICON="⚠️"
           [ "$STATUS" == "failure" ] && ICON="❌"
-          if [ "${{ inputs.test_telegram_notification }}" = "true" ]; then
-            STATUS="test"
-            ICON="ℹ️"
-          fi
 
           # Format variables
           IS_CLEAN="${{ inputs.force_clean_build && 'Yes' || 'No' }}"
@@ -1773,7 +1707,6 @@ jobs:
           🛡️ <b>SuSFS:</b> $IS_SUSFS
           🧹 <b>Clean Build:</b> $IS_CLEAN
           📦 <b>Release Created:</b> $DO_REL
-          🧪 <b>Telegram Test:</b> ${{ inputs.test_telegram_notification && 'Yes' || 'No' }}
           👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
 
           🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>

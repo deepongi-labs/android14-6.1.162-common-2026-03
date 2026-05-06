@@ -112,7 +112,7 @@ on:
       next_ref:
         description: 'Override KernelSU-Next ref'
         required: false
-        default: 'dev'
+        default: 'stable'
         type: string
 
   workflow_call:
@@ -915,8 +915,19 @@ jobs:
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
-            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+            echo "🔍 Validating KernelSU-Next SuSFS integration..."
+            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
+              :
+            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
+              :
+            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
+              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
+              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              exit 1
+            fi
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
@@ -1163,6 +1174,10 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
+              if [ "${KSU_VARIANT}" = "next" ]; then
+                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
+                exit 1
+              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 

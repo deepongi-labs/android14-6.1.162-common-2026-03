@@ -302,10 +302,10 @@ jobs:
           echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
 
           MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
-          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[0-9]+$ ]]; then
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
-            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer)"
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
             exit 1
           fi
 

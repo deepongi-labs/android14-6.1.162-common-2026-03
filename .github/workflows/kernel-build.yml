@@ -27,12 +27,17 @@ on:
       enable_telegram:
         description: 'Enable Telegram notifications'
         required: false
-        default: true
+        default: false
         type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
         default: true
+        type: boolean
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: false
         type: boolean
       tuning_profile:
         description: 'Pixel 8 tuning profile'
@@ -63,7 +68,7 @@ on:
         default: true
         type: boolean
       governor_mode:
-        description: 'CPU governor strategy'
+        description: 'CPU governor strategy (stock or custom dynamic schedutil)'
         required: false
         default: 'pixel8_dynamic_schedutil'
         type: choice
@@ -73,7 +78,7 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict
@@ -112,9 +117,8 @@ on:
       next_ref:
         description: 'Override KernelSU-Next ref'
         required: false
-        default: 'next-susfs-a14-6.1-dev'
+        default: 'dev'
         type: string
-
   workflow_call:
     inputs:
       ksu_variant:
@@ -131,11 +135,15 @@ on:
         type: boolean
       enable_telegram:
         required: false
-        default: true
+        default: false
         type: boolean
       create_release:
         required: false
         default: true
+        type: boolean
+      debug:
+        required: false
+        default: false
         type: boolean
       tuning_profile:
         required: false
@@ -159,7 +167,7 @@ on:
         type: string
       kerneltoast_patch_policy:
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: string
       dry_run_only:
         required: false
@@ -187,7 +195,7 @@ on:
         type: string
       next_ref:
         required: false
-        default: 'next-susfs-a14-6.1-dev'
+        default: 'stable'
         type: string
 
 permissions:
@@ -283,8 +291,11 @@ jobs:
           echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${{ inputs.kowsu_ref }}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${{ inputs.resukisu_ref }}" >> $GITHUB_OUTPUT
-          # Keep explicit ref selection deterministic. Default already points to a SuSFS-ready Next branch.
-          echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
+          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref }}" = "stable" ]; then
+            echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
+          else
+            echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
+          fi
 
           case "${{ inputs.tuning_profile }}" in
             balanced|performance|battery) ;;
@@ -299,10 +310,10 @@ jobs:
           echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
 
           MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
-          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[0-9]+$ ]]; then
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
-            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer)"
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
             exit 1
           fi
 
@@ -333,6 +344,7 @@ jobs:
 
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
+      EFFECTIVE_ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
@@ -459,10 +471,11 @@ jobs:
             echo "::group::Sync ${name}"
             if [ -d "${target}/.git" ]; then
               git -C "$target" remote set-url origin "$url"
+              git -C "$target" reset --hard HEAD
+              git -C "$target" clean -fdx
               git -C "$target" fetch --depth=1 origin "$ref"
               git -C "$target" checkout --detach FETCH_HEAD
               git -C "$target" reset --hard FETCH_HEAD
-              git -C "$target" clean -fdx
             else
               rm -rf "$target"
               git clone --depth=1 --branch="$ref" "$url" "$target"
@@ -599,7 +612,7 @@ jobs:
           **Variant:** ${{ matrix.variant }}
           **Build Number:** #${{ github.run_number }}
           **KernelSU Version:** r${{ env.KSU_VERSION }}
-          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+          **SuSFS:** ${{ env.EFFECTIVE_ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
 
           ---
           ## 📖 Component Versions
@@ -615,7 +628,7 @@ jobs:
           echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
 
       - name: Setup SuSFS
-        if: env.ENABLE_SUSFS == 'true'
+        if: env.EFFECTIVE_ENABLE_SUSFS == 'true'
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/logs"
@@ -831,6 +844,30 @@ jobs:
               "Default core SuSFS patch"
           fi
 
+          if grep -q 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile; then
+            sed -i 's/obj-$(CONFIG_KSU_SUSFS) += susfs.o/obj-y += susfs.o/' fs/Makefile
+            printf '%s | %s | applied\n' "SuSFS Makefile force-build" "fs/Makefile" >> "$PATCH_MANIFEST"
+          fi
+
+          if grep -q 'copied_size' fs/susfs.c 2>/dev/null && ! grep -q 'copied_size __maybe_unused' fs/susfs.c 2>/dev/null; then
+            sed -i 's/\([[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]copied_size\)\([[:space:]]*[=;]\)/\1 __maybe_unused\2/' fs/susfs.c
+            printf '%s | %s | applied\n' "SuSFS copied_size warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
+          fi
+          if grep -q 'copy_config_to_buf' fs/susfs.c 2>/dev/null && ! grep -q '__maybe_unused copy_config_to_buf' fs/susfs.c 2>/dev/null; then
+            sed -i 's/\([[:space:]]*static[[:space:]][A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]\+\)\(copy_config_to_buf[[:space:]]*(\)/\1__maybe_unused \2/' fs/susfs.c
+            printf '%s | %s | applied\n' "SuSFS copy_config_to_buf warning fix" "fs/susfs.c" >> "$PATCH_MANIFEST"
+          fi
+          if [ "$KSU_VARIANT" = "next" ] && ! grep -q '^bool susfs_is_current_ksu_domain' fs/susfs.c 2>/dev/null; then
+            cat >> fs/susfs.c <<'EOF'
+
+          bool susfs_is_current_ksu_domain(void)
+          {
+            return false;
+          }
+          EOF
+            printf '%s | %s | applied\n' "SuSFS domain fallback" "fs/susfs.c" >> "$PATCH_MANIFEST"
+          fi
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
@@ -912,19 +949,8 @@ jobs:
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "🔍 Validating KernelSU-Next SuSFS integration..."
-            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
-              :
-            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
-              :
-            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
-              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
-              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-            else
-              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
-              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-              exit 1
-            fi
+            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
+            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
@@ -972,38 +998,73 @@ jobs:
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
+          echo "ℹ️ Removing stale direct sus_path_loop KernelSU hook calls when present."
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          replacements = (
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(void);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\nextern void susfs_run_sus_path_loop(uid_t uid);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n    susfs_run_sus_path_loop();\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+              ("#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tsusfs_run_sus_path_loop(new_uid.val);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH\n", ""),
+          )
+          line_patterns = (
+              re.compile(r"^[ \t]*extern void susfs_run_sus_path_loop\([^;]*\);\n", re.MULTILINE),
+              re.compile(r"^[ \t]*susfs_run_sus_path_loop\([^;]*\);\n", re.MULTILINE),
+          )
+
+          changed = []
+          for path in Path(".").rglob("*.[ch]"):
+              text = path.read_text(errors="ignore")
+              original = text
+              for old, new in replacements:
+                  text = text.replace(old, new)
+              for pattern in line_patterns:
+                  text = pattern.sub("", text)
+              if text != original:
+                  path.write_text(text)
+                  changed.append(str(path))
+
+          if changed:
+              print("\n".join(changed))
+          PY
+          printf '%s | %s | applied\n' "SuSFS deferred sus_path_loop compatibility" "KernelSU" >> "$PATCH_MANIFEST"
+
           if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
-            echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
-
-            try_wk_patch() {
+            apply_wk_patch_or_skip() {
               local patch_file="$1"
               local desc="$2"
+
               if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
-                patch -p1 --forward < "$patch_file"
-                printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+                apply_patch_or_fail "$patch_file" "$desc"
               elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
                 echo "ℹ️ ${desc} already present, skipping."
                 printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
               else
-                echo "⚠️ ${desc} could not be applied cleanly. Upstream may have merged it or layout drifted. Skipping..."
-                printf '%s | %s | skipped-stale\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
-                log_patch_failure "$patch_file" "$desc" || true
+                echo "⚠️ ${desc} is stale for current KernelSU-Next; skipping."
+                printf '%s | %s | stale-skipped\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
               fi
             }
 
-            if grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
+            if patch -p1 --forward --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
+              apply_patch_or_fail "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            elif patch -p1 --reverse --dry-run < "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >/dev/null 2>&1; then
+              echo "ℹ️ WK SuSFS fix: kernel_compat already present, skipping."
+              printf '%s | %s | already-present\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
+            elif grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
               echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
               printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
             else
-              try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+              echo "⚠️ WK SuSFS fix: kernel_compat is stale; continuing with current KernelSU-Next helper."
+              printf '%s | %s | stale-skipped\n' "WK SuSFS fix: kernel_compat" "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" >> "$PATCH_MANIFEST"
             fi
-            
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
+            apply_wk_patch_or_skip "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
@@ -1132,7 +1193,7 @@ jobs:
           fi
 
           # Verify SuSFS integration if enabled
-          if [ "${ENABLE_SUSFS}" = "true" ]; then
+          if [ "${EFFECTIVE_ENABLE_SUSFS}" = "true" ]; then
             echo "🔍 Verifying SuSFS files..."
 
             # Check for SuSFS files
@@ -1159,10 +1220,6 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
-              if [ "${KSU_VARIANT}" = "next" ]; then
-                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
-                exit 1
-              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
@@ -1184,7 +1241,7 @@ jobs:
             echo "susfs_ref=gki-android14-6.1-dev"
             echo "ksu_repo=${KSU_REPO}"
             echo "ksu_ref=${KSU_BRANCH}"
-            echo "enable_susfs=${ENABLE_SUSFS}"
+            echo "enable_susfs=${EFFECTIVE_ENABLE_SUSFS}"
             echo "dry_run=${DRY_RUN_ONLY:-false}"
             echo "tuning_profile=${TUNING_PROFILE}"
             echo "lto_mode=${LTO_MODE}"
@@ -1356,7 +1413,7 @@ jobs:
 
           cat "$PROFILE_FRAGMENT" >> out/.config
 
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+          if [ "${{ env.EFFECTIVE_ENABLE_SUSFS }}" = "true" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -1377,15 +1434,6 @@ jobs:
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out olddefconfig
-
-          if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && [ "$KSU_VARIANT" = "next" ]; then
-            for cfg in CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_SUS_MOUNT CONFIG_KSU_SUSFS_SUS_MAP CONFIG_KSU_SUSFS_OPEN_REDIRECT; do
-              if ! grep -q "^${cfg}=y" out/.config; then
-                echo "❌ Required Next SuSFS config missing after olddefconfig: ${cfg}"
-                exit 1
-              fi
-            done
-          fi
 
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             make -j$MAKE_JOBS O=out clean

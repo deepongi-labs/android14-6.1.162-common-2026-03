@@ -259,10 +259,10 @@ jobs:
 
           if [ "$VARIANT" = "all" ]; then
             if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants with SuSFS disabled"
             else
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants with SuSFS enabled"
             fi
           else

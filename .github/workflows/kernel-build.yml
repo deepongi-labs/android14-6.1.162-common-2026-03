@@ -826,7 +826,7 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \

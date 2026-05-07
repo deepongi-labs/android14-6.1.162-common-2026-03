@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - enhance
           - tiann
           - kowsu
           - resukisu
@@ -542,6 +543,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;

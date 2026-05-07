@@ -260,10 +260,10 @@ jobs:
 
           if [ "$VARIANT" = "all" ]; then
             if [ "$DISABLE_SUSFS" = "true" ]; then
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants with SuSFS disabled"
             else
-              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
               echo "🎯 Building all variants with SuSFS enabled"
             fi
           else
@@ -972,6 +972,14 @@ jobs:
             fi
           fi
 
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
+              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
+              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
+            fi
+          fi
+
           if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
@@ -1281,7 +1289,7 @@ jobs:
           fi
           START_TIME=$SECONDS
 
-          if [ "${KSU_VARIANT}" = "tiann" ]; then
+          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
           else
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
@@ -1419,6 +1427,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
+            "enhance") AK3_BRANCH="KernelSU" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

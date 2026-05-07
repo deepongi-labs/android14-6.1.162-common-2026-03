@@ -1436,6 +1436,14 @@ jobs:
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
 
+          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+            echo "::group::anykernel.sh (device-related lines)"
+            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
 

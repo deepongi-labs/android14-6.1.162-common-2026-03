@@ -826,7 +826,7 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -969,6 +969,14 @@ jobs:
                 printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
                 exit 1
               fi
+            fi
+          fi
+
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
+              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
+              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
             fi
           fi
 
@@ -1281,7 +1289,7 @@ jobs:
           fi
           START_TIME=$SECONDS
 
-          if [ "${KSU_VARIANT}" = "tiann" ]; then
+          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
           else
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
@@ -1419,6 +1427,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
+            "enhance") AK3_BRANCH="KernelSU" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;
@@ -1426,6 +1435,14 @@ jobs:
           esac
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+
+          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+            echo "::group::anykernel.sh (device-related lines)"
+            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/

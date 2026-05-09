@@ -844,6 +844,7 @@ jobs:
           PATCH_VARIANT="$KSU_VARIANT"
           if [ "$KSU_VARIANT" = "enhance" ]; then
             PATCH_VARIANT="tiann"
+            ensure_namespace_trace_hook_include
           fi
 
           # Apply core SuSFS patch.

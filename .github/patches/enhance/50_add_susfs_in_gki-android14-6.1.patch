@@ -58,13 +58,10 @@ index 4f25015aa..17e9e15af 100644
  	return dentry;
  }
  
-<<<<<<< HEAD
-=======
 +#ifdef CONFIG_KSU_SUSFS
 +extern int ksu_handle_devpts(struct inode*);
 +#endif
 +
->>>>>>> c98218084 (fix(workflow): repair enhance susfs patch flow and sync enhanced tree)
  /**
   * devpts_get_priv -- get private data for a slave
   * @pts_inode: inode of the slave
@@ -72,8 +69,6 @@ index 4f25015aa..17e9e15af 100644
   */
  void *devpts_get_priv(struct dentry *dentry)
  {
-<<<<<<< HEAD
-=======
 +#ifdef CONFIG_KSU_SUSFS
 +	if (likely(susfs_is_current_proc_umounted())) {
 +		goto orig_flow;
@@ -82,7 +77,6 @@ index 4f25015aa..17e9e15af 100644
 +orig_flow:
 +#endif
 +
->>>>>>> c98218084 (fix(workflow): repair enhance susfs patch flow and sync enhanced tree)
  	if (dentry->d_sb->s_magic != DEVPTS_SUPER_MAGIC)
  		return NULL;
  	return dentry->d_fsdata;

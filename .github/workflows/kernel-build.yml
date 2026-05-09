@@ -845,8 +845,13 @@ jobs:
             ensure_namespace_trace_hook_include
           fi
 
+          PATCH_VARIANT="$KSU_VARIANT"
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            PATCH_VARIANT="tiann"
+          fi
+
           # Apply core SuSFS patch.
-          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
+          VARIANT_SUSFS_PATCH="../.github/patches/${PATCH_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
           if [ "$KSU_VARIANT" = "kowsu" ]; then
@@ -915,7 +920,7 @@ jobs:
           # when the integration is already present.
           cd KernelSU
 
-          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
+          VARIANT_KSU_PATCH="../../.github/patches/${PATCH_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
           try_apply_patch() {
@@ -995,13 +1000,7 @@ jobs:
             fi
           fi
 
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
-            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
-              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
-              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
-            fi
-          fi
+          # Keep enhance aligned with tiann patch surface.
 
           if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py

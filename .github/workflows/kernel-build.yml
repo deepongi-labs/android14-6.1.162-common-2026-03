@@ -1,0 +1,1766 @@
+name: Build GKI Kernel with KernelSU Variants v5.1.0
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_variant:
+        description: 'KernelSU variant to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - enhance
+          - tiann
+          - kowsu
+          - resukisu
+          - next
+      disable_susfs:
+        description: 'Disable SuSFS features'
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        description: 'Enable Telegram notifications'
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: true
+        type: boolean
+      tuning_profile:
+        description: 'Pixel 8 tuning profile'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - balanced
+          - performance
+          - battery
+      lto_mode:
+        description: 'LTO mode (thin/full/none)'
+        required: false
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      make_jobs:
+        description: 'Override make parallel jobs (auto or integer)'
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        description: 'Generate on-device runtime tuner script'
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        description: 'CPU governor strategy'
+        required: false
+        default: 'pixel8_dynamic_schedutil'
+        type: choice
+        options:
+          - pixel8_dynamic_schedutil
+          - stock_schedutil
+      kerneltoast_patch_policy:
+        description: 'Policy for kerneltoast patchset application'
+        required: false
+        default: 'best_effort'
+        type: choice
+        options:
+          - strict
+          - best_effort
+          - off
+      dry_run_only:
+        description: 'Validate source sync and patch application only'
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        description: 'Override SuSFS ref'
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        description: 'Override tiann KernelSU ref'
+        required: false
+        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        type: string
+      kowsu_ref:
+        description: 'Override kowsu KernelSU ref'
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        description: 'Override ReSukiSU ref'
+        required: false
+        default: 'main'
+        type: string
+      next_ref:
+        description: 'Override KernelSU-Next ref'
+        required: false
+        default: 'dev'
+        type: string
+
+  workflow_call:
+    inputs:
+      ksu_variant:
+        required: false
+        default: 'all'
+        type: string
+      disable_susfs:
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        required: false
+        default: true
+        type: boolean
+      tuning_profile:
+        required: false
+        default: 'balanced'
+        type: string
+      lto_mode:
+        required: false
+        default: 'thin'
+        type: string
+      make_jobs:
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        required: false
+        default: 'pixel8_dynamic_schedutil'
+        type: string
+      kerneltoast_patch_policy:
+        required: false
+        default: 'best_effort'
+        type: string
+      dry_run_only:
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        required: false
+        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        type: string
+      kowsu_ref:
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        required: false
+        default: 'main'
+        type: string
+      next_ref:
+        required: false
+        default: 'dev'
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: kernel-build-workflow-${{ github.ref_name }}-${{ inputs.ksu_variant || 'all' }}
+  cancel-in-progress: false
+
+env:
+  # Mirror the local self-hosted toolchain layout used for manual builds.
+  CLANG_BIN: /mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin
+  ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
+  ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
+  CCACHE_DIR: /mnt/ccache/.ccache
+  SOURCE_MIRROR_DIR: /mnt/Android/source-mirrors
+  KERNEL_REPO_URL: https://android.googlesource.com/kernel/common
+  SUSFS_REPO_URL: https://gitlab.com/simonpunk/susfs4ksu
+  TIANN_REPO_URL: https://github.com/tiann/KernelSU.git
+  KOWSU_REPO_URL: https://github.com/KOWX712/KernelSU.git
+  RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
+  NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
+  ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
+  PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
+  CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
+  WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
+  KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/48a3fd5e41.patch
+  KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/201c5c7c99.patch
+  KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/56040db35c.patch
+  KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/627184a51c.patch
+
+jobs:
+  setup:
+    runs-on: [self-hosted, linux, x64]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      enable_susfs: ${{ steps.config.outputs.enable_susfs }}
+      force_clean: ${{ steps.config.outputs.force_clean }}
+      dry_run: ${{ steps.config.outputs.dry_run }}
+      build_start_time: ${{ steps.timestamp.outputs.start_time }}
+      create_release: ${{ steps.config.outputs.create_release }}
+      kernel_ref: ${{ steps.config.outputs.kernel_ref }}
+      susfs_ref: ${{ steps.config.outputs.susfs_ref }}
+      tiann_ref: ${{ steps.config.outputs.tiann_ref }}
+      kowsu_ref: ${{ steps.config.outputs.kowsu_ref }}
+      resukisu_ref: ${{ steps.config.outputs.resukisu_ref }}
+      next_ref: ${{ steps.config.outputs.next_ref }}
+      tuning_profile: ${{ steps.config.outputs.tuning_profile }}
+      lto_mode: ${{ steps.config.outputs.lto_mode }}
+      make_jobs: ${{ steps.config.outputs.make_jobs }}
+      include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
+      governor_mode: ${{ steps.config.outputs.governor_mode }}
+      kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
+    steps:
+      - name: Record Build Start Time
+        id: timestamp
+        run: |
+          echo "WORKFLOW_START_TIME=$(date +%s)" >> $GITHUB_ENV
+          START_TIME=$(date +%s)
+          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "::notice::Workflow started at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Set Build Matrix
+        id: set-matrix
+        run: |
+          VARIANT="${{ inputs.ksu_variant }}"
+          DISABLE_SUSFS="${{ inputs.disable_susfs }}"
+
+          if [ "$VARIANT" = "all" ]; then
+            if [ "$DISABLE_SUSFS" = "true" ]; then
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS disabled"
+            else
+              echo 'matrix={"variant":["enhance","tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS enabled"
+            fi
+          else
+            echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
+            echo "🎯 Building single variant: $VARIANT"
+          fi
+
+      - name: Set Build Config
+        id: config
+        run: |
+          ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
+          echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
+          echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
+          echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
+          echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
+          echo "susfs_ref=${{ inputs.susfs_ref }}" >> $GITHUB_OUTPUT
+          echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT
+          echo "kowsu_ref=${{ inputs.kowsu_ref }}" >> $GITHUB_OUTPUT
+          echo "resukisu_ref=${{ inputs.resukisu_ref }}" >> $GITHUB_OUTPUT
+          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref }}" = "stable" ]; then
+            echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
+          else
+            echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
+          fi
+
+          case "${{ inputs.tuning_profile }}" in
+            balanced|performance|battery) ;;
+            *) echo "❌ Invalid tuning_profile: ${{ inputs.tuning_profile }}"; exit 1 ;;
+          esac
+          echo "tuning_profile=${{ inputs.tuning_profile }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.lto_mode }}" in
+            thin|full|none) ;;
+            *) echo "❌ Invalid lto_mode: ${{ inputs.lto_mode }}"; exit 1 ;;
+          esac
+          echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
+
+          MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
+            exit 1
+          fi
+
+          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.governor_mode }}" in
+            pixel8_dynamic_schedutil|stock_schedutil) ;;
+            *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
+          esac
+          echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.kerneltoast_patch_policy }}" in
+            strict|best_effort|off) ;;
+            *) echo "❌ Invalid kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}"; exit 1 ;;
+          esac
+          echo "kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: setup
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 120
+    concurrency:
+      group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    env:
+      ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
+      FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
+      KSU_VARIANT: ${{ matrix.variant }}
+      TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
+      LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
+      MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
+      RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
+      GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
+      KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
+
+    steps:
+      - name: Pre-Clean Build Artifacts
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf AnyKernel3 release-assets changelogs logs failure-logs success-metadata || true
+
+      - name: Checkout Workflow Repo
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Setup Build Tools & Dependencies
+        run: |
+          set -e
+          echo "::group::Runner Sanity"
+          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}"
+          df -h .
+          df -h /mnt/ccache 2>/dev/null || true
+          echo "CPU cores: $(nproc)"
+          echo "::endgroup::"
+
+          echo "::group::Toolchain Detection"
+          echo "🔧 Resolving build tools for self-hosted runner..."
+
+          if [ -x "/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin/clang" ] && [ -d "/mnt/Hawai/toolchains" ]; then
+            export CLANG_BIN="/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin"
+            export ARM64_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
+            export ARM32_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-"
+            export TOOLCHAIN_ID="clang23-gnu15.2"
+            echo "Using local self-hosted toolchains."
+          else
+            echo "Falling back to distro toolchains from PATH."
+            export CLANG_BIN="/usr/lib/llvm-17/bin"
+            export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
+            export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
+            export TOOLCHAIN_ID="llvm17-distro"
+          fi
+
+          echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
+          echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "TOOLCHAIN_ID=${TOOLCHAIN_ID}" >> $GITHUB_ENV
+
+          if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
+            SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
+          else
+            SELECTED_CCACHE_DIR="$HOME/.ccache"
+            mkdir -p "$SELECTED_CCACHE_DIR"
+          fi
+
+          echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
+          echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=${SELECTED_CCACHE_DIR}/tmp" >> $GITHUB_ENV
+
+          # Help cache hits across different checkout paths on self-hosted runners.
+          mkdir -p "${SELECTED_CCACHE_DIR}/tmp"
+          ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
+          ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
+          ccache --set-config=compiler_check=mtime >/dev/null 2>&1 || true
+          ccache --set-config=compression=true >/dev/null 2>&1 || true
+          ccache --set-config=compression_level=6 >/dev/null 2>&1 || true
+          ccache --set-config=hard_link=true >/dev/null 2>&1 || true
+          ccache --set-config=file_clone=true >/dev/null 2>&1 || true
+          ccache --set-config=sloppiness=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro >/dev/null 2>&1 || true
+          ccache --set-config=temporary_dir="${SELECTED_CCACHE_DIR}/tmp" >/dev/null 2>&1 || true
+          ccache -M 50G >/dev/null 2>&1 || true
+
+          command -v git >/dev/null
+          command -v curl >/dev/null
+          command -v patch >/dev/null
+          command -v make >/dev/null
+          command -v ccache >/dev/null
+          command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
+          test -x "${CLANG_BIN}/clang" || command -v clang >/dev/null
+          test -w "${SELECTED_CCACHE_DIR}"
+
+          echo "✅ Build tools configured"
+          echo "::endgroup::"
+
+      - name: Cache ccache
+        if: ${{ !startsWith(env.CCACHE_DIR, '/mnt/ccache') }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}-
+            ccache-${{ runner.os }}-
+
+      - name: Static analysis (shellcheck)
+        run: |
+          if command -v shellcheck >/dev/null; then
+            shellcheck **/*.sh || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: Smart Sync Kernel & SuSFS Sources
+        run: |
+          set -e
+          sync_repo_shallow() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+
+            echo "::group::Sync ${name}"
+            if [ -d "${target}/.git" ]; then
+              git -C "$target" remote set-url origin "$url"
+              git -C "$target" fetch --depth=1 origin "$ref"
+              git -C "$target" checkout --detach FETCH_HEAD
+              git -C "$target" reset --hard FETCH_HEAD
+              git -C "$target" clean -fdx
+            else
+              rm -rf "$target"
+              git clone --depth=1 --branch="$ref" "$url" "$target"
+              git -C "$target" checkout --detach
+            fi
+
+            echo "${name} -> $(git -C "$target" rev-parse --short HEAD)"
+            echo "::endgroup::"
+          }
+
+          echo "📦 Smart syncing kernel and SuSFS sources..."
+
+          # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
+          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
+          sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
+
+      - name: Store Commit Info (Workflow, Kernel, SuSFS)
+        run: |
+          record_commit_info() {
+            local prefix="$1"
+            local repo_path="$2"
+            local short_hash
+            local commit_date
+            local commit_msg
+
+            short_hash=$(git -C "$repo_path" log -1 --format='%h')
+            commit_date=$(git -C "$repo_path" log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')
+            commit_msg=$(git -C "$repo_path" log -1 --format='%s')
+
+            echo "${prefix}_COMMIT_SHORT=$short_hash" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_DATE=$commit_date" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_MSG=$commit_msg" >> "$GITHUB_ENV"
+          }
+
+          record_commit_info "WORKFLOW" "."
+          record_commit_info "KERNEL" "kernel"
+          record_commit_info "SUSFS" "susfs4ksu"
+
+      - name: Show CCACHE Status
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Reset CCACHE Counters
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -z || true
+
+      - name: Setup KernelSU Variant
+        run: |
+          set -e
+          KSU_SETUP_START=$SECONDS
+          sync_variant_repo() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+            local mirror="${SOURCE_MIRROR_DIR}/${name}.git"
+
+            if [ ! -d "$mirror" ]; then
+              git clone --mirror "$url" "$mirror"
+            else
+              git -C "$mirror" remote set-url origin "$url"
+              git -C "$mirror" fetch --prune origin
+            fi
+
+            rm -rf "$target"
+            git clone --reference-if-able "$mirror" "$mirror" "$target"
+            git -C "$target" fetch --depth=1 origin "$ref"
+            git -C "$target" checkout --detach FETCH_HEAD
+          }
+
+          # Nuke the rogue KernelSU-Next folder as well to clean up the runner
+          cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
+
+          case "${{ matrix.variant }}" in
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
+            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
+            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
+          esac
+
+          echo "::group::Sync KernelSU Variant"
+          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" KernelSU
+          echo "KernelSU repo: $KSU_REPO"
+          echo "KernelSU ref: $KSU_BRANCH"
+          echo "::endgroup::"
+
+          # We manually integrate KSU to prevent fork setup scripts from rogue cloning
+          if [ "$USE_SETUP_SH" = "true" ]; then
+            echo "🔗 Manually symlinking KernelSU..."
+            ln -sf ../KernelSU/kernel drivers/kernelsu
+          else
+            echo "📋 Manually copying KernelSU (No symlink)..."
+            cp -r KernelSU/kernel drivers/kernelsu
+          fi
+
+          # Add KSU to kernel makefiles
+          grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV && echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
+
+      - name: Get KSU Version Info & Commit
+        run: |
+          cd kernel/KernelSU
+          git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
+
+          if [ "${{ matrix.variant }}" = "resukisu" ]; then
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((40000 + KSU_COUNT - 2815))
+          elif [ "${{ matrix.variant }}" = "next" ]; then
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+          else
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+          fi
+
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHORT=$(git log -1 --format='%h')" >> $GITHUB_ENV
+          echo "KSU_COMMIT_DATE=$(git log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          echo "KSU_COMMIT_MSG=$(git log -1 --format='%s')" >> $GITHUB_ENV
+
+      - name: Generate Comprehensive Changelog
+        run: |
+          mkdir -p changelogs
+          CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
+
+          cat << EOF > "$CHANGELOG_FILE"
+          # 📋 Comprehensive Build Changelog
+
+          **Variant:** ${{ matrix.variant }}
+          **Build Number:** #${{ github.run_number }}
+          **KernelSU Version:** r${{ env.KSU_VERSION }}
+          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+
+          ---
+          ## 📖 Component Versions
+          | Component | Current Commit | Date | Summary |
+          |-----------|---------------|------|---------|
+          | **KernelSU** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |
+          | **Kernel** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |
+          | **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |
+
+          ---
+          EOF
+
+          echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
+
+      - name: Setup SuSFS
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+          PATCH_FAILURE_LOG="$GITHUB_WORKSPACE/logs/patch-failure-${KSU_VARIANT}.log"
+          : > "$PATCH_MANIFEST"
+          : > "$PATCH_FAILURE_LOG"
+
+          log_patch_failure() {
+            local patch_file="$1"
+            local description="$2"
+            local temp_log
+
+            temp_log="$(mktemp)"
+            patch -p1 --forward --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
+
+            {
+              echo "=== ${description} ==="
+              echo "Patch: $patch_file"
+              cat "$temp_log"
+              echo
+            } >> "$PATCH_FAILURE_LOG"
+
+            rm -f "$temp_log"
+          }
+
+          apply_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+              printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ ${description} could not be applied cleanly: $patch_file"
+              printf '%s | %s | failed\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+              log_patch_failure "$patch_file" "$description"
+              echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
+              exit 1
+            fi
+          }
+
+          apply_variant_or_default_patch() {
+            local variant_patch="$1"
+            local default_patch="$2"
+            local variant_desc="$3"
+            local default_desc="$4"
+
+            if [ -f "$variant_patch" ]; then
+              if patch -p1 --forward --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "📋 Applying CUSTOM patch: $variant_desc"
+                patch -p1 --forward < "$variant_patch"
+                printf '%s | %s | applied\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "ℹ️ ${variant_desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              else
+                echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
+                printf '%s | %s | stale-fallback\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                log_patch_failure "$variant_patch" "$variant_desc"
+              fi
+            fi
+
+            apply_patch_or_fail "$default_patch" "$default_desc"
+          }
+
+          ensure_namespace_susfs_prologue() {
+            if grep -q 'susfs_is_current_ksu_domain' fs/namespace.c 2>/dev/null; then
+              echo "ℹ️ Namespace SuSFS prologue already present, skipping."
+              printf '%s | %s | already-present\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/namespace.c")' \
+              'text = path.read_text()' \
+              'include_old = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n"""' \
+              'include_new = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'ida_old = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n"""' \
+              'ida_new = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nstatic struct ida susfs_mnt_id_ida __maybe_unused = IDA_INIT(susfs_mnt_id_ida);\nstatic struct ida susfs_mnt_group_ida __maybe_unused = IDA_INIT(susfs_mnt_group_ida);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
+              'if include_old not in text or ida_old not in text: raise SystemExit("namespace.c layout drifted; could not inject SuSFS prologue")' \
+              'path.write_text(text.replace(include_old, include_new, 1).replace(ida_old, ida_new, 1))' \
+              | python -
+
+            echo "📋 Applied namespace SuSFS prologue fix"
+            printf '%s | %s | applied\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
+          }
+
+          ensure_namespace_susfs_helpers() {
+            if grep -q '^int susfs_get_non_sus_mnt_id_from_mnt' fs/namespace.c 2>/dev/null &&
+               grep -q '^struct vfsmount \*susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/namespace.c 2>/dev/null; then
+              echo "ℹ️ Namespace SuSFS helper definitions already present, skipping."
+              printf '%s | %s | already-present\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            printf '%s\n' \
+              '' \
+              '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
+              '/* Retrieve the nearest non-SuSFS mount ID from a mount. */' \
+              'int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt)' \
+              '{' \
+              ' struct mount *mnt = orig_mnt;' \
+              ' int mnt_id;' \
+              '' \
+              ' lock_mount_hash();' \
+              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              ' mnt_id = mnt->mnt_id;' \
+              ' unlock_mount_hash();' \
+              ' return mnt_id;' \
+              '}' \
+              '' \
+              '/* Retrieve the nearest non-SuSFS vfsmount and take references on it. */' \
+              'struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt)' \
+              '{' \
+              ' struct mount *mnt = real_mount(vfsmnt);' \
+              '' \
+              ' lock_mount_hash();' \
+              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
+              ' mntget(&mnt->mnt);' \
+              ' if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {' \
+              '   mntput(&mnt->mnt);' \
+              '   unlock_mount_hash();' \
+              '   return vfsmnt;' \
+              ' }' \
+              ' dget(mnt->mnt.mnt_root);' \
+              ' unlock_mount_hash();' \
+              ' return &mnt->mnt;' \
+              '}' \
+              '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
+              >> fs/namespace.c
+
+            echo "📋 Applied namespace SuSFS helper fix"
+            printf '%s | %s | applied\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
+          }
+
+          auto_merge_tiann_ksu_susfs_patch() {
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'def replace_once(path_str, old, new):' \
+              '    path = Path(path_str)' \
+              '    text = path.read_text()' \
+              '    if old not in text: raise SystemExit(f"missing expected conflict block in {path_str}")' \
+              '    path.write_text(text.replace(old, new, 1))' \
+              'replace_once("kernel/Kbuild", """<<<<<<< ours\nifeq ($(filter /%,$(src)),)\nKSU_KERNEL_DIR := $(srctree)/$(src)\nelse\nKSU_KERNEL_DIR := $(src)\nendif\n=======\n## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n>>>>>>> theirs\n""", """## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include\n""")' \
+              'replace_once("kernel/Kbuild", """\nccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include\n""", "\n")' \
+              'replace_once("kernel/feature/kernel_umount.c", """<<<<<<< ours\n    // There are 6 scenarios:\n    // 1. Normal app: zygote -> appuid\n    // 2. Isolated process forked from zygote: zygote -> isolated_process\n    // 3. App zygote forked from zygote: zygote -> appuid\n    // 4. Webview zygote forked from zygote: zygote -> WEBVIEW_ZYGOTE_UID (no need to handle, app cannot run custom code)\n    // 5. Isolated process forked from app zygote: appuid -> isolated_process (already handled by 3)\n    // 6. Isolated process forked from webview zygote (no need to handle, app cannot run custom code)\n    if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    // check old process'\''s selinux context, if it is not zygote, ignore it!\n    // because some su apps may setuid to untrusted_app but they are in global mount namespace\n    // when we umount for such process, that is a disaster!\n    // also handle case 4 and 5\n    bool is_zygote_child = is_zygote(current_cred());\n    if (!is_zygote_child) {\n        pr_info(\"handle umount ignore non zygote child: %d\\n\", current->pid);\n        return 0;\n    }\n=======\n>>>>>>> theirs\n""", "")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    struct task_struct *p = current;\n    struct task_struct *t;\n    struct root_profile *profile = NULL;\n=======\n    struct root_profile profile;\n>>>>>>> theirs\n""", """    struct root_profile *profile = NULL;\n""")' \
+              'replace_once("kernel/policy/app_profile.c", """<<<<<<< ours\n    for_each_thread (p, t) {\n        ksu_set_task_tracepoint_flag(t);\n    }\n\n    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n=======\n    setup_mount_ns(profile.namespaces);\n>>>>>>> theirs\n""", """    setup_mount_ns(profile->namespaces);\n    ksu_put_root_profile(profile);\n""")' \
+              | python -
+
+            git add kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c
+          }
+
+          cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
+          cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("kernel/fs/susfs.c")
+          text = path.read_text()
+
+          if "#include <linux/jump_label.h>" not in text:
+              text = text.replace(
+                  "#include <linux/fsnotify_backend.h>\n",
+                  "#include <linux/fsnotify_backend.h>\n#include <linux/jump_label.h>\n",
+                  1,
+              )
+
+          static_keys = """DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);
+          DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);
+          DEFINE_STATIC_KEY_TRUE(susfs_set_uname_key_true);
+          DEFINE_STATIC_KEY_TRUE(susfs_set_fake_cmdline_or_bootconfig_key_true);
+          DEFINE_STATIC_KEY_TRUE(susfs_avc_log_spoofing_key_true);
+          DEFINE_STATIC_KEY_FALSE(susfs_set_sdcard_android_data_decrypted_key_false);
+
+          """
+
+          if "DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false)" not in text:
+              marker = "extern bool susfs_is_current_ksu_domain(void);\n\n"
+              if marker in text:
+                  text = text.replace(marker, static_keys + marker, 1)
+              else:
+                  include_marker = "#include \"mount.h\"\n"
+                  if include_marker not in text:
+                      raise SystemExit("susfs.c layout drifted; could not inject static branch keys")
+                  text = text.replace(include_marker, include_marker + "\n" + static_keys, 1)
+
+          path.write_text(text)
+          PY
+
+          cd kernel
+
+          # Apply core SuSFS patch.
+          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
+          DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+
+          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
+          else
+            apply_variant_or_default_patch \
+              "$VARIANT_SUSFS_PATCH" \
+              "$DEFAULT_SUSFS_PATCH" \
+              "Custom core SuSFS patch" \
+              "Default core SuSFS patch"
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ]; then
+            WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/proc/base.c")' \
+              'text = path.read_text()' \
+              'include = "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif\n"' \
+              'if "#include <linux/susfs_def.h>" not in text:' \
+              '    marker = "#include <linux/dma-buf.h>\n"' \
+              '    if marker not in text: raise SystemExit("fs/proc/base.c layout drifted; could not inject SuSFS map include")' \
+              '    path.write_text(text.replace(marker, marker + include, 1))' \
+              | python -
+            printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (1)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/proc/base.c")' \
+              'text = path.read_text()' \
+              'decl_marker = "\tunsigned int flags;\n"' \
+              'decl_insert = "\tunsigned int flags;\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\tstruct vm_area_struct *vma;\n#endif\n"' \
+              'block_marker = "\t\tif (write && copy_from_user(page, buf, this_len)) {\n"' \
+              'block_insert = """#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\tvma = find_vma(mm, addr);\n\t\tif (vma && vma->vm_file) {\n\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n\t\t\tif (unlikely(inode->i_mapping->flags & BIT_SUS_MAPS) && susfs_is_current_proc_umounted()) {\n\t\t\t\tif (write) {\n\t\t\t\t\tcopied = -EFAULT;\n\t\t\t\t} else {\n\t\t\t\t\tcopied = -EIO;\n\t\t\t\t}\n\t\t\t\t*ppos = addr;\n\t\t\t\tmmput(mm);\n\t\t\t\tgoto free;\n\t\t\t}\n\t\t}\n#endif\n\n"""' \
+              'if "susfs_is_current_proc_umounted()" not in text:' \
+              '    if decl_marker not in text or block_marker not in text: raise SystemExit("fs/proc/base.c layout drifted; could not inject SuSFS map guard")' \
+              '    text = text.replace(decl_marker, decl_insert, 1).replace(block_marker, block_insert + block_marker, 1)' \
+              '    path.write_text(text)' \
+              | python -
+            printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (2)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'path = Path("fs/namespace.c")' \
+              'text = path.read_text()' \
+              'include = "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif\n"' \
+              'prologue = """#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_boot_completed_triggered __read_mostly;\n\nstatic DEFINE_IDA(susfs_ksu_mnt_group_ida);\nstatic atomic64_t susfs_ksu_mounts = ATOMIC64_INIT(0);\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif\n\n"""' \
+              'if "#include <linux/susfs_def.h>" not in text:' \
+              '    marker = "#include <linux/shmem_fs.h>\n"' \
+              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS include")' \
+              '    text = text.replace(marker, marker + include, 1)' \
+              'if "susfs_ksu_mounts" not in text and "susfs_is_current_ksu_domain" not in text:' \
+              '    marker = "#include \"internal.h\"\n\n"' \
+              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS prologue")' \
+              '    text = text.replace(marker, marker + prologue, 1)' \
+              'path.write_text(text)' \
+              | python -
+            printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
+          fi
+
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
+            ensure_namespace_susfs_prologue
+          fi
+          ensure_namespace_susfs_helpers
+
+          # Always attempt the KernelSU-side SuSFS integration patch.
+          # Some upstream variants drift over time; the helper will skip cleanly
+          # when the integration is already present.
+          cd KernelSU
+
+          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+
+          try_apply_patch() {
+            local patch_file="$1"
+            local desc="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch: $desc"
+              patch -p1 --forward < "$patch_file"
+              printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${desc} already present, skipping."
+              printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            return 1
+          }
+
+          if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+            echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+            printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+          elif [ "$KSU_VARIANT" = "next" ]; then
+            echo "🔍 Validating KernelSU-Next SuSFS integration..."
+            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
+              :
+            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
+              :
+            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
+              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
+              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              exit 1
+            fi
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
+            if git apply --3way "$VARIANT_KSU_PATCH"; then
+              printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+            else
+              if grep -Eq '^(<<<<<<<|=======|>>>>>>>)' kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c 2>/dev/null; then
+                echo "⚠️ Tiann KernelSU SuSFS patch drift detected, applying known auto-merge."
+                auto_merge_tiann_ksu_susfs_patch
+                printf '%s | %s | applied-with-auto-merge\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              else
+                echo "❌ Custom KernelSU SuSFS patch could not be applied cleanly: $VARIANT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                exit 1
+              fi
+            fi
+          elif [ -f "$VARIANT_KSU_PATCH" ]; then
+            if ! try_apply_patch "$VARIANT_KSU_PATCH" "Custom KernelSU SuSFS patch"; then
+              echo "⚠️ Custom KernelSU SuSFS patch is stale, falling back to default: $VARIANT_KSU_PATCH"
+              printf '%s | %s | stale-fallback\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+                if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+                  echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                  printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+                else
+                  echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                  printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                  exit 1
+                fi
+              fi
+            fi
+          else
+            if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+              if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+                echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+              else
+                echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
+              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
+              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
+            fi
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
+            python3 fix_susfs.py
+            printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
+          fi
+
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'target = Path("kernel/hook/setuid_hook.c")' \
+              'if target.exists():' \
+              '    text = target.read_text()' \
+              '    if "susfs_run_sus_path_loop();" in text:' \
+              '        target.write_text(text.replace("susfs_run_sus_path_loop();", "(void)0; /* symbol not available in this variant */"))' \
+              | python -
+            printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ]; then
+            WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
+
+            try_wk_patch() {
+              local patch_file="$1"
+              local desc="$2"
+              if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+                patch -p1 --forward < "$patch_file"
+                printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+                echo "ℹ️ ${desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+              else
+                echo "⚠️ ${desc} could not be applied cleanly. Upstream may have merged it or layout drifted. Skipping..."
+                printf '%s | %s | skipped-stale\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
+                log_patch_failure "$patch_file" "$desc" || true
+              fi
+            }
+
+            if grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
+              echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
+              printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
+            else
+              try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
+            fi
+            
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
+          fi
+
+          echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+
+      - name: Apply Remote Patches & Source Fixes
+        run: |
+          set -e
+          fetch_patch_or_fail() {
+            local url="$1"
+            local destination="$2"
+            curl --fail --location --silent --show-error "$url" -o "$destination"
+          }
+
+          apply_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+
+            if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+              patch -p1 --forward < "$patch_file"
+            elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+            else
+              echo "❌ ${description} could not be applied cleanly: $patch_file"
+              exit 1
+            fi
+          }
+
+          apply_repo_patch_or_fail() {
+            local patch_file="$1"
+            local description="$2"
+            apply_patch_or_fail "$GITHUB_WORKSPACE/$patch_file" "$description"
+          }
+
+          apply_remote_patch_with_policy() {
+            local url="$1"
+            local local_name="$2"
+            local description="$3"
+
+            local destination="/tmp/${local_name}"
+            if ! curl --fail --location --silent --show-error "$url" -o "$destination"; then
+              if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
+                echo "❌ ${description} download failed in strict mode: ${url}"
+                exit 1
+              fi
+              echo "⚠️  Skipping ${description}: failed to download ${url}"
+              return 0
+            fi
+
+            if patch -p1 --forward --dry-run < "$destination" >/dev/null 2>&1; then
+              patch -p1 --forward < "$destination"
+              echo "✅ Applied ${description}"
+            elif patch -p1 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
+              echo "ℹ️ ${description} already present, skipping."
+            else
+              if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
+                echo "❌ ${description} failed to apply cleanly in strict mode"
+                exit 1
+              fi
+              echo "⚠️  Skipping ${description}: patch drift against current kernel ref"
+            fi
+          }
+
+          cd kernel
+
+          # 0. Bypass GKI ABI symbol checks
+          echo "🚫 Removing GKI protected exports..."
+          rm -f android/abi_gki_protected_exports_* || true
+
+          # 1. CLIDR uninitialized fix
+          fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
+            if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
+          apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
+
+          # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
+          echo "📶 Applying Wi-Fi patch..."
+          fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+            if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
+          apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+
+          # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
+          if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
+            echo "🚀 Applying selected kerneltoast scheduler/power commits (${KERNELTOAST_PATCH_POLICY})..."
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL }}" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL }}" "kt-sched-cass-uclamp-packing.patch" "kerneltoast: sched/cass uclamp packing threshold"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL }}" "kt-schedutil-ignore-fie-ratelimit.patch" "kerneltoast: schedutil ignore FIE rate-limit on scale-up"
+            apply_remote_patch_with_policy "${{ env.KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL }}" "kt-schedutil-default-ratelimit.patch" "kerneltoast: schedutil default rate-limit 2000us"
+          else
+            echo "⏭️  kerneltoast patchset disabled by policy"
+          fi
+
+          # 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.
+          if [ -f "drivers/kernelsu/app_profile.c" ] && grep -q "char comm\\[TASK_COMM_LEN\\];" drivers/kernelsu/app_profile.c; then
+            python -c 'from pathlib import Path; p=Path("drivers/kernelsu/app_profile.c"); t=p.read_text(); p.write_text(t.replace("char comm[TASK_COMM_LEN];", "static char comm[TASK_COMM_LEN];", 1))'
+            echo "✅ app_profile stack workaround applied"
+          else
+            echo "⏭️  app_profile stack workaround not needed"
+          fi
+
+          # 4. Fix localversion script appending dirty flags
+          apply_repo_patch_or_fail ".github/patches/global/fix_setlocalversion_dirty.patch" "setlocalversion dirty suffix fix"
+
+          # 5. Fix libbpf compilation error
+          echo "🔧 Patching libbpf.c type casting..."
+          apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
+
+      - name: Verify Patched Tree
+        run: |
+          set -e
+          mkdir -p success-metadata
+
+          if [ -z "${PATCH_MANIFEST:-}" ]; then
+            PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+            mkdir -p "$(dirname "$PATCH_MANIFEST")"
+            : > "$PATCH_MANIFEST"
+            echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          fi
+
+          echo "::group::Patch Verification"
+
+          # Check for CONFIG_KSU in Kconfig (use grep instead of rg)
+          if grep -q 'CONFIG_KSU' kernel/drivers/Kconfig 2>/dev/null; then
+            echo "✅ CONFIG_KSU found in kernel/drivers/Kconfig"
+          else
+            echo "⚠️  CONFIG_KSU not immediately visible (may be in submodule)"
+          fi
+
+          # Verify SuSFS integration if enabled
+          if [ "${ENABLE_SUSFS}" = "true" ]; then
+            echo "🔍 Verifying SuSFS files..."
+
+            # Check for SuSFS files
+            if [ -f kernel/fs/susfs.c ]; then
+              echo "✅ kernel/fs/susfs.c exists"
+            else
+              echo "⚠️  kernel/fs/susfs.c not found"
+            fi
+
+            if [ -f kernel/include/linux/susfs.h ]; then
+              echo "✅ kernel/include/linux/susfs.h exists"
+            else
+              echo "⚠️  kernel/include/linux/susfs.h not found"
+            fi
+
+            # Verify Makefile entry for SuSFS
+            if grep -q 'CONFIG_KSU_SUSFS.*susfs' kernel/fs/Makefile 2>/dev/null; then
+              echo "✅ SuSFS Makefile entry found"
+            else
+              echo "⚠️  SuSFS Makefile entry not found (will be added during compile)"
+            fi
+
+            # Verify Kconfig entry for SuSFS
+            if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
+              echo "✅ SuSFS Kconfig entry found"
+            else
+              if [ "${KSU_VARIANT}" = "next" ]; then
+                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
+                exit 1
+              fi
+              echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
+            fi
+
+            # Verify hooks for non-resukisu/next variants
+            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ]; then
+              if grep -rq 'ksu_init_rc_hook\|ksu_execveat_hook\|ksu_input_hook' kernel/drivers/kernelsu 2>/dev/null; then
+                echo "✅ KSU hooks found"
+              else
+                echo "⚠️  KSU hooks not found in standard locations"
+              fi
+            fi
+          fi
+
+          # Write success metadata
+          echo "📝 Writing build metadata..."
+          {
+            echo "variant=${KSU_VARIANT}"
+            echo "kernel_ref=android14-6.1-2026-03"
+            echo "susfs_ref=gki-android14-6.1-dev"
+            echo "ksu_repo=${KSU_REPO}"
+            echo "ksu_ref=${KSU_BRANCH}"
+            echo "enable_susfs=${ENABLE_SUSFS}"
+            echo "dry_run=${DRY_RUN_ONLY:-false}"
+            echo "tuning_profile=${TUNING_PROFILE}"
+            echo "lto_mode=${LTO_MODE}"
+            echo "make_jobs=${MAKE_JOBS_OVERRIDE}"
+            echo "runtime_tuner=${RUNTIME_TUNER}"
+            echo "governor_mode=${GOVERNOR_MODE}"
+            echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
+            echo "patch_repo_sha=4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e"
+          } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
+
+          echo "✅ Patch verification complete"
+          echo "::endgroup::"
+
+      - name: Stop After Patch Validation
+        if: env.DRY_RUN_ONLY == 'true'
+        run: |
+          {
+            echo "## Dry Run Complete"
+            echo
+            echo "- Variant: \`${{ matrix.variant }}\`"
+            echo "- KernelSU repo: \`${{ env.KSU_REPO }}\`"
+            echo "- KernelSU ref: \`${{ env.KSU_BRANCH }}\`"
+            echo "- Kernel ref: \`${{ needs.setup.outputs.kernel_ref }}\`"
+            echo "- SuSFS ref: \`${{ needs.setup.outputs.susfs_ref }}\`"
+            echo "- Result: Patch and config verification passed; compile intentionally skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build Kernel
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          LOG_FILE="$GITHUB_WORKSPACE/logs/build-${{ matrix.variant }}.log"
+          exec > >(tee -a "$LOG_FILE") 2>&1
+
+          summarize_build_failure() {
+            if [ ! -f "$LOG_FILE" ]; then
+              return 0
+            fi
+
+            echo "::group::Build failure summary (${KSU_VARIANT})"
+            echo "📄 Last 200 lines of $LOG_FILE"
+            tail -n 200 "$LOG_FILE" || true
+            echo
+            echo "🔎 Matching error signatures"
+            grep -nE 'error:|fatal error:|undefined reference|No rule to make target|FAILED:' "$LOG_FILE" | tail -n 80 || echo "No common error signature matched."
+            echo "::endgroup::"
+          }
+
+          trap 'status=$?; if [ "$status" -ne 0 ]; then summarize_build_failure; fi; exit "$status"' EXIT
+
+          cd kernel
+          export ARCH=arm64
+          export PATH="${{ env.CLANG_BIN }}:/usr/lib/ccache:$PATH"
+          export CROSS_COMPILE="${{ env.ARM64_TOOLCHAIN }}"
+          export CROSS_COMPILE_COMPAT="${{ env.ARM32_TOOLCHAIN }}"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CC="ccache ${{ env.CLANG_BIN }}/clang"
+          export CXX="ccache ${{ env.CLANG_BIN }}/clang++"
+          export HOSTCC="ccache ${{ env.CLANG_BIN }}/clang"
+          export HOSTCXX="ccache ${{ env.CLANG_BIN }}/clang++"
+          export LD="${{ env.CLANG_BIN }}/ld.lld"
+          export HOSTLD="${{ env.CLANG_BIN }}/ld.lld"
+          export AR="${{ env.CLANG_BIN }}/llvm-ar"
+          export HOSTAR="${{ env.CLANG_BIN }}/llvm-ar"
+          export NM="${{ env.CLANG_BIN }}/llvm-nm"
+          export OBJCOPY="${{ env.CLANG_BIN }}/llvm-objcopy"
+          export OBJDUMP="${{ env.CLANG_BIN }}/llvm-objdump"
+          export READELF="${{ env.CLANG_BIN }}/llvm-readelf"
+          export STRIP="${{ env.CLANG_BIN }}/llvm-strip"
+          export CLANG_TRIPLE="aarch64-linux-gnu-"
+
+          if [ "${MAKE_JOBS_OVERRIDE}" = "auto" ]; then
+            MAKE_JOBS=$(nproc)
+          else
+            MAKE_JOBS="${MAKE_JOBS_OVERRIDE}"
+          fi
+          START_TIME=$SECONDS
+
+          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
+          else
+            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
+          fi
+
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            O=out gki_defconfig
+
+          # Append all custom GKI, Tensor G3, Net, and KSU configs before resolving dependencies.
+          cat <<EOF >> out/.config
+          CONFIG_ARM64_CORTEX_X3=y
+          CONFIG_ARM64_CORTEX_A715=y
+          CONFIG_ARM64_CORTEX_A510=y
+          CONFIG_ARM64_VA_BITS=48
+          CONFIG_ARM64_PA_BITS=48
+          CONFIG_SCHED_MC=y
+          CONFIG_SCHED_CORE=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_THERMAL=y
+          CONFIG_CMA=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_IP_SET=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_KSU=y
+          CONFIG_KSU_DEBUG=n
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_LOCALVERSION_AUTO=n
+          ${KSU_LOCALVERSION}
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          EOF
+
+          PROFILE_FRAGMENT=out/pixel8-profile-${TUNING_PROFILE}.config
+          : > "$PROFILE_FRAGMENT"
+
+          case "${TUNING_PROFILE}" in
+            performance)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          CONFIG_UCLAMP_TASK=y
+          EOF
+              ;;
+            battery)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_250=y
+          CONFIG_HZ=250
+          CONFIG_CPU_IDLE=y
+          EOF
+              ;;
+            balanced)
+              cat << 'EOF' >> "$PROFILE_FRAGMENT"
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          EOF
+              ;;
+          esac
+
+          case "${LTO_MODE}" in
+            thin)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_CLANG_THIN=y
+          CONFIG_LTO_CLANG_FULL=n
+          EOF
+              ;;
+            full)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_CLANG_THIN=n
+          CONFIG_LTO_CLANG_FULL=y
+          EOF
+              ;;
+            none)
+              cat << 'EOF' >> out/.config
+          CONFIG_LTO_NONE=y
+          CONFIG_LTO_CLANG_THIN=n
+          CONFIG_LTO_CLANG_FULL=n
+          EOF
+              ;;
+          esac
+
+          cat "$PROFILE_FRAGMENT" >> out/.config
+
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            cat << 'EOF' >> out/.config
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
+          fi
+
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            O=out olddefconfig
+
+          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+            make -j$MAKE_JOBS O=out clean
+          fi
+
+          make -j$MAKE_JOBS O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+            CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+            all
+
+          trap - EXIT
+
+          echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Package Kernel (AnyKernel3)
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          cd kernel
+          KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
+          cd ..
+
+          case "${{ matrix.variant }}" in
+            "enhance") AK3_BRANCH="KernelSU" ;;
+            "tiann") AK3_BRANCH="KernelSU" ;;
+            "kowsu") AK3_BRANCH="KowSU" ;;
+            "resukisu") AK3_BRANCH="resukisu" ;;
+            "next") AK3_BRANCH="next" ;;
+          esac
+
+          git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+
+          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+            echo "::group::anykernel.sh (device-related lines)"
+            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
+
+          cd AnyKernel3 && rm -rf .git .github
+          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
+          zip -r9 "../$ZIP_NAME" .
+          cd ..
+
+          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Generate Pixel 8 Runtime Tuner Script
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          mkdir -p success-metadata
+          TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
+          GOV_MODE="${GOVERNOR_MODE}"
+          if [ "${RUNTIME_TUNER}" != "true" ]; then
+            cat << 'EOF' > "$TUNER_SCRIPT"
+          #!/system/bin/sh
+          # Runtime tuner generation disabled for this run.
+          # Governor mode: __GOV_MODE__
+          exit 0
+          EOF
+            sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
+            chmod +x "$TUNER_SCRIPT"
+            exit 0
+          fi
+          cat << 'EOF' > "$TUNER_SCRIPT"
+          #!/system/bin/sh
+          # Pixel 8 runtime tuner for responsiveness + battery life.
+          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
+          # Run as root (KernelSU/Magisk service.d) on boot.
+
+          set -u
+          GOV_MODE="__GOV_MODE__"
+
+          write_if_exists() {
+            local value="$1"
+            shift
+            for node in "$@"; do
+              [ -e "$node" ] && echo "$value" > "$node" 2>/dev/null || true
+            done
+          }
+
+          apply_schedutil_defaults() {
+            write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+          }
+
+          set_policy_limits() {
+            local policy="$1"
+            local minf="$2"
+            local maxf="$3"
+            write_if_exists "$minf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_min_freq"
+            write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_max_freq"
+          }
+
+          apply_pixel8_dynamic_schedutil() {
+            local mode="$1"
+            case "$mode" in
+              eco)
+                set_policy_limits policy0 300000 1700000
+                set_policy_limits policy4 500000 2000000
+                set_policy_limits policy6 500000 2100000
+                set_policy_limits policy7 500000 2200000
+                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 60000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+              turbo)
+                set_policy_limits policy0 600000 2100000
+                set_policy_limits policy4 700000 2600000
+                set_policy_limits policy6 700000 2700000
+                set_policy_limits policy7 900000 2918000
+                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+              *)
+                set_policy_limits policy0 300000 1900000
+                set_policy_limits policy4 500000 2300000
+                set_policy_limits policy6 500000 2400000
+                set_policy_limits policy7 700000 2700000
+                write_if_exists 9000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                ;;
+            esac
+          }
+
+          is_screen_off() {
+            local brightness
+            brightness=$(cat /sys/class/backlight/panel0-backlight/brightness 2>/dev/null || echo 1)
+            [ "$brightness" -eq 0 ] && return 0
+            return 1
+          }
+
+          apply_schedutil_defaults
+
+          while true; do
+            batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
+            batt_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
+            load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+            load_int=${load_one%.*}
+
+            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
+              profile_mode="eco"
+              write_if_exists 60 /proc/sys/vm/swappiness
+              write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
+            elif [ "${load_int:-0}" -ge 5 ] && [ "$batt_temp" -le 390 ]; then
+              profile_mode="turbo"
+              write_if_exists 110 /proc/sys/vm/swappiness
+              write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
+            else
+              profile_mode="balanced"
+              write_if_exists 90 /proc/sys/vm/swappiness
+              write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
+            fi
+
+            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
+              apply_pixel8_dynamic_schedutil "$profile_mode"
+            else
+              # stock schedutil with adaptive response limits only
+              if [ "$profile_mode" = "eco" ]; then
+                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 50000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              elif [ "$profile_mode" = "turbo" ]; then
+                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              else
+                write_if_exists 8000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+              fi
+            fi
+
+            sleep 20
+          done
+          EOF
+
+          sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
+          chmod +x "$TUNER_SCRIPT"
+
+      - name: Upload Artifacts
+        if: env.DRY_RUN_ONLY != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.variant }}-${{ github.run_number }}
+          path: |
+            ${{ env.KERNEL_ZIP }}
+            ${{ env.CHANGELOG_FILE }}
+            logs/build-${{ matrix.variant }}.log
+            kernel/out/.config
+            kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
+            success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh
+            ${{ env.PATCH_MANIFEST }}
+            success-metadata/source-manifest-${{ matrix.variant }}.txt
+
+      - name: Collect Failure Logs
+        if: failure()
+        run: |
+          ARTIFACT_DIR="failure-logs/${{ matrix.variant }}"
+          mkdir -p "$ARTIFACT_DIR"
+
+          [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/patch-failure-${{ matrix.variant }}.log" ] && cp "logs/patch-failure-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
+          [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
+          [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
+          [ -n "${{ env.PATCH_MANIFEST }}" ] && [ -f "${{ env.PATCH_MANIFEST }}" ] && cp "${{ env.PATCH_MANIFEST }}" "$ARTIFACT_DIR/"
+          [ -f "success-metadata/source-manifest-${{ matrix.variant }}.txt" ] && cp "success-metadata/source-manifest-${{ matrix.variant }}.txt" "$ARTIFACT_DIR/"
+          find kernel -type f \( -name "*.rej" -o -name "*.orig" \) -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          find kernel/out -maxdepth 3 -type f \
+            \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \
+            -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          for RUNNER_DIR in /actions-runner /home/runner/actions-runner /home/deepongi/actions-runner /opt/actions-runner /mnt/Hawai/actions-runner; do
+            if [ -d "$RUNNER_DIR/_diag" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-diag"
+              cp -a "$RUNNER_DIR/_diag/." "$ARTIFACT_DIR/runner-diag/" 2>/dev/null || true
+            fi
+
+            if [ -d "$RUNNER_DIR/_work/_temp" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-temp"
+              cp -a "$RUNNER_DIR/_work/_temp/." "$ARTIFACT_DIR/runner-temp/" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload Failure Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
+          path: failure-logs/${{ matrix.variant }}
+          if-no-files-found: warn
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          {
+            echo "## Variant \`${{ matrix.variant }}\`"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Status | \`${{ job.status }}\` |"
+            echo "| Dry run | \`${{ env.DRY_RUN_ONLY }}\` |"
+            echo "| KernelSU repo | \`${{ env.KSU_REPO }}\` |"
+            echo "| KernelSU ref | \`${{ env.KSU_BRANCH }}\` |"
+            echo "| Kernel ref | \`${{ needs.setup.outputs.kernel_ref }}\` |"
+            echo "| SuSFS ref | \`${{ needs.setup.outputs.susfs_ref }}\` |"
+            echo "| KSU version | \`r${{ env.KSU_VERSION }}\` |"
+            echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
+            echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
+            echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
+            echo "| Runtime tuner script | \`${{ env.RUNTIME_TUNER }}\` |"
+            echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
+            echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"
+            echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
+            if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then
+              echo "| ZIP artifact | \`${{ env.KERNEL_ZIP }}\` |"
+            fi
+            if [ -n "${{ env.PATCH_MANIFEST }}" ]; then
+              echo "| Patch manifest | \`${{ env.PATCH_MANIFEST }}\` |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  create_release:
+    needs: [setup, build]
+    runs-on: [self-hosted, linux, x64]
+    if: always() && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.setup.outputs.dry_run != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Create GitHub Release
+        run: |
+          cd release-assets
+          find . -type f -exec mv {} . \; 2>/dev/null || true
+
+          # Safety check: Only create release if at least one ZIP was actually built
+          if ! ls *.zip 1> /dev/null 2>&1; then
+            echo "❌ No ZIP artifacts found! All matrix builds must have failed. Skipping release."
+            exit 0
+          fi
+
+          RELEASE_NOTES="**Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          **SuSFS:** ${{ inputs.disable_susfs && '❌ Disabled' || '✅ Enabled' }}
+
+          ### Devices Supported
+          - Pixel 8, 8a, 8 Pro
+
+          Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
+
+          RELEASE_TAG="build-${{ github.run_number }}"
+          RELEASE_TITLE="Android 14 Kernel Build #${{ github.run_number }}"
+
+          # Added ./*.md to upload the changelogs alongside the zips!
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "ℹ️ Release $RELEASE_TAG already exists; updating notes and replacing artifacts."
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}"
+            gh release upload "$RELEASE_TAG" --repo "${{ github.repository }}" --clobber ./*.zip ./*.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}" \
+              ./*.zip ./*.md
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    needs: [setup, create_release, build]
+    runs-on: [self-hosted, linux, x64]
+    if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
+    steps:
+      - name: Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are not configured; skipping notification."
+            exit 0
+          fi
+
+          STATUS="${{ needs.build.result }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="⚠️"
+          [ "$STATUS" == "failure" ] && ICON="❌"
+
+          # Format variables
+          IS_CLEAN="${{ inputs.force_clean_build && 'Yes' || 'No' }}"
+          IS_SUSFS="${{ inputs.disable_susfs && 'Disabled' || 'Enabled' }}"
+          DO_REL="${{ inputs.create_release && 'Yes' || 'No' }}"
+
+          # Use HTML parsing to completely avoid Markdown character breaking (hyphens/underscores)
+          cat << EOF > tg_message.txt
+          $ICON <b>Kernel Build ${STATUS^^}</b>
+          ━━━━━━━━━━━━━━━━━━━━━
+          📱 <b>Target:</b> Pixel 8 / 8a / 8 Pro
+          🛠️ <b>Variant(s):</b> ${{ inputs.ksu_variant }}
+          🛡️ <b>SuSFS:</b> $IS_SUSFS
+          🧹 <b>Clean Build:</b> $IS_CLEAN
+          📦 <b>Release Created:</b> $DO_REL
+          👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
+
+          🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>
+          EOF
+
+          # Safely URL-encode the file using --data-urlencode text@filename
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            --data-urlencode text@tg_message.txt \
+            -d parse_mode="HTML" \
+            -d disable_web_page_preview=true

@@ -841,10 +841,6 @@ jobs:
 
           cd kernel
 
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            ensure_namespace_trace_hook_include
-          fi
-
           PATCH_VARIANT="$KSU_VARIANT"
           if [ "$KSU_VARIANT" = "enhance" ]; then
             PATCH_VARIANT="tiann"

@@ -1,5 +1,9 @@
 name: Build Enhance Kernel (Dedicated) for Pixel 8 Series
 
+permissions:
+  contents: write
+  packages: write
+
 on:
   workflow_dispatch:
     inputs:

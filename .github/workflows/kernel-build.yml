@@ -877,7 +877,10 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
+            apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
+          elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -992,17 +995,15 @@ jobs:
               printf '%s | %s | disabled\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ]; then
-            if git apply --3way "$VARIANT_KSU_PATCH"; then
-              printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
-            else
-              if grep -Eq '^(<<<<<<<|=======|>>>>>>>)' kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c 2>/dev/null; then
-                echo "⚠️ Tiann KernelSU SuSFS patch drift detected, applying known auto-merge."
-                auto_merge_tiann_ksu_susfs_patch
-                printf '%s | %s | applied-with-auto-merge\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
+            if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
+              if ksu_susfs_integrated; then
+                echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
+                printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
               else
-                echo "❌ Custom KernelSU SuSFS patch could not be applied cleanly: $VARIANT_KSU_PATCH"
-                printf '%s | %s | failed\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
+                printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
                 exit 1
               fi
             fi

@@ -1,0 +1,99 @@
+name: Build Enhance Kernel (Dedicated) for Pixel 8 Series
+
+on:
+  workflow_dispatch:
+    inputs:
+      disable_susfs:
+        description: 'Disable SuSFS features'
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        description: 'Enable Telegram notifications'
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: true
+        type: boolean
+      lto_mode:
+        description: 'LTO mode (thin/full/none)'
+        required: false
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      make_jobs:
+        description: 'Override make parallel jobs (auto or integer)'
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        description: 'Generate on-device runtime tuner script'
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        description: 'CPU governor strategy'
+        required: false
+        default: 'schedutil'
+        type: choice
+        options:
+          - schedutil
+      kerneltoast_patch_policy:
+        description: 'Policy for kerneltoast patchset application'
+        required: false
+        default: 'strict'
+        type: choice
+        options:
+          - strict
+          - best_effort
+          - off
+      dry_run_only:
+        description: 'Validate source sync and patch application only'
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        description: 'Override SuSFS ref'
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      next_ref:
+        description: 'Override KernelSU-Next ref'
+        required: false
+        default: 'dev'
+        type: string
+
+jobs:
+  build-enhance:
+    uses: ./.github/workflows/kernel-build.yml
+    with:
+      ksu_variant: enhance
+      disable_susfs: ${{ inputs.disable_susfs }}
+      force_clean_build: ${{ inputs.force_clean_build }}
+      enable_telegram: ${{ inputs.enable_telegram }}
+      create_release: ${{ inputs.create_release }}
+      lto_mode: ${{ inputs.lto_mode }}
+      make_jobs: ${{ inputs.make_jobs }}
+      include_runtime_tuner: ${{ inputs.include_runtime_tuner }}
+      governor_mode: ${{ inputs.governor_mode }}
+      kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}
+      dry_run_only: ${{ inputs.dry_run_only }}
+      kernel_ref: ${{ inputs.kernel_ref }}
+      susfs_ref: ${{ inputs.susfs_ref }}
+      next_ref: ${{ inputs.next_ref }}

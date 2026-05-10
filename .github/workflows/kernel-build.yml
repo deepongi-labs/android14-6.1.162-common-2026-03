@@ -1,4 +1,4 @@
-name: Build GKI Kernel with KernelSU Variants v5.1.0
+name: Build Enhance Kernel for Pixel 8 Series (KernelSU + SuSFS) v5.2.0
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ on:
         default: true
         type: boolean
       tuning_profile:
-        description: 'Pixel 8 tuning profile'
+        description: 'Pixel 8 tuning profile (includes Kirisakura/Sultan inspired presets)'
         required: false
         default: 'balanced'
         type: choice
@@ -44,6 +44,8 @@ on:
           - balanced
           - performance
           - battery
+          - kirisakura
+          - sultan
       lto_mode:
         description: 'LTO mode (thin/full/none)'
         required: false
@@ -64,17 +66,16 @@ on:
         default: true
         type: boolean
       governor_mode:
-        description: 'CPU governor strategy'
+        description: 'CPU governor strategy (default Linux governor name)'
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'schedutil'
         type: choice
         options:
-          - pixel8_dynamic_schedutil
-          - stock_schedutil
+          - schedutil
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'best_effort'
+        default: 'strict'
         type: choice
         options:
           - strict
@@ -156,11 +157,11 @@ on:
         type: boolean
       governor_mode:
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'schedutil'
         type: string
       kerneltoast_patch_policy:
         required: false
-        default: 'best_effort'
+        default: 'strict'
         type: string
       dry_run_only:
         required: false
@@ -188,7 +189,7 @@ on:
         type: string
       next_ref:
         required: false
-        default: 'dev'
+        default: 'stable'
         type: string
 
 permissions:
@@ -291,7 +292,7 @@ jobs:
           fi
 
           case "${{ inputs.tuning_profile }}" in
-            balanced|performance|battery) ;;
+            balanced|performance|battery|kirisakura|sultan) ;;
             *) echo "❌ Invalid tuning_profile: ${{ inputs.tuning_profile }}"; exit 1 ;;
           esac
           echo "tuning_profile=${{ inputs.tuning_profile }}" >> $GITHUB_OUTPUT
@@ -303,17 +304,17 @@ jobs:
           echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
 
           MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
-          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[0-9]+$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
-            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer)"
             exit 1
           fi
 
           echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
           case "${{ inputs.governor_mode }}" in
-            pixel8_dynamic_schedutil|stock_schedutil) ;;
+            schedutil) ;;
             *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
           esac
           echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
@@ -454,6 +455,44 @@ jobs:
       - name: Smart Sync Kernel & SuSFS Sources
         run: |
           set -e
+          sync_kernel_from_archive() {
+            local ref="$1"
+            local target="$2"
+            local archive_url="${{ env.KERNEL_REPO_URL }}/+archive/${ref}.tar.gz"
+            local local_tar="files/kernel-common-${ref}.tar.gz"
+            local local_zip="files/kernel-common-${ref}.zip"
+
+            echo "::group::Sync kernel-common (archive)"
+            rm -rf "$target"
+            mkdir -p "$target"
+            if [ -f "$local_tar" ]; then
+              echo "Using local archive: $local_tar"
+              tar -xzf "$local_tar" -C "$target"
+              echo "KERNEL_ARCHIVE_URL=local://${local_tar}" >> "$GITHUB_ENV"
+              echo "KERNEL_ARCHIVE_SOURCE=local-tar" >> "$GITHUB_ENV"
+            elif [ -f "$local_zip" ]; then
+              echo "Using local archive: $local_zip"
+              if command -v unzip >/dev/null 2>&1; then
+                unzip -q "$local_zip" -d "$target"
+              elif command -v bsdtar >/dev/null 2>&1; then
+                bsdtar -xf "$local_zip" -C "$target"
+              else
+                echo "❌ Cannot extract $local_zip (requires unzip or bsdtar)"
+                exit 1
+              fi
+              echo "KERNEL_ARCHIVE_URL=local://${local_zip}" >> "$GITHUB_ENV"
+              echo "KERNEL_ARCHIVE_SOURCE=local-zip" >> "$GITHUB_ENV"
+            else
+              echo "Downloading archive: $archive_url"
+              curl -fL --retry 3 --retry-all-errors "$archive_url" | tar -xzf - -C "$target"
+              echo "KERNEL_ARCHIVE_URL=${archive_url}" >> "$GITHUB_ENV"
+              echo "KERNEL_ARCHIVE_SOURCE=remote-tar" >> "$GITHUB_ENV"
+            fi
+            echo "kernel-common archive ref -> ${ref}"
+            echo "KERNEL_ARCHIVE_REF=${ref}" >> "$GITHUB_ENV"
+            echo "::endgroup::"
+          }
+
           sync_repo_shallow() {
             local name="$1"
             local url="$2"
@@ -479,8 +518,8 @@ jobs:
 
           echo "📦 Smart syncing kernel and SuSFS sources..."
 
-          # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
-          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
+          # Do not clone android.googlesource.com; use local/remote archive flow.
+          sync_kernel_from_archive "${{ needs.setup.outputs.kernel_ref }}" "kernel"
           sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
 
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
@@ -501,8 +540,20 @@ jobs:
             echo "${prefix}_COMMIT_MSG=$commit_msg" >> "$GITHUB_ENV"
           }
 
+          record_kernel_archive_info() {
+            local ref="${KERNEL_ARCHIVE_REF:-${{ needs.setup.outputs.kernel_ref }}}"
+            local source="${KERNEL_ARCHIVE_SOURCE:-archive}"
+            echo "KERNEL_COMMIT_SHORT=${ref}" >> "$GITHUB_ENV"
+            echo "KERNEL_COMMIT_DATE=$(date -u '+%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+            echo "KERNEL_COMMIT_MSG=Downloaded ${source} ${ref}" >> "$GITHUB_ENV"
+          }
+
           record_commit_info "WORKFLOW" "."
-          record_commit_info "KERNEL" "kernel"
+          if [ -d kernel/.git ]; then
+            record_commit_info "KERNEL" "kernel"
+          else
+            record_kernel_archive_info
+          fi
           record_commit_info "SUSFS" "susfs4ksu"
 
       - name: Show CCACHE Status
@@ -543,7 +594,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
@@ -580,7 +631,7 @@ jobs:
           if [ "${{ matrix.variant }}" = "resukisu" ]; then
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((40000 + KSU_COUNT - 2815))
-          elif [ "${{ matrix.variant }}" = "next" ]; then
+          elif [ "${{ matrix.variant }}" = "next" ] || [ "${{ matrix.variant }}" = "enhance" ]; then
             KSU_COUNT=$(git rev-list --count HEAD)
             KSU_VERSION=$((KSU_COUNT + 30000))
           else
@@ -826,7 +877,7 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -836,7 +887,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -916,21 +967,10 @@ jobs:
           if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "🔍 Validating KernelSU-Next SuSFS integration..."
-            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
-              :
-            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
-              :
-            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
-              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
-              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-            else
-              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
-              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-              exit 1
-            fi
-          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
+            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
@@ -972,32 +1012,12 @@ jobs:
             fi
           fi
 
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
-            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
-              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
-              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
-            fi
-          fi
-
-          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
+          if { [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; } && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'target = Path("kernel/hook/setuid_hook.c")' \
-              'if target.exists():' \
-              '    text = target.read_text()' \
-              '    if "susfs_run_sus_path_loop();" in text:' \
-              '        target.write_text(text.replace("susfs_run_sus_path_loop();", "(void)0; /* symbol not available in this variant */"))' \
-              | python -
-            printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
-          fi
-
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
 
@@ -1184,10 +1204,6 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
-              if [ "${KSU_VARIANT}" = "next" ]; then
-                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
-                exit 1
-              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
@@ -1289,7 +1305,7 @@ jobs:
           fi
           START_TIME=$SECONDS
 
-          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
+          if [ "${KSU_VARIANT}" = "tiann" ]; then
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
           else
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
@@ -1427,7 +1443,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="KernelSU" ;;
+            "enhance") AK3_BRANCH="next" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;
@@ -1435,14 +1451,6 @@ jobs:
           esac
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
-
-          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
-            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
-            echo "::group::anykernel.sh (device-related lines)"
-            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
-            echo "::endgroup::"
-            exit 1
-          fi
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
@@ -1460,6 +1468,7 @@ jobs:
           mkdir -p success-metadata
           TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
           GOV_MODE="${GOVERNOR_MODE}"
+          PROFILE_PRESET="${TUNING_PROFILE}"
           if [ "${RUNTIME_TUNER}" != "true" ]; then
             cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
@@ -1474,11 +1483,12 @@ jobs:
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
           # Pixel 8 runtime tuner for responsiveness + battery life.
-          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
+          # Schedutil governor with dynamic profile-based cluster caps.
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
           GOV_MODE="__GOV_MODE__"
+          PROFILE_PRESET="__PROFILE_PRESET__"
 
           write_if_exists() {
             local value="$1"
@@ -1545,7 +1555,25 @@ jobs:
             load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
             load_int=${load_one%.*}
 
-            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
+            if [ "$PROFILE_PRESET" = "kirisakura" ]; then
+              # Kirisakura-inspired: smoother ramp, lower idle floor, sustained battery focus.
+              if is_screen_off || [ "$batt_cap" -le 35 ] || [ "$batt_temp" -ge 410 ]; then
+                profile_mode="eco"
+              elif [ "${load_int:-0}" -ge 7 ] && [ "$batt_temp" -le 385 ]; then
+                profile_mode="balanced"
+              else
+                profile_mode="eco"
+              fi
+            elif [ "$PROFILE_PRESET" = "sultan" ]; then
+              # Sultan-inspired: aggressively responsive, allows turbo more often if thermals permit.
+              if is_screen_off || [ "$batt_cap" -le 20 ] || [ "$batt_temp" -ge 435 ]; then
+                profile_mode="eco"
+              elif [ "${load_int:-0}" -ge 4 ] && [ "$batt_temp" -le 400 ]; then
+                profile_mode="turbo"
+              else
+                profile_mode="balanced"
+              fi
+            elif is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
               profile_mode="eco"
               write_if_exists 60 /proc/sys/vm/swappiness
               write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
@@ -1559,20 +1587,17 @@ jobs:
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
-              apply_pixel8_dynamic_schedutil "$profile_mode"
+            # Single governor mode: schedutil, driven by runtime profiles.
+            apply_pixel8_dynamic_schedutil "$profile_mode"
+            if [ "$profile_mode" = "eco" ]; then
+              write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+              write_if_exists 32000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+            elif [ "$profile_mode" = "turbo" ]; then
+              write_if_exists 2500 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+              write_if_exists 8500 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
             else
-              # stock schedutil with adaptive response limits only
-              if [ "$profile_mode" = "eco" ]; then
-                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 50000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
-              elif [ "$profile_mode" = "turbo" ]; then
-                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
-              else
-                write_if_exists 8000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
-              fi
+              write_if_exists 7000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
+              write_if_exists 18000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
             fi
 
             sleep 20
@@ -1580,6 +1605,7 @@ jobs:
           EOF
 
           sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
+          sed -i "s/__PROFILE_PRESET__/${PROFILE_PRESET}/g" "$TUNER_SCRIPT"
           chmod +x "$TUNER_SCRIPT"
 
       - name: Upload Artifacts

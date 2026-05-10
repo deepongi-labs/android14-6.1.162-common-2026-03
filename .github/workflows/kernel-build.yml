@@ -948,6 +948,7 @@ jobs:
 
           VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          SUSFS_RUNTIME_ENABLED=true
 
           ksu_susfs_integrated() {
             grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null \
@@ -994,6 +995,7 @@ jobs:
               echo "⚠️ KernelSU-Next SuSFS integration missing; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
+              SUSFS_RUNTIME_ENABLED=false
             fi
           elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
@@ -1020,6 +1022,7 @@ jobs:
                     echo "⚠️ Enhance SuSFS patchset stale; disabling SuSFS for this variant to keep build green."
                     printf '%s | %s | disabled\n' "Enhance SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
                     echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
+                    SUSFS_RUNTIME_ENABLED=false
                   else
                     echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
                     printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
@@ -1039,6 +1042,14 @@ jobs:
                 exit 1
               fi
             fi
+          fi
+
+          if [ "$SUSFS_RUNTIME_ENABLED" != "true" ]; then
+            echo "ℹ️ Skipping remaining SuSFS setup operations for ${KSU_VARIANT} after integration disable."
+            cd ..
+            echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+            echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+            exit 0
           fi
 
           if [ "$KSU_VARIANT" = "enhance" ]; then

@@ -1759,7 +1759,7 @@ jobs:
   create_release:
     needs: [setup, build]
     runs-on: [self-hosted, linux, x64]
-    if: always() && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.setup.outputs.dry_run != 'true'
+    if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.build.result != 'skipped' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1771,6 +1771,11 @@ jobs:
 
       - name: Create GitHub Release
         run: |
+          if [ ! -d release-assets ]; then
+            echo "No release-assets directory found; no artifacts were produced for this run."
+            exit 0
+          fi
+
           cd release-assets
           find . -type f -exec mv {} . \; 2>/dev/null || true
 

@@ -27,6 +27,15 @@ on:
         required: false
         default: true
         type: boolean
+      tuning_profile:
+        description: 'Pixel 8 tuning profile'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - balanced
+          - performance
+          - battery
       lto_mode:
         description: 'LTO mode (thin/full/none)'
         required: false
@@ -49,14 +58,15 @@ on:
       governor_mode:
         description: 'CPU governor strategy'
         required: false
-        default: 'schedutil'
+        default: 'pixel8_dynamic_schedutil'
         type: choice
         options:
-          - schedutil
+          - pixel8_dynamic_schedutil
+          - stock_schedutil
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict
@@ -75,7 +85,22 @@ on:
       susfs_ref:
         description: 'Override SuSFS ref'
         required: false
-        default: 'gki-android14-6.1-dev'
+        default: 'f98e9cc870c6624a63bb4f6f224450bc0d937bfa'
+        type: string
+      tiann_ref:
+        description: 'Override tiann KernelSU ref'
+        required: false
+        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        type: string
+      kowsu_ref:
+        description: 'Override kowsu KernelSU ref'
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        description: 'Override ReSukiSU ref'
+        required: false
+        default: 'main'
         type: string
       next_ref:
         description: 'Override KernelSU-Next ref'
@@ -92,6 +117,7 @@ jobs:
       force_clean_build: ${{ inputs.force_clean_build }}
       enable_telegram: ${{ inputs.enable_telegram }}
       create_release: ${{ inputs.create_release }}
+      tuning_profile: ${{ inputs.tuning_profile }}
       lto_mode: ${{ inputs.lto_mode }}
       make_jobs: ${{ inputs.make_jobs }}
       include_runtime_tuner: ${{ inputs.include_runtime_tuner }}
@@ -100,4 +126,7 @@ jobs:
       dry_run_only: ${{ inputs.dry_run_only }}
       kernel_ref: ${{ inputs.kernel_ref }}
       susfs_ref: ${{ inputs.susfs_ref }}
+      tiann_ref: ${{ inputs.tiann_ref }}
+      kowsu_ref: ${{ inputs.kowsu_ref }}
+      resukisu_ref: ${{ inputs.resukisu_ref }}
       next_ref: ${{ inputs.next_ref }}

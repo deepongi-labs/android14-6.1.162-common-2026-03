@@ -71,7 +71,7 @@ on:
         options:
           - strict
           - best_effort
-          - off
+          - 'off'
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false

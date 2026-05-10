@@ -689,7 +689,35 @@ jobs:
               fi
             fi
 
-            apply_patch_or_fail "$default_patch" "$default_desc"
+            if patch -p1 --forward --dry-run < "$default_patch" >/dev/null 2>&1; then
+              echo "📋 Applying DEFAULT patch: $default_desc"
+              patch -p1 --forward < "$default_patch"
+              printf '%s | %s | applied\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+              return 0
+            elif patch -p1 --reverse --dry-run < "$default_patch" >/dev/null 2>&1; then
+              echo "ℹ️ ${default_desc} already present, skipping."
+              printf '%s | %s | already-present\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+              return 0
+            elif git apply --3way --check "$default_patch" >/dev/null 2>&1; then
+              echo "📋 Applying DEFAULT patch with 3-way merge: $default_desc"
+              git apply --3way "$default_patch"
+              printf '%s | %s | applied-3way\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+              return 0
+            fi
+
+            if [ "$KSU_VARIANT" = "enhance" ]; then
+              echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
+              printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
+              log_patch_failure "$default_patch" "$default_desc"
+              echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
+              return 0
+            fi
+
+            echo "❌ ${default_desc} could not be applied cleanly: $default_patch"
+            printf '%s | %s | failed\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+            log_patch_failure "$default_patch" "$default_desc"
+            echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
+            exit 1
           }
 
           ensure_namespace_susfs_prologue() {

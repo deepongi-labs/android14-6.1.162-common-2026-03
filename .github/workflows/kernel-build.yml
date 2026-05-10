@@ -28,7 +28,7 @@ on:
       enable_telegram:
         description: 'Enable Telegram notifications'
         required: false
-        default: false
+        default: true
         type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
@@ -98,7 +98,7 @@ on:
       tiann_ref:
         description: 'Override tiann KernelSU ref'
         required: false
-        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        default: 'main'
         type: string
       kowsu_ref:
         description: 'Override kowsu KernelSU ref'
@@ -132,7 +132,7 @@ on:
         type: boolean
       enable_telegram:
         required: false
-        default: false
+        default: true
         type: boolean
       create_release:
         required: false
@@ -176,7 +176,7 @@ on:
         type: string
       tiann_ref:
         required: false
-        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        default: 'main'
         type: string
       kowsu_ref:
         required: false
@@ -763,25 +763,6 @@ jobs:
             printf '%s | %s | applied\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
           }
 
-          ensure_namespace_trace_hook_include() {
-            if grep -q '^#include <trace/hooks/blk.h>$' fs/namespace.c 2>/dev/null; then
-              printf '%s | %s | already-present\n' "Namespace trace hook include" "fs/namespace.c" >> "$PATCH_MANIFEST"
-              return 0
-            fi
-
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'marker = "#include \"internal.h\"\n"' \
-              'insert = "#include \"internal.h\"\n#include <trace/hooks/blk.h>\n"' \
-              'if marker not in text: raise SystemExit("namespace.c layout drifted; could not inject trace/hooks include")' \
-              'path.write_text(text.replace(marker, insert, 1))' \
-              | python -
-
-            printf '%s | %s | applied\n' "Namespace trace hook include" "fs/namespace.c" >> "$PATCH_MANIFEST"
-          }
-
           auto_merge_tiann_ksu_susfs_patch() {
             printf '%s\n' \
               'from pathlib import Path' \
@@ -841,17 +822,11 @@ jobs:
 
           cd kernel
 
-          PATCH_VARIANT="$KSU_VARIANT"
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            PATCH_VARIANT="tiann"
-            ensure_namespace_trace_hook_include
-          fi
-
           # Apply core SuSFS patch.
-          VARIANT_SUSFS_PATCH="../.github/patches/${PATCH_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
+          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -907,7 +882,7 @@ jobs:
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             ensure_namespace_susfs_prologue
           fi
           ensure_namespace_susfs_helpers
@@ -917,7 +892,7 @@ jobs:
           # when the integration is already present.
           cd KernelSU
 
-          VARIANT_KSU_PATCH="../../.github/patches/${PATCH_VARIANT}/10_enable_susfs_for_ksu.patch"
+          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
           try_apply_patch() {
@@ -955,7 +930,7 @@ jobs:
               printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
               exit 1
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ]; then
+          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
@@ -997,14 +972,20 @@ jobs:
             fi
           fi
 
-          # Keep enhance aligned with tiann patch surface.
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
+              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
+              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
+            fi
+          fi
 
           if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             printf '%s\n' \
               'from pathlib import Path' \
               'target = Path("kernel/hook/setuid_hook.c")' \

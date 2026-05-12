@@ -1,12 +1,6 @@
 diff --git a/tools/lib/bpf/libbpf.c b/tools/lib/bpf/libbpf.c
 --- a/tools/lib/bpf/libbpf.c
 +++ b/tools/lib/bpf/libbpf.c
-@@ -10753,7 +10753,7 @@
- 
- 			if (s[0] == ':')
- 				s++;
--			next_path = strchr(s, ':');
-+			next_path = (char *)strchr(s, ':');
- 			seg_len = next_path ? next_path - s : strlen(s);
- 			if (!seg_len)
- 				continue;
+@@ -10751,1 +10751,1 @@
+-			char *next_path;
++			const char *next_path;

@@ -902,7 +902,45 @@ jobs:
 
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
-            apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
+            if [ "$KSU_VARIANT" = "enhance" ]; then
+              # Kernel 6.1.162 already has #include <trace/hooks/blk.h> after internal.h,
+              # which breaks hunk #1 of the susfs patch. Inject it manually first.
+              python3 - <<'PY'
+from pathlib import Path
+path = Path("fs/namespace.c")
+text = path.read_text()
+if 'susfs_is_current_ksu_domain' in text:
+    raise SystemExit(0)  # already applied
+old = '#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n'
+new = ('#include <linux/mnt_idmapping.h>\n'
+       '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+       '#include <linux/susfs_def.h>\n'
+       '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+       '\n'
+       '#include "pnode.h"\n'
+       '#include "internal.h"\n'
+       '#include <trace/hooks/blk.h>\n'
+       '\n'
+       '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+       'extern bool susfs_is_current_ksu_domain(void);\n'
+       'extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n'
+       '\n'
+       '#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n'
+       '\n'
+       '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+       '\n')
+if old not in text:
+    raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS hunk #1")
+path.write_text(text.replace(old, new, 1))
+PY
+              printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
+              # Now apply the full patch; hunk #1 will be skipped as already-present
+              patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" || true
+              printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
+              rm -f fs/namespace.c.rej
+            else
+              apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
+            fi
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else

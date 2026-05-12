@@ -58,10 +58,10 @@ on:
       governor_mode:
         description: 'CPU governor strategy'
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'dynasched'
         type: choice
         options:
-          - pixel8_dynamic_schedutil
+          - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'

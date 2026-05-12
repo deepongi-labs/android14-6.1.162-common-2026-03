@@ -884,10 +884,10 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          elif [ "$KSU_VARIANT" = "kowsu" ]; then
+          elif [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -899,7 +899,6 @@ jobs:
 
           if [ "$KSU_VARIANT" = "enhance" ]; then
             ensure_namespace_trace_hook_include
-            ensure_namespace_susfs_prologue
           fi
 
           if [ "$KSU_VARIANT" = "next" ]; then

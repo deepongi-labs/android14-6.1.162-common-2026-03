@@ -1,0 +1,6 @@
+diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
+--- a/kernel/sched/cpufreq_schedutil.c
++++ b/kernel/sched/cpufreq_schedutil.c
+@@ -861,1 +861,1 @@
+-	.name			= "schedutil",
++	.name			= "dynasched",

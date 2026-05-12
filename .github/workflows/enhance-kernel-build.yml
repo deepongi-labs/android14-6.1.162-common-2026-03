@@ -112,6 +112,7 @@ jobs:
   build-enhance:
     uses: ./.github/workflows/kernel-build.yml
     with:
+      use_self_hosted: true
       ksu_variant: enhance
       disable_susfs: ${{ inputs.disable_susfs }}
       force_clean_build: ${{ inputs.force_clean_build }}

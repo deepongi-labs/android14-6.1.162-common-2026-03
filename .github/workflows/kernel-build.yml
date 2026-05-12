@@ -93,7 +93,7 @@ on:
       susfs_ref:
         description: 'Override SuSFS ref'
         required: false
-        default: 'gki-android14-6.1-dev'
+        default: 'f98e9cc870c6624a63bb4f6f224450bc0d937bfa'
         type: string
       tiann_ref:
         description: 'Override tiann KernelSU ref'
@@ -172,7 +172,7 @@ on:
         type: string
       susfs_ref:
         required: false
-        default: 'gki-android14-6.1-dev'
+        default: 'f98e9cc870c6624a63bb4f6f224450bc0d937bfa'
         type: string
       tiann_ref:
         required: false
@@ -887,7 +887,7 @@ jobs:
           if [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          elif [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \

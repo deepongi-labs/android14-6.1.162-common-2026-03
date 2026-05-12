@@ -1,7 +1,7 @@
-diff --git a/drivers/input/input.c b/drivers/input/input.c
+diff --git drivers/input/input.c drivers/input/input.c
 index 78be582b5766..5b548b1cf418 100644
---- a/drivers/input/input.c
-+++ b/drivers/input/input.c
+--- drivers/input/input.c
++++ drivers/input/input.c
 @@ -387,6 +387,12 @@ static void input_event_dispose(struct input_dev *dev, int disposition,
  	}
  }
@@ -26,10 +26,10 @@ index 78be582b5766..5b548b1cf418 100644
  	if (disposition != INPUT_IGNORE_EVENT) {
  		if (type != EV_SYN)
  			add_input_randomness(type, code, value);
-diff --git a/fs/Makefile b/fs/Makefile
+diff --git fs/Makefile fs/Makefile
 index 102e4cd2bf69..a1929dbc8b8c 100644
---- a/fs/Makefile
-+++ b/fs/Makefile
+--- fs/Makefile
++++ fs/Makefile
 @@ -17,6 +17,8 @@ obj-y :=	open.o read_write.o file_table.o super.o \
  		fs_types.o fs_context.o fs_parser.o fsopen.o init.o \
  		kernel_read_file.o remap_range.o
@@ -39,10 +39,10 @@ index 102e4cd2bf69..a1929dbc8b8c 100644
  ifeq ($(CONFIG_BLOCK),y)
  obj-y +=	buffer.o direct-io.o mpage.o
  else
-diff --git a/fs/exec.c b/fs/exec.c
+diff --git fs/exec.c fs/exec.c
 index ae8f80895dc6..d0fc034ee947 100644
---- a/fs/exec.c
-+++ b/fs/exec.c
+--- fs/exec.c
++++ fs/exec.c
 @@ -64,6 +64,9 @@
  #include <linux/io_uring.h>
  #include <linux/syscall_user_dispatch.h>
@@ -91,10 +91,10 @@ index ae8f80895dc6..d0fc034ee947 100644
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
-diff --git a/fs/namei.c b/fs/namei.c
+diff --git fs/namei.c fs/namei.c
 index 8e9c0b567faa..38b2be587dae 100644
---- a/fs/namei.c
-+++ b/fs/namei.c
+--- fs/namei.c
++++ fs/namei.c
 @@ -40,10 +40,18 @@
  #include <linux/bitops.h>
  #include <linux/init_task.h>
@@ -409,10 +409,10 @@ index 8e9c0b567faa..38b2be587dae 100644
  	res = readlink_copy(buffer, buflen, link);
  	do_delayed_call(&done);
  	return res;
-diff --git a/fs/namespace.c b/fs/namespace.c
+diff --git fs/namespace.c fs/namespace.c
 index f22f76d9c22f..a008fdadfe30 100644
---- a/fs/namespace.c
-+++ b/fs/namespace.c
+--- fs/namespace.c
++++ fs/namespace.c
 @@ -32,10 +32,21 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
@@ -716,10 +716,10 @@ index f22f76d9c22f..a008fdadfe30 100644
 +}
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 \ No newline at end of file
-diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
+diff --git fs/notify/fdinfo.c fs/notify/fdinfo.c
 index dd5bc6ffae85..9cf521b124e7 100644
---- a/fs/notify/fdinfo.c
-+++ b/fs/notify/fdinfo.c
+--- fs/notify/fdinfo.c
++++ fs/notify/fdinfo.c
 @@ -12,6 +12,9 @@
  #include <linux/types.h>
  #include <linux/seq_file.h>
@@ -820,10 +820,10 @@ index dd5bc6ffae85..9cf521b124e7 100644
  		seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",
  			   inode_mark->wd, inode->i_ino, inode->i_sb->s_dev,
  			   inotify_mark_user_mask(mark));
-diff --git a/fs/open.c b/fs/open.c
+diff --git fs/open.c fs/open.c
 index 82d10b7a57da..0ec507a012f5 100644
---- a/fs/open.c
-+++ b/fs/open.c
+--- fs/open.c
++++ fs/open.c
 @@ -33,6 +33,9 @@
  #include <linux/dnotify.h>
  #include <linux/compat.h>
@@ -918,10 +918,10 @@ index 82d10b7a57da..0ec507a012f5 100644
  		if (IS_ERR(f)) {
  			put_unused_fd(fd);
  			fd = PTR_ERR(f);
-diff --git a/fs/proc/base.c b/fs/proc/base.c
+diff --git fs/proc/base.c fs/proc/base.c
 index b0ec673a2225..27bc58fc2ede 100644
---- a/fs/proc/base.c
-+++ b/fs/proc/base.c
+--- fs/proc/base.c
++++ fs/proc/base.c
 @@ -100,6 +100,10 @@
  #include <linux/cn_proc.h>
  #include <linux/cpufreq_times.h>
@@ -974,10 +974,10 @@ index b0ec673a2225..27bc58fc2ede 100644
  		if (++pos <= ctx->pos)
  			continue;
  
-diff --git a/fs/proc/bootconfig.c b/fs/proc/bootconfig.c
+diff --git fs/proc/bootconfig.c fs/proc/bootconfig.c
 index 2e244ada1f97..ca76c06d0bbf 100644
---- a/fs/proc/bootconfig.c
-+++ b/fs/proc/bootconfig.c
+--- fs/proc/bootconfig.c
++++ fs/proc/bootconfig.c
 @@ -12,8 +12,21 @@
  
  static char *saved_boot_config;
@@ -1000,10 +1000,10 @@ index 2e244ada1f97..ca76c06d0bbf 100644
  	if (saved_boot_config)
  		seq_puts(m, saved_boot_config);
  	return 0;
-diff --git a/fs/proc/fd.c b/fs/proc/fd.c
+diff --git fs/proc/fd.c fs/proc/fd.c
 index 913bef0d2a36..585fc5607c01 100644
---- a/fs/proc/fd.c
-+++ b/fs/proc/fd.c
+--- fs/proc/fd.c
++++ fs/proc/fd.c
 @@ -13,17 +13,35 @@
  #include <linux/fs.h>
  
@@ -1111,10 +1111,10 @@ index 913bef0d2a36..585fc5607c01 100644
  
  	/* show_fd_locks() never deferences files so a stale value is safe */
  	show_fd_locks(m, file, files);
-diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+diff --git fs/proc/task_mmu.c fs/proc/task_mmu.c
 index d6f37ed840e5..c447f7aff5da 100644
---- a/fs/proc/task_mmu.c
-+++ b/fs/proc/task_mmu.c
+--- fs/proc/task_mmu.c
++++ fs/proc/task_mmu.c
 @@ -21,6 +21,9 @@
  #include <linux/uaccess.h>
  #include <linux/pkeys.h>
@@ -1264,10 +1264,10 @@ index d6f37ed840e5..c447f7aff5da 100644
  		mmap_read_unlock(mm);
  		start_vaddr = end;
  
-diff --git a/fs/proc_namespace.c b/fs/proc_namespace.c
+diff --git fs/proc_namespace.c fs/proc_namespace.c
 index 846f9455ae22..0184e57eb255 100644
---- a/fs/proc_namespace.c
-+++ b/fs/proc_namespace.c
+--- fs/proc_namespace.c
++++ fs/proc_namespace.c
 @@ -12,12 +12,20 @@
  #include <linux/security.h>
  #include <linux/fs_struct.h>
@@ -1337,10 +1337,10 @@ index 846f9455ae22..0184e57eb255 100644
  	/* device */
  	if (sb->s_op->show_devname) {
  		seq_puts(m, "device ");
-diff --git a/fs/read_write.c b/fs/read_write.c
+diff --git fs/read_write.c fs/read_write.c
 index 7a2ff6157eda..72d14c8e9200 100644
---- a/fs/read_write.c
-+++ b/fs/read_write.c
+--- fs/read_write.c
++++ fs/read_write.c
 @@ -618,8 +618,18 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
  	return ret;
  }
@@ -1360,10 +1360,10 @@ index 7a2ff6157eda..72d14c8e9200 100644
  	return ksys_read(fd, buf, count);
  }
  
-diff --git a/fs/readdir.c b/fs/readdir.c
+diff --git fs/readdir.c fs/readdir.c
 index 9c53edb60c03..70c4fbcc46b2 100644
---- a/fs/readdir.c
-+++ b/fs/readdir.c
+--- fs/readdir.c
++++ fs/readdir.c
 @@ -24,6 +24,10 @@
  
  #include <asm/unaligned.h>
@@ -1622,10 +1622,10 @@ index 9c53edb60c03..70c4fbcc46b2 100644
  	error = iterate_dir(f.file, &buf.ctx);
  	if (error >= 0)
  		error = buf.error;
-diff --git a/fs/stat.c b/fs/stat.c
+diff --git fs/stat.c fs/stat.c
 index ef50573c72a2..696b65a2318a 100644
---- a/fs/stat.c
-+++ b/fs/stat.c
+--- fs/stat.c
++++ fs/stat.c
 @@ -19,12 +19,23 @@
  #include <linux/pagemap.h>
  #include <linux/compat.h>
@@ -1757,10 +1757,10 @@ index ef50573c72a2..696b65a2318a 100644
  	stat->result_mask |= STATX_MNT_ID;
  
  	if (path.mnt->mnt_root == path.dentry)
-diff --git a/fs/statfs.c b/fs/statfs.c
+diff --git fs/statfs.c fs/statfs.c
 index 96d1c3edf289..b2c570aa197a 100644
---- a/fs/statfs.c
-+++ b/fs/statfs.c
+--- fs/statfs.c
++++ fs/statfs.c
 @@ -9,6 +9,10 @@
  #include <linux/security.h>
  #include <linux/uaccess.h>
@@ -1823,10 +1823,10 @@ index 96d1c3edf289..b2c570aa197a 100644
  
  	error = statfs_by_dentry(path->dentry, buf);
  	if (!error)
-diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+diff --git kernel/kallsyms.c kernel/kallsyms.c
 index 5e98cd80eed8..cc1729da570b 100644
---- a/kernel/kallsyms.c
-+++ b/kernel/kallsyms.c
+--- kernel/kallsyms.c
++++ kernel/kallsyms.c
 @@ -31,6 +31,9 @@
  #include <linux/kernel.h>
  #include <linux/bsearch.h>
@@ -1874,10 +1874,10 @@ index 5e98cd80eed8..cc1729da570b 100644
  	return 0;
  }
  
-diff --git a/kernel/reboot.c b/kernel/reboot.c
+diff --git kernel/reboot.c kernel/reboot.c
 index 344ceaf5ed13..c2d1a782d5a5 100644
---- a/kernel/reboot.c
-+++ b/kernel/reboot.c
+--- kernel/reboot.c
++++ kernel/reboot.c
 @@ -693,6 +693,9 @@ EXPORT_SYMBOL_GPL(kernel_power_off);
  
  DEFINE_MUTEX(system_transition_mutex);
@@ -1904,23 +1904,10 @@ index 344ceaf5ed13..c2d1a782d5a5 100644
  	/* We only trust the superuser with rebooting the system. */
  	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
  		return -EPERM;
-diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
-index ca4c106924cb..3ce877315c4e 100644
---- a/kernel/sched/cpufreq_schedutil.c
-+++ b/kernel/sched/cpufreq_schedutil.c
-@@ -858,7 +858,7 @@ static void sugov_limits(struct cpufreq_policy *policy)
- }
- 
- struct cpufreq_governor schedutil_gov = {
--	.name			= "schedutil",
-+	.name			= "dynasched",
- 	.owner			= THIS_MODULE,
- 	.flags			= CPUFREQ_GOV_DYNAMIC_SWITCHING,
- 	.init			= sugov_init,
-diff --git a/kernel/sys.c b/kernel/sys.c
+diff --git kernel/sys.c kernel/sys.c
 index ba7926d7b59c..efd4a2772b3c 100644
---- a/kernel/sys.c
-+++ b/kernel/sys.c
+--- kernel/sys.c
++++ kernel/sys.c
 @@ -654,6 +654,9 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
  	return __sys_setuid(uid);
  }
@@ -1964,10 +1951,10 @@ index ba7926d7b59c..efd4a2772b3c 100644
  	up_read(&uts_sem);
  	if (copy_to_user(name, &tmp, sizeof(tmp)))
  		return -EFAULT;
-diff --git a/mm/memory.c b/mm/memory.c
+diff --git mm/memory.c mm/memory.c
 index 78216a14ff5d..7f1f77bd4aac 100644
---- a/mm/memory.c
-+++ b/mm/memory.c
+--- mm/memory.c
++++ mm/memory.c
 @@ -79,6 +79,9 @@
  #include <linux/vmalloc.h>
  #include <linux/sched/sysctl.h>
@@ -1990,10 +1977,10 @@ index 78216a14ff5d..7f1f77bd4aac 100644
  		ret = get_user_pages_remote(mm, addr, 1,
  				gup_flags, &page, &vma, NULL);
  		if (ret <= 0) {
-diff --git a/security/selinux/avc.c b/security/selinux/avc.c
+diff --git security/selinux/avc.c security/selinux/avc.c
 index d93af92498f5..0e31fe21ec72 100644
---- a/security/selinux/avc.c
-+++ b/security/selinux/avc.c
+--- security/selinux/avc.c
++++ security/selinux/avc.c
 @@ -47,6 +47,12 @@
  #undef CREATE_TRACE_POINTS
  #include <trace/hooks/avc.h>
@@ -2033,10 +2020,10 @@ index d93af92498f5..0e31fe21ec72 100644
  	tclass = secclass_map[sad->tclass-1].name;
  	audit_log_format(ab, " tclass=%s", tclass);
  
-diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+diff --git security/selinux/hooks.c security/selinux/hooks.c
 index ad079e552823..7a2c06835744 100644
---- a/security/selinux/hooks.c
-+++ b/security/selinux/hooks.c
+--- security/selinux/hooks.c
++++ security/selinux/hooks.c
 @@ -105,6 +105,10 @@
  #include "avc_ss.h"
  
@@ -2104,10 +2091,10 @@ index ad079e552823..7a2c06835744 100644
  
  	LSM_HOOK_INIT(ismaclabel, selinux_ismaclabel),
  	LSM_HOOK_INIT(secctx_to_secid, selinux_secctx_to_secid),
-diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+diff --git security/selinux/selinuxfs.c security/selinux/selinuxfs.c
 index 755325a94a86..514b893abb0b 100644
---- a/security/selinux/selinuxfs.c
-+++ b/security/selinux/selinuxfs.c
+--- security/selinux/selinuxfs.c
++++ security/selinux/selinuxfs.c
 @@ -43,6 +43,11 @@
  #include "conditional.h"
  #include "ima.h"
@@ -2256,16 +2243,3 @@ index 755325a94a86..514b893abb0b 100644
  static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
  {
  	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;
-diff --git a/tools/lib/bpf/libbpf.c b/tools/lib/bpf/libbpf.c
-index 7bd6aff6e260..33b214a91338 100644
---- a/tools/lib/bpf/libbpf.c
-+++ b/tools/lib/bpf/libbpf.c
-@@ -10748,7 +10748,7 @@ static int resolve_full_path(const char *file, char *result, size_t result_sz)
- 		if (!search_paths[i])
- 			continue;
- 		for (s = search_paths[i]; s != NULL; s = strchr(s, ':')) {
--			char *next_path;
-+			const char *next_path;
- 			int seg_len;
- 
- 			if (s[0] == ':')

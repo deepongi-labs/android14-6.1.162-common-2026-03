@@ -369,7 +369,7 @@ jobs:
         run: |
           set -e
           echo "::group::Runner Sanity"
-          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}"
+          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}" 2>/dev/null || true
           df -h .
           df -h /mnt/ccache 2>/dev/null || true
           echo "CPU cores: $(nproc)"

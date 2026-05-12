@@ -330,7 +330,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ${{ matrix.variant == 'enhance' && '[self-hosted, linux, x64]' || 'ubuntu-latest' }}
     timeout-minutes: 120
     concurrency:
       group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}

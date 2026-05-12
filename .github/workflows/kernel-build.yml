@@ -93,7 +93,7 @@ on:
       susfs_ref:
         description: 'Override SuSFS ref'
         required: false
-        default: 'gki-android14-6.1'
+        default: 'gki-android14-6.1-dev'
         type: string
       tiann_ref:
         description: 'Override tiann KernelSU ref'
@@ -172,7 +172,7 @@ on:
         type: string
       susfs_ref:
         required: false
-        default: 'gki-android14-6.1'
+        default: 'gki-android14-6.1-dev'
         type: string
       tiann_ref:
         required: false

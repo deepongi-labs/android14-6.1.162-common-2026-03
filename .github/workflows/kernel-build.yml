@@ -66,10 +66,10 @@ on:
       governor_mode:
         description: 'CPU governor strategy'
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'dynasched'
         type: choice
         options:
-          - pixel8_dynamic_schedutil
+          - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
@@ -156,7 +156,7 @@ on:
         type: boolean
       governor_mode:
         required: false
-        default: 'pixel8_dynamic_schedutil'
+        default: 'dynasched'
         type: string
       kerneltoast_patch_policy:
         required: false
@@ -312,11 +312,15 @@ jobs:
 
           echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
-          case "${{ inputs.governor_mode }}" in
-            pixel8_dynamic_schedutil|stock_schedutil) ;;
+          GOVERNOR_MODE_INPUT="${{ inputs.governor_mode }}"
+          case "$GOVERNOR_MODE_INPUT" in
+            dynasched|pixel8_dynamic_schedutil)
+              GOVERNOR_MODE_INPUT="dynasched"
+              ;;
+            stock_schedutil) ;;
             *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
           esac
-          echo "governor_mode=${{ inputs.governor_mode }}" >> $GITHUB_OUTPUT
+          echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
 
           case "${{ inputs.kerneltoast_patch_policy }}" in
             strict|best_effort|off) ;;
@@ -1215,6 +1219,13 @@ jobs:
           echo "🔧 Patching libbpf.c type casting..."
           apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
 
+          if [ "${GOVERNOR_MODE}" = "dynasched" ]; then
+            echo "🔧 Renaming schedutil governor to dynasched..."
+            apply_repo_patch_or_fail ".github/patches/global/rename_schedutil_to_dynasched.patch" "dynasched governor rename"
+          else
+            echo "⏭️  dynasched governor rename disabled by governor_mode=${GOVERNOR_MODE}"
+          fi
+
       - name: Verify Patched Tree
         run: |
           set -e
@@ -1564,7 +1575,7 @@ jobs:
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
           # Pixel 8 runtime tuner for responsiveness + battery life.
-          # Custom mode "pixel8_dynamic_schedutil" builds on schedutil with dynamic cluster caps.
+          # Custom mode "dynasched" exports schedutil under a kernel-specific governor name.
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
@@ -1578,8 +1589,29 @@ jobs:
             done
           }
 
-          apply_schedutil_defaults() {
-            write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+          governor_sysfs_dir() {
+            if [ "$GOV_MODE" = "dynasched" ]; then
+              echo dynasched
+            else
+              echo schedutil
+            fi
+          }
+
+          apply_governor_defaults() {
+            if [ "$GOV_MODE" = "dynasched" ]; then
+              write_if_exists dynasched /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+            else
+              write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+            fi
+          }
+
+          write_governor_tuning() {
+            local up="$1"
+            local down="$2"
+            local gov_dir
+            gov_dir="$(governor_sysfs_dir)"
+            write_if_exists "$up" /sys/devices/system/cpu/cpufreq/policy*/"$gov_dir"/up_rate_limit_us
+            write_if_exists "$down" /sys/devices/system/cpu/cpufreq/policy*/"$gov_dir"/down_rate_limit_us
           }
 
           set_policy_limits() {
@@ -1590,7 +1622,7 @@ jobs:
             write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_max_freq"
           }
 
-          apply_pixel8_dynamic_schedutil() {
+          apply_dynasched() {
             local mode="$1"
             case "$mode" in
               eco)
@@ -1598,24 +1630,21 @@ jobs:
                 set_policy_limits policy4 500000 2000000
                 set_policy_limits policy6 500000 2100000
                 set_policy_limits policy7 500000 2200000
-                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 60000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 25000 60000
                 ;;
               turbo)
                 set_policy_limits policy0 600000 2100000
                 set_policy_limits policy4 700000 2600000
                 set_policy_limits policy6 700000 2700000
                 set_policy_limits policy7 900000 2918000
-                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 4000 12000
                 ;;
               *)
                 set_policy_limits policy0 300000 1900000
                 set_policy_limits policy4 500000 2300000
                 set_policy_limits policy6 500000 2400000
                 set_policy_limits policy7 700000 2700000
-                write_if_exists 9000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 25000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 9000 25000
                 ;;
             esac
           }
@@ -1627,7 +1656,7 @@ jobs:
             return 1
           }
 
-          apply_schedutil_defaults
+          apply_governor_defaults
 
           while true; do
             batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
@@ -1649,19 +1678,16 @@ jobs:
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "pixel8_dynamic_schedutil" ]; then
-              apply_pixel8_dynamic_schedutil "$profile_mode"
+            if [ "$GOV_MODE" = "dynasched" ]; then
+              apply_dynasched "$profile_mode"
             else
               # stock schedutil with adaptive response limits only
               if [ "$profile_mode" = "eco" ]; then
-                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 50000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 20000 50000
               elif [ "$profile_mode" = "turbo" ]; then
-                write_if_exists 4000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 12000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 4000 12000
               else
-                write_if_exists 8000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/up_rate_limit_us
-                write_if_exists 20000 /sys/devices/system/cpu/cpufreq/policy*/schedutil/down_rate_limit_us
+                write_governor_tuning 8000 20000
               fi
             fi
 

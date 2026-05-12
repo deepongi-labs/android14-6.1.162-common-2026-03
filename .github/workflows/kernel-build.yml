@@ -1296,8 +1296,8 @@ jobs:
           echo "📝 Writing build metadata..."
           {
             echo "variant=${KSU_VARIANT}"
-            echo "kernel_ref=android14-6.1-2026-03"
-            echo "susfs_ref=gki-android14-6.1-dev"
+            echo "kernel_ref=${{ needs.setup.outputs.kernel_ref }}"
+            echo "susfs_ref=${{ needs.setup.outputs.susfs_ref }}"
             echo "ksu_repo=${KSU_REPO}"
             echo "ksu_ref=${KSU_BRANCH}"
             echo "enable_susfs=${ENABLE_SUSFS}"
@@ -1308,7 +1308,7 @@ jobs:
             echo "runtime_tuner=${RUNTIME_TUNER}"
             echo "governor_mode=${GOVERNOR_MODE}"
             echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
-            echo "patch_repo_sha=4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e"
+            echo "patch_repo_sha=${GITHUB_SHA}"
           } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
 
           echo "✅ Patch verification complete"

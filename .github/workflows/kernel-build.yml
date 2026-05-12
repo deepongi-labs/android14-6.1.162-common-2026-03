@@ -671,6 +671,10 @@ jobs:
             elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
               printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif patch -p1 --forward --fuzz=3 --dry-run < "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch with fuzz=3: $description"
+              patch -p1 --forward --fuzz=3 < "$patch_file"
+              printf '%s | %s | applied-fuzz\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
             elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
               echo "📋 Applying patch with 3-way merge: $description"
               git apply --3way "$patch_file"
@@ -895,10 +899,6 @@ jobs:
           # Apply core SuSFS patch.
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
-
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            ensure_namespace_trace_hook_include
-          fi
 
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"

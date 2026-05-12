@@ -902,7 +902,6 @@ jobs:
 
           if [ "$KSU_VARIANT" = "enhance" ]; then
             ensure_namespace_trace_hook_include
-            ensure_namespace_susfs_prologue
           fi
 
           if [ "$KSU_VARIANT" = "next" ]; then

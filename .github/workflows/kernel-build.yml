@@ -1154,6 +1154,9 @@ jobs:
               patch -p1 --forward < "$patch_file"
             elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
+            elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch with 3-way merge: $description"
+              git apply --3way "$patch_file"
             else
               echo "❌ ${description} could not be applied cleanly: $patch_file"
               exit 1
@@ -1186,6 +1189,10 @@ jobs:
               echo "✅ Applied ${description}"
             elif patch -p1 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
+            elif git apply --3way --check "$destination" >/dev/null 2>&1; then
+              echo "📋 Applying patch with 3-way merge: $description"
+              git apply --3way "$destination"
+              echo "✅ Applied ${description} via 3-way merge"
             else
               if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
                 echo "❌ ${description} failed to apply cleanly in strict mode"

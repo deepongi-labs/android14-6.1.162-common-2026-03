@@ -671,6 +671,10 @@ jobs:
             elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
               printf '%s | %s | already-present\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
+            elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch with 3-way merge: $description"
+              git apply --3way "$patch_file"
+              printf '%s | %s | applied-3way\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
             else
               echo "❌ ${description} could not be applied cleanly: $patch_file"
               printf '%s | %s | failed\n' "$description" "$patch_file" >> "$PATCH_MANIFEST"
@@ -695,6 +699,11 @@ jobs:
               elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
                 echo "ℹ️ ${variant_desc} already present, skipping."
                 printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              elif git apply --3way --check "$variant_patch" >/dev/null 2>&1; then
+                echo "📋 Applying CUSTOM patch with 3-way merge: $variant_desc"
+                git apply --3way "$variant_patch"
+                printf '%s | %s | applied-3way\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
                 return 0
               else
                 echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
@@ -1145,6 +1154,9 @@ jobs:
               patch -p1 --forward < "$patch_file"
             elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
+            elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
+              echo "📋 Applying patch with 3-way merge: $description"
+              git apply --3way "$patch_file"
             else
               echo "❌ ${description} could not be applied cleanly: $patch_file"
               exit 1
@@ -1177,6 +1189,10 @@ jobs:
               echo "✅ Applied ${description}"
             elif patch -p1 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
               echo "ℹ️ ${description} already present, skipping."
+            elif git apply --3way --check "$destination" >/dev/null 2>&1; then
+              echo "📋 Applying patch with 3-way merge: $description"
+              git apply --3way "$destination"
+              echo "✅ Applied ${description} via 3-way merge"
             else
               if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ]; then
                 echo "❌ ${description} failed to apply cleanly in strict mode"

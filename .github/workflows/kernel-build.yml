@@ -916,15 +916,10 @@ jobs:
                 'path.write_text(text.replace(old, new, 1))' \
                 | python3 -
               printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
-              # Now apply the full patch; hunk #1 will be skipped as already-present
-              patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" || true
-              printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
+              # Apply remaining hunks; namespace.c hunk #1 already done so it will be skipped
+              patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" 2>&1 | grep -v "^Reversed\|^[0-9]* out of.*ignored" || true
               rm -f fs/namespace.c.rej
-              printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
-              # Now apply the full patch; hunk #1 will be skipped as already-present
-              patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" || true
               printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
-              rm -f fs/namespace.c.rej
             else
               apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
             fi

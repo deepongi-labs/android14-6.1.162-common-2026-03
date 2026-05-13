@@ -1067,6 +1067,30 @@ jobs:
                   'if old in t: p.write_text(t.replace(old, "", 1))' \
                   | python3 -
                 rm -f kernel/Kbuild.rej kernel/feature/kernel_umount.c.rej
+                # Define symbols missing from the enhance custom patch
+                printf '%s\n' \
+                  'from pathlib import Path' \
+                  'files = {' \
+                  '  "kernel/feature/selinux_hide.c": [' \
+                  '    ("static struct selinux_state fake_state;", "struct selinux_state fake_state;"),' \
+                  '    ("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running"),' \
+                  '  ],' \
+                  '}' \
+                  'for path_str, replacements in files.items():' \
+                  '  p = Path(path_str)' \
+                  '  if not p.exists(): continue' \
+                  '  t = p.read_text()' \
+                  '  for old, new in replacements:' \
+                  '    if old in t: t = t.replace(old, new, 1)' \
+                  '  p.write_text(t)' \
+                  '# Add static key definitions to init.c if missing' \
+                  'p = Path("kernel/core/init.c")' \
+                  't = p.read_text()' \
+                  'keys = "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\nDEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"' \
+                  'if "ksu_is_init_rc_hook_enabled" not in t:' \
+                  '  marker = "#include <linux/susfs.h>\n"' \
+                  '  if marker in t: p.write_text(t.replace(marker, marker + keys, 1))' \
+                  | python3 -
                 printf '%s | %s | applied-fuzz+manual\n' "Enhance KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
               else
                 echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
@@ -1130,7 +1154,7 @@ jobs:
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             printf '%s\n' \
               'from pathlib import Path' \
               'target = Path("kernel/hook/setuid_hook.c")' \

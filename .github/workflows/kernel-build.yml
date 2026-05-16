@@ -75,7 +75,7 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict
@@ -161,7 +161,7 @@ on:
         type: string
       kerneltoast_patch_policy:
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: string
       dry_run_only:
         required: false
@@ -189,7 +189,7 @@ on:
         type: string
       next_ref:
         required: false
-        default: 'stable'
+        default: 'dev'
         type: string
 
 permissions:
@@ -304,10 +304,10 @@ jobs:
           echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
 
           MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
-          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[0-9]+$ ]]; then
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
-            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer)"
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
             exit 1
           fi
 
@@ -594,7 +594,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
@@ -877,7 +877,7 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "kowsu" ]; then
+          if [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
             apply_variant_or_default_patch \
@@ -967,10 +967,21 @@ jobs:
           if grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "ℹ️ KernelSU-Next carries its own SuSFS integration; skipping generic KernelSU patch."
-            printf '%s | %s | skipped-next\n' "KernelSU SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "tiann" ]; then
+          elif [ "$KSU_VARIANT" = "next" ]; then
+            echo "🔍 Validating KernelSU-Next SuSFS integration..."
+            if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
+              :
+            elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
+              :
+            elif grep -q 'config KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+              echo "ℹ️ KernelSU-Next already contains SuSFS integration."
+              printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/Kconfig" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ KernelSU-Next SuSFS integration missing and patch application failed."
+              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              exit 1
+            fi
+          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
@@ -1012,12 +1023,32 @@ jobs:
             fi
           fi
 
-          if { [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; } && [ -f fix_susfs.py ]; then
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
+              echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
+              printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
+            fi
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'target = Path("kernel/hook/setuid_hook.c")' \
+              'if target.exists():' \
+              '    text = target.read_text()' \
+              '    if "susfs_run_sus_path_loop();" in text:' \
+              '        target.write_text(text.replace("susfs_run_sus_path_loop();", "(void)0; /* symbol not available in this variant */"))' \
+              | python -
+            printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
 
@@ -1204,6 +1235,10 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
+              if [ "${KSU_VARIANT}" = "next" ]; then
+                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
+                exit 1
+              fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
@@ -1305,7 +1340,7 @@ jobs:
           fi
           START_TIME=$SECONDS
 
-          if [ "${KSU_VARIANT}" = "tiann" ]; then
+          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
           else
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
@@ -1443,7 +1478,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="next" ;;
+            "enhance") AK3_BRANCH="KernelSU" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;
@@ -1451,6 +1486,14 @@ jobs:
           esac
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+
+          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+            echo "::group::anykernel.sh (device-related lines)"
+            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/

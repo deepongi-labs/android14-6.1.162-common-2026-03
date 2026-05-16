@@ -1,6 +1,24 @@
+Subject: [PATCH] sched/cpufreq: rename schedutil to dynasched
+
+Rename the schedutil governor's exposed name to "dynasched" so the
+on-device runtime tuner shipped with this kernel can detect a Tensor
+G3-tuned build without colliding with stock schedutil on non-rooted
+boots. The actual tuning logic (per-cluster rate-limits, governor
+re-application on screen state changes, etc.) lives in
+success-metadata/pixel8-runtime-tuner-<variant>.sh.
+
+Signed-off-by: deepongi-labs
+---
+ kernel/sched/cpufreq_schedutil.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
 diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
 --- a/kernel/sched/cpufreq_schedutil.c
 +++ b/kernel/sched/cpufreq_schedutil.c
-@@ -861,1 +861,1 @@
+@@ -1,6 +1,6 @@
+ struct cpufreq_governor schedutil_gov = {
 -	.name			= "schedutil",
 +	.name			= "dynasched",
+ 	.owner			= THIS_MODULE,
+ 	.flags			= CPUFREQ_GOV_DYNAMIC_SWITCHING,
+ 	.init			= sugov_init,

@@ -107,6 +107,11 @@ on:
         required: false
         default: 'dev'
         type: string
+      strict_susfs:
+        description: 'Strict mode: fail if SuSFS patches are auto-disabled or drift (overrides best_effort)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build-enhance:
@@ -131,3 +136,4 @@ jobs:
       kowsu_ref: ${{ inputs.kowsu_ref }}
       resukisu_ref: ${{ inputs.resukisu_ref }}
       next_ref: ${{ inputs.next_ref }}
+      strict_susfs: ${{ inputs.strict_susfs }}

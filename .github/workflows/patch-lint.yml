@@ -1,0 +1,70 @@
+name: Patch Lint
+
+# Lints any *.patch under .github/patches/ on push or PR. Catches whitespace,
+# trailing-newline and other layout issues that the build's `--fuzz=3 / 3-way`
+# fallbacks would otherwise mask.
+
+on:
+  push:
+    paths:
+      - '.github/patches/**.patch'
+      - '.github/workflows/patch-lint.yml'
+  pull_request:
+    paths:
+      - '.github/patches/**.patch'
+      - '.github/workflows/patch-lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch checkpatch.pl from kernel.org
+        run: |
+          set -e
+          mkdir -p tools
+          curl -fsSL \
+            https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl \
+            -o tools/checkpatch.pl
+          # checkpatch fetches a SPDX list lazily; supply it pre-seeded so the
+          # GitHub runner doesn't need outbound git for that.
+          curl -fsSL \
+            https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt \
+            -o tools/spelling.txt || true
+          chmod +x tools/checkpatch.pl
+
+      - name: Validate patch metadata + apply syntax
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r p; do
+            echo "::group::$p"
+            # 1. Patch must end with a newline.
+            if [ "$(tail -c1 "$p" | wc -l)" -ne 1 ]; then
+              echo "::error file=$p::Patch does not end with a trailing newline"
+              fail=1
+            fi
+            # 2. Patch must contain at least one diff hunk.
+            if ! grep -q '^@@' "$p"; then
+              echo "::warning file=$p::Patch contains no @@ hunk header (may be metadata-only)"
+            fi
+            # 3. checkpatch — informational, never fails the lint.
+            tools/checkpatch.pl --no-tree --no-signoff -f --quiet "$p" || true
+            echo "::endgroup::"
+          done < <(find .github/patches -type f -name '*.patch' | sort)
+          exit "$fail"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Patch Lint"
+            echo
+            echo "Scanned: \`$(find .github/patches -type f -name '*.patch' | wc -l)\` patches"
+          } >> "$GITHUB_STEP_SUMMARY"

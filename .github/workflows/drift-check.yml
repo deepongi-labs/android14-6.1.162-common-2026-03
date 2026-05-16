@@ -1,0 +1,80 @@
+name: Weekly Drift Check (Patches vs Upstream)
+
+# Runs every Monday 06:00 UTC plus on-demand. Performs a dry-run build of the
+# enhance variant against current upstream KernelSU/SuSFS HEAD to detect when
+# any of our local patches have drifted before a release attempt.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'Kernel ref to test'
+        required: false
+        default: 'android14-6.1-2026-03'
+        type: string
+      susfs_ref:
+        description: 'SuSFS ref to test (use HEAD branch to detect drift)'
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        description: 'tiann KernelSU ref (master = live drift)'
+        required: false
+        default: 'master'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  drift-enhance:
+    name: Drift / enhance
+    uses: ./.github/workflows/kernel-build.yml
+    with:
+      use_self_hosted: false
+      ksu_variant: enhance
+      disable_susfs: false
+      force_clean_build: false
+      enable_telegram: false
+      create_release: false
+      tuning_profile: balanced
+      lto_mode: none
+      make_jobs: auto
+      include_runtime_tuner: false
+      governor_mode: stock_schedutil
+      kerneltoast_patch_policy: best_effort
+      dry_run_only: true
+      kernel_ref: ${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+      susfs_ref: ${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
+      tiann_ref: ${{ inputs.tiann_ref || 'master' }}
+      kowsu_ref: master
+      resukisu_ref: main
+      next_ref: dev
+      strict_susfs: true
+
+  drift-tiann:
+    name: Drift / tiann
+    uses: ./.github/workflows/kernel-build.yml
+    with:
+      use_self_hosted: false
+      ksu_variant: tiann
+      disable_susfs: false
+      force_clean_build: false
+      enable_telegram: false
+      create_release: false
+      tuning_profile: balanced
+      lto_mode: none
+      make_jobs: auto
+      include_runtime_tuner: false
+      governor_mode: stock_schedutil
+      kerneltoast_patch_policy: best_effort
+      dry_run_only: true
+      kernel_ref: ${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+      susfs_ref: ${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
+      tiann_ref: ${{ inputs.tiann_ref || 'master' }}
+      kowsu_ref: master
+      resukisu_ref: main
+      next_ref: dev
+      strict_susfs: true

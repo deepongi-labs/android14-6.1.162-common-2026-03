@@ -1,87 +1,123 @@
 # Pixel 8 Series Kernel Builder
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/deepongi-labs/android14-6.1.157-common-2025-12/kernel-build.yml)](https://github.com/deepongi-labs/android14-6.1.157-common-2025-12/actions) [![Kernel](https://img.shields.io/badge/kernel-6.1.157-blue.svg)](https://github.com/aosp-mirror/kernel_common) [![Android](https://img.shields.io/badge/android-16-green.svg)](https://source.android.com/) [![Device](https://img.shields.io/badge/device-Pixel%208%20Series-orange.svg)](https://store.google.com/product/pixel_8a) [![KernelSU](https://img.shields.io/badge/KernelSU-3%20variants-purple.svg)](https://github.com/tiann/KernelSU) [![SuSFS](https://img.shields.io/badge/SuSFS-10%20features-red.svg)](https://gitlab.com/simonpunk/susfs4ksu) [![Build Time](https://img.shields.io/badge/build%20time-~4--5min-brightgreen.svg)](../../actions) [![CCache](https://img.shields.io/badge/ccache-92%25%2B-yellow.svg)](#)
+[![Kernel](https://img.shields.io/badge/kernel-6.1.162-blue.svg)](https://android.googlesource.com/kernel/common)
+[![Android](https://img.shields.io/badge/android-14%20GKI-green.svg)](https://source.android.com/)
+[![Devices](https://img.shields.io/badge/devices-akita%20%7C%20shiba%20%7C%20husky-orange.svg)](https://store.google.com/category/phones_pixel)
+[![KernelSU](https://img.shields.io/badge/KernelSU-5%20variants-purple.svg)](https://github.com/tiann/KernelSU)
+[![SuSFS](https://img.shields.io/badge/SuSFS-10%20features-red.svg)](https://gitlab.com/simonpunk/susfs4ksu)
 
-> My personal build system for custom Android 16 kernels.
+> Personal build system for custom Android 14 GKI kernels for the Pixel 8 series (Tensor G3).
 
 ---
 
 ## What's Here
 
-Automated GitHub Actions workflow that builds GKI kernels with three KernelSU variants:
-* **tiann** (official)
-* **kowsu** (fork)
-* **mksu** (fork)
+A reusable GitHub Actions workflow that builds GKI kernels with five
+KernelSU variants and ships them as flashable AnyKernel3 zips.
 
-## Quick Run
+### Variants
 
-Takes about **14-15 minutes total** for all three variants.
+| Variant | KernelSU upstream | AnyKernel branch | Notes |
+|---------|-------------------|------------------|-------|
+| `tiann`     | github.com/tiann/KernelSU       | `KernelSU` | Official upstream, pinned to a known-good commit |
+| `enhance`   | tiann (same repo)               | `KernelSU` | Tiann + extra UX patches (LKM-mode spoof) |
+| `kowsu`     | github.com/KOWX712/KernelSU     | `KowSU`    | KOWX712's fork |
+| `resukisu`  | github.com/ReSukiSU/ReSukiSU    | `resukisu` | ReSukiSU |
+| `next`      | github.com/KernelSU-Next/KernelSU-Next | `next` | KernelSU-Next development branch |
+
+### Devices Supported
+
+* Pixel 8 (`shiba`)
+* Pixel 8a (`akita`)
+* Pixel 8 Pro (`husky`)
+
+All three share Tensor G3 (1× Cortex-X3 + 4× Cortex-A715 + 4× Cortex-A510),
+so the same Image works on every device.
+
+## Workflows
+
+| Workflow | Purpose |
+|----------|---------|
+| `kernel-build.yml`         | Reusable. Builds one or all variants. Drives matrix, patch manifest gate, packaging. |
+| `enhance-kernel-build.yml` | Dispatcher — builds **only** the `enhance` variant with full per-build knobs. |
+| `drift-check.yml`          | Weekly Mon 06:00 UTC — dry-runs `enhance` + `tiann` against `tiann/master` to catch upstream drift early. |
+| `manager-build.yml`        | Builds the KernelSU manager APK. |
+
+## Tuning Knobs
+
+Inputs you can set when dispatching the workflow:
+
+* `tuning_profile` — `balanced` (default) / `performance` / `battery`
+* `lto_mode` — `thin` (default) / `full` / `none`
+* `governor_mode` — `dynasched` (default; renames schedutil to a Pixel-8-aware name) / `stock_schedutil`
+* `kerneltoast_patch_policy` — `strict` / `best_effort` (default) / `off`
+* `strict_susfs` — fail the build if any SuSFS patch auto-disables or drifts (default: false)
+* `apply_oneplus12_wifi_patch` — opt-in legacy patch (default: false; Pixel 8 uses a different chipset)
+* `force_clean_build` — runs `mrproper` before defconfig (default: false)
+* `dry_run_only` — sync + patch + verify, skip compile (default: false)
+* `include_runtime_tuner` — generate the on-device dynasched tuner script (default: true)
+
+Source pin overrides:
+
+* `kernel_ref`  default `android14-6.1-2026-03`
+* `susfs_ref`   default `gki-android14-6.1-dev`
+* `tiann_ref`   default pinned commit (bump deliberately)
+* `kowsu_ref`, `resukisu_ref`, `next_ref` — branches
 
 ## What Gets Built
 
-Flashable kernel ZIPs for Pixel 8a (works on 8/8 Pro too):
-* Android 16
-* Kernel 6.1.157
-* KernelSU integrated
-* Optional SuSFS for root hiding
+For each variant the run produces:
 
-## Current Status
+* `AK3-<kver>-<variant>-r<KSU_VERSION>.zip` — flashable in Kernel Flasher / fastboot via AnyKernel3
+* `AK3-…zip.sha256` — release-time integrity check
+* `Image.lz4` — pre-compressed kernel image for boot.img patching
+* `pixel8-runtime-tuner-<variant>.sh` — root service.d script for runtime governor/cluster tuning
+* `source-manifest-<variant>.txt` — kernel.release, KMI generation, build time, refs
+* `patch-manifest-<variant>.txt` — every patch and how it applied (`applied`, `applied-fuzz`, `applied-3way`, `already-present`, `disabled`, `failed`)
+* Build log, `out/.config`, profile fragment, headers_install log
 
-**Version:** v4.1
+The runtime tuner auto-detects the governor (dynasched/schedutil) and cluster
+topology (X3/A715/A510 by `cpuinfo_max_freq`) so the same script works on
+Pixel 8 / 8a / 8 Pro without configuration.
 
-**Optimizations:**
-* Parallel downloads
-* Smart CPU/RAM detection
-* 92%+ cache hit rate
-* Build time tracking
+## SuSFS
 
-**Performance:**
-* ~4-5 min per variant
-* ~14-15 min for all three
+When enabled, all 10 features are activated:
 
-## Setup
+```
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+```
 
-### Self-hosted Runner
+The SuSFS patch pipeline is multi-stage: it tries the variant-specific
+patch, falls back to the upstream susfs4ksu patch, and applies Python-based
+fuzzing/3-way merge for stale hunks. Drift is reported in the patch manifest
+and gated by `strict_susfs`.
 
-**System:**
-* **OS:** EndeavourOS (Arch-based)
-* **Kernel:** 6.17.9-arch1-1
-* **Desktop:** Cinnamon 6.4.13
+## Self-hosted Runner
 
-**Hardware:**
-* **CPU:** AMD Ryzen 7 2700 (8-core/16-thread @ 4.0 GHz)
-* **RAM:** 32 GB DDR4
-* **GPU:** NVIDIA GeForce RTX 2060
-* **Motherboard:** MSI X470 GAMING PLUS MAX
+Reference toolchain layout (override via env if you build elsewhere):
 
-**Storage:**
-* **System:** 238 GB TeamGroup SSD (ext4)
-* **Cache:** Multiple NVMeS/SSDs totaling 4.34 TB
-* **CCache:** Local persistent storage
+* Clang: `/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin`
+* aarch64 GNU 15.2.rel1
+* arm GNU 15.2.rel1
+* ccache: `/mnt/ccache/.ccache` (50G cap, persistent)
+* Source mirrors: `/mnt/Android/source-mirrors`
 
-**Build Environment:**
-* **Clang:** 22 at `/mnt/Android/clang-22`
-* **CCache:** `/mnt/ccache/.ccache` (persistent)
-* **ARM64 Toolchain:** GNU 14.3.rel1 at `/mnt/Hawai/toolchains/`
-* **ARM32 Toolchain:** GNU 14.3.rel1 at `/mnt/Hawai/toolchains/`
-
-### Submodules
-
-* **kernel:** Google GKI (android14-6.1-2025-12)
-* **susfs4ksu:** SuSFS framework
-
-## Features
-
-* Multi-variant builds
-* Comprehensive changelogs
-* Telegram notifications
-* Auto versioning
-* SHA256/MD5 checksums
-* Build time profiling
+The workflow falls back to distro `/usr/lib/llvm-17/bin` when the
+self-hosted layout is not present, so dispatching on `ubuntu-latest` works
+for dry-runs.
 
 ## Notes
 
-* Kernel branch name says "android14" but this is for Android 16
-* Compatible with all Pixel 8 series (same Tensor G3)
-* All tested on my 8a
-* SuSFS with all 10 available features enabled
+* Branch name says "android14" but stock Pixel 8 ships Android 14 / 15 / 16 with this kernel base.
+* All five variants tested on Pixel 8a (akita); shiba/husky verified by topology share.
+* Performance default favours sustained workloads (HZ=300, UCLAMP_TASK, MGLRU). Battery profile uses HZ=250 + CPU_IDLE + MGLRU.

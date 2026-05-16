@@ -223,22 +223,22 @@ class KernelManager(private val context: Context) {
 
   private fun buildInspectionScript(): String = """
     set +e
-    KERNEL_VERSION="$$(cat /proc/version 2>/dev/null)"
-    AVAILABLE="$$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null)"
-    CURRENT="$$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)"
-    SELINUX="$$(getenforce 2>/dev/null || echo unknown)"
-    LOADAVG="$$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
-    MEM_TOTAL_KB="$$(awk '/MemTotal/ { print $$2 }' /proc/meminfo 2>/dev/null)"
-    MEM_AVAILABLE_KB="$$(awk '/MemAvailable/ { print $$2 }' /proc/meminfo 2>/dev/null)"
-    BATT_TEMP="$$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo unknown)"
-    THERMAL_TEMP="$$(for node in /sys/class/thermal/thermal_zone*/temp; do [ -e "$$node" ] && cat "$$node" && break; done)"
-    SWAPPINESS="$$(cat /proc/sys/vm/swappiness 2>/dev/null || echo 80)"
-    DIRTY_EXPIRE="$$(cat /proc/sys/vm/dirty_expire_centisecs 2>/dev/null || echo 300)"
-    DIRTY_WRITEBACK="$$(cat /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || echo 75)"
-    TOP_APP_BOOST="$$(cat /dev/stune/top-app/schedtune.boost 2>/dev/null || echo n/a)"
-    TOP_APP_UCLAMP_MIN="$$(cat /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || echo n/a)"
+    KERNEL_VERSION="${'$'}(cat /proc/version 2>/dev/null)"
+    AVAILABLE="${'$'}(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null)"
+    CURRENT="${'$'}(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)"
+    SELINUX="${'$'}(getenforce 2>/dev/null || echo unknown)"
+    LOADAVG="${'$'}(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
+    MEM_TOTAL_KB="${'$'}(awk '/MemTotal/ { print ${'$'}2 }' /proc/meminfo 2>/dev/null)"
+    MEM_AVAILABLE_KB="${'$'}(awk '/MemAvailable/ { print ${'$'}2 }' /proc/meminfo 2>/dev/null)"
+    BATT_TEMP="${'$'}(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo unknown)"
+    THERMAL_TEMP="${'$'}(for node in /sys/class/thermal/thermal_zone*/temp; do [ -e "${'$'}node" ] && cat "${'$'}node" && break; done)"
+    SWAPPINESS="${'$'}(cat /proc/sys/vm/swappiness 2>/dev/null || echo 80)"
+    DIRTY_EXPIRE="${'$'}(cat /proc/sys/vm/dirty_expire_centisecs 2>/dev/null || echo 300)"
+    DIRTY_WRITEBACK="${'$'}(cat /proc/sys/vm/dirty_writeback_centisecs 2>/dev/null || echo 75)"
+    TOP_APP_BOOST="${'$'}(cat /dev/stune/top-app/schedtune.boost 2>/dev/null || echo n/a)"
+    TOP_APP_UCLAMP_MIN="${'$'}(cat /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || echo n/a)"
     VARIANT="unknown"
-    case "$$KERNEL_VERSION" in
+    case "${'$'}KERNEL_VERSION" in
       *tiann*) VARIANT="tiann" ;;
       *kowsu*) VARIANT="kowsu" ;;
       *resukisu*) VARIANT="resukisu" ;;
@@ -246,39 +246,39 @@ class KernelManager(private val context: Context) {
     esac
     MISSING_NODES=""
     [ -d /sys/devices/system/cpu/cpufreq/policy0/dynasched ] || MISSING_NODES="policy0/dynasched"
-    [ -e /dev/stune/top-app/schedtune.boost ] || MISSING_NODES="$${MISSING_NODES},stune/top-app/schedtune.boost"
-    [ -e /dev/cpuctl/top-app/cpu.uclamp.min ] || MISSING_NODES="$${MISSING_NODES},cpuctl/top-app/cpu.uclamp.min"
+    [ -e /dev/stune/top-app/schedtune.boost ] || MISSING_NODES="${'$'}{MISSING_NODES},stune/top-app/schedtune.boost"
+    [ -e /dev/cpuctl/top-app/cpu.uclamp.min ] || MISSING_NODES="${'$'}{MISSING_NODES},cpuctl/top-app/cpu.uclamp.min"
     if [ -d /sys/devices/system/cpu/cpufreq/policy0/dynasched ]; then
       echo "supported=1"
     else
       echo "supported=0"
     fi
-    echo "kernel=$${KERNEL_VERSION}"
-    echo "variant=$${VARIANT}"
-    echo "available=$${AVAILABLE}"
-    echo "current=$${CURRENT}"
-    echo "selinux=$${SELINUX}"
-    echo "loadavg=$${LOADAVG}"
-    echo "mem_total_kb=$${MEM_TOTAL_KB}"
-    echo "mem_available_kb=$${MEM_AVAILABLE_KB}"
-    echo "battery_temp=$${BATT_TEMP}"
-    echo "thermal_temp=$${THERMAL_TEMP:-unknown}"
-    echo "swappiness=$${SWAPPINESS}"
-    echo "dirty_expire=$${DIRTY_EXPIRE}"
-    echo "dirty_writeback=$${DIRTY_WRITEBACK}"
-    echo "top_app_boost=$${TOP_APP_BOOST}"
-    echo "top_app_uclamp_min=$${TOP_APP_UCLAMP_MIN}"
-    echo "missing_nodes=$${MISSING_NODES:-none}"
+    echo "kernel=${'$'}{KERNEL_VERSION}"
+    echo "variant=${'$'}{VARIANT}"
+    echo "available=${'$'}{AVAILABLE}"
+    echo "current=${'$'}{CURRENT}"
+    echo "selinux=${'$'}{SELINUX}"
+    echo "loadavg=${'$'}{LOADAVG}"
+    echo "mem_total_kb=${'$'}{MEM_TOTAL_KB}"
+    echo "mem_available_kb=${'$'}{MEM_AVAILABLE_KB}"
+    echo "battery_temp=${'$'}{BATT_TEMP}"
+    echo "thermal_temp=${'$'}{THERMAL_TEMP:-unknown}"
+    echo "swappiness=${'$'}{SWAPPINESS}"
+    echo "dirty_expire=${'$'}{DIRTY_EXPIRE}"
+    echo "dirty_writeback=${'$'}{DIRTY_WRITEBACK}"
+    echo "top_app_boost=${'$'}{TOP_APP_BOOST}"
+    echo "top_app_uclamp_min=${'$'}{TOP_APP_UCLAMP_MIN}"
+    echo "missing_nodes=${'$'}{MISSING_NODES:-none}"
     for policy in /sys/devices/system/cpu/cpufreq/policy*; do
-      [ -d "$$policy" ] || continue
-      name="$$(basename "$$policy")"
-      gov="$$(cat "$$policy/scaling_governor" 2>/dev/null || echo unknown)"
-      cur="$$(cat "$$policy/scaling_cur_freq" 2>/dev/null || echo n/a)"
-      minf="$$(cat "$$policy/scaling_min_freq" 2>/dev/null || echo n/a)"
-      maxf="$$(cat "$$policy/scaling_max_freq" 2>/dev/null || echo n/a)"
-      up="$$(cat "$$policy/dynasched/up_rate_limit_us" 2>/dev/null || echo n/a)"
-      down="$$(cat "$$policy/dynasched/down_rate_limit_us" 2>/dev/null || echo n/a)"
-      echo "policy=$${name}|$${gov}|$${cur}|$${minf}|$${maxf}|$${up}|$${down}"
+      [ -d "${'$'}policy" ] || continue
+      name="${'$'}(basename "${'$'}policy")"
+      gov="${'$'}(cat "${'$'}policy/scaling_governor" 2>/dev/null || echo unknown)"
+      cur="${'$'}(cat "${'$'}policy/scaling_cur_freq" 2>/dev/null || echo n/a)"
+      minf="${'$'}(cat "${'$'}policy/scaling_min_freq" 2>/dev/null || echo n/a)"
+      maxf="${'$'}(cat "${'$'}policy/scaling_max_freq" 2>/dev/null || echo n/a)"
+      up="${'$'}(cat "${'$'}policy/dynasched/up_rate_limit_us" 2>/dev/null || echo n/a)"
+      down="${'$'}(cat "${'$'}policy/dynasched/down_rate_limit_us" 2>/dev/null || echo n/a)"
+      echo "policy=${'$'}{name}|${'$'}{gov}|${'$'}{cur}|${'$'}{minf}|${'$'}{maxf}|${'$'}{up}|${'$'}{down}"
     done
   """.trimIndent()
 
@@ -339,38 +339,38 @@ class KernelManager(private val context: Context) {
   private fun buildBaseScript(): String = """
     set -e
     write_if_exists() {
-      value="$$1"
+      value="${'$'}1"
       shift
-      for node in "$$@"; do
-        if [ -e "$$node" ]; then
-          echo "$$value" > "$$node"
+      for node in "${'$'}@"; do
+        if [ -e "${'$'}node" ]; then
+          echo "${'$'}value" > "${'$'}node"
         fi
       done
     }
 
     set_policy_limits() {
-      policy="$$1"
-      minf="$$2"
-      maxf="$$3"
-      write_if_exists "$$minf" "/sys/devices/system/cpu/cpufreq/$$policy/scaling_min_freq"
-      write_if_exists "$$maxf" "/sys/devices/system/cpu/cpufreq/$$policy/scaling_max_freq"
+      policy="${'$'}1"
+      minf="${'$'}2"
+      maxf="${'$'}3"
+      write_if_exists "${'$'}minf" "/sys/devices/system/cpu/cpufreq/${'$'}policy/scaling_min_freq"
+      write_if_exists "${'$'}maxf" "/sys/devices/system/cpu/cpufreq/${'$'}policy/scaling_max_freq"
     }
 
     apply_vm_values() {
-      write_if_exists "$$1" /proc/sys/vm/swappiness
-      write_if_exists "$$2" /proc/sys/vm/dirty_expire_centisecs
-      write_if_exists "$$3" /proc/sys/vm/dirty_writeback_centisecs
+      write_if_exists "${'$'}1" /proc/sys/vm/swappiness
+      write_if_exists "${'$'}2" /proc/sys/vm/dirty_expire_centisecs
+      write_if_exists "${'$'}3" /proc/sys/vm/dirty_writeback_centisecs
     }
 
     apply_latency_values() {
       write_if_exists 1 /dev/stune/top-app/schedtune.prefer_idle
-      write_if_exists "$$1" /dev/stune/top-app/schedtune.boost
-      write_if_exists "$$2" /dev/cpuctl/top-app/cpu.uclamp.min
+      write_if_exists "${'$'}1" /dev/stune/top-app/schedtune.boost
+      write_if_exists "${'$'}2" /dev/cpuctl/top-app/cpu.uclamp.min
       write_if_exists 1 /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive
     }
 
     for governor in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
-      [ -e "$$governor" ] && echo dynasched > "$$governor"
+      [ -e "${'$'}governor" ] && echo dynasched > "${'$'}governor"
     done
   """.trimIndent() + "\n"
 

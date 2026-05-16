@@ -1141,6 +1141,31 @@ jobs:
             exit 0
           fi
 
+          # Ensure selinux_hide symbols are globally visible for all variants.
+          # The 50_add_susfs patch adds extern references in security/selinux/hooks.c
+          # and selinuxfs.c, but the definitions in selinux_hide.c may still be static.
+          echo "🔧 Ensuring selinux_hide symbols have global linkage..."
+          printf '%s\n' \
+            'from pathlib import Path' \
+            'p = Path("kernel/feature/selinux_hide.c")' \
+            'if p.exists():' \
+            '    t = p.read_text()' \
+            '    changed = False' \
+            '    if "static struct selinux_state fake_state;" in t:' \
+            '        t = t.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;", 1)' \
+            '        changed = True' \
+            '    if "static bool ksu_selinux_hide_running" in t:' \
+            '        t = t.replace("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running", 1)' \
+            '        changed = True' \
+            '    if changed:' \
+            '        p.write_text(t)' \
+            '        print("✅ selinux_hide.c: promoted static symbols to global")' \
+            '    else:' \
+            '        print("ℹ️  selinux_hide.c: symbols already global or file layout differs")' \
+            'else:' \
+            '    print("ℹ️  kernel/feature/selinux_hide.c not found, skipping")' \
+            | python3 -
+
           if [ "$KSU_VARIANT" = "enhance" ]; then
             ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
             if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
@@ -1579,15 +1604,13 @@ jobs:
           EOF
           fi
 
-          # Tiann occasionally crashes ld.lld while emitting deep DWARF trees.
-          # Disable debug info on this variant to keep link stage stable.
-          if [ "${KSU_VARIANT}" = "tiann" ]; then
-            cat << 'EOF' >> out/.config
+          # Disable BTF debug info to avoid .btf.vmlinux.bin.o link failures
+          # when pahole is missing or incompatible on the build runner.
+          cat << 'EOF' >> out/.config
           CONFIG_DEBUG_INFO=n
           CONFIG_DEBUG_INFO_BTF=n
           CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n
           EOF
-          fi
 
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \

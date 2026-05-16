@@ -97,6 +97,10 @@ on:
       tiann_ref:
         description: 'Override tiann KernelSU ref'
         required: false
+        # Pinned commit on tiann/KernelSU master that boots cleanly on
+        # Pixel 8 (Tensor G3) with Android 14 6.1.162 GKI + susfs4ksu
+        # gki-android14-6.1-dev. Bump deliberately when validating new
+        # KSU releases. Use 'master' to live-track upstream.
         default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
         type: string
       kowsu_ref:
@@ -114,6 +118,16 @@ on:
         required: false
         default: 'dev'
         type: string
+      strict_susfs:
+        description: 'Fail the build if any SuSFS patch is auto-disabled or stale'
+        required: false
+        default: false
+        type: boolean
+      apply_oneplus12_wifi_patch:
+        description: 'Attempt the legacy OnePlus 12 (sm8650) Wi-Fi patch (off by default; Pixel 8 chipset is different)'
+        required: false
+        default: false
+        type: boolean
 
   workflow_call:
     inputs:
@@ -193,6 +207,14 @@ on:
         required: false
         default: 'dev'
         type: string
+      strict_susfs:
+        required: false
+        default: false
+        type: boolean
+      apply_oneplus12_wifi_patch:
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -200,7 +222,9 @@ permissions:
 
 concurrency:
   group: kernel-build-workflow-${{ github.ref_name }}-${{ inputs.ksu_variant || 'all' }}
-  cancel-in-progress: false
+  # Cancel queued manual dispatches; preserve queued workflow_call jobs
+  # (including matrix children) so reusable invocations don't kill each other.
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 env:
   # Mirror the local self-hosted toolchain layout used for manual builds.
@@ -353,6 +377,8 @@ jobs:
       RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
+      STRICT_SUSFS: ${{ inputs.strict_susfs }}
+      APPLY_ONEPLUS12_WIFI_PATCH: ${{ inputs.apply_oneplus12_wifi_patch }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -878,6 +904,8 @@ jobs:
           DEFINE_STATIC_KEY_TRUE(susfs_set_fake_cmdline_or_bootconfig_key_true);
           DEFINE_STATIC_KEY_TRUE(susfs_avc_log_spoofing_key_true);
           DEFINE_STATIC_KEY_FALSE(susfs_set_sdcard_android_data_decrypted_key_false);
+          /* Enhance / tiann use a different polarity name for the same concept. */
+          DEFINE_STATIC_KEY_TRUE(susfs_is_sdcard_android_data_not_decrypted);
 
           """
 
@@ -1279,11 +1307,25 @@ jobs:
             if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
           apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
 
-          # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
-          echo "📶 Applying Wi-Fi patch..."
-          fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
-            if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
-          apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+          # 2. Apply OnePlus 12 (sm8650) Wi-Fi commit (best-effort, opt-in).
+          # NOTE: Pixel 8 series uses a Synaptics/Broadcom WLAN chipset, not
+          # Qualcomm sm8650. This patch is kept for legacy parity with older
+          # builds where it happened to compile clean; it is skipped by default
+          # and only attempted when apply_oneplus12_wifi_patch=true.
+          if [ "${APPLY_ONEPLUS12_WIFI_PATCH:-false}" = "true" ]; then
+            echo "📶 Applying optional OnePlus 12 Wi-Fi patch..."
+            if fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch && [ -s /tmp/wifi-fix.patch ]; then
+              if patch -p1 --forward --dry-run < /tmp/wifi-fix.patch >/dev/null 2>&1; then
+                apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix (OnePlus 12)"
+              else
+                echo "::warning::OnePlus 12 Wi-Fi patch does not apply cleanly; skipping (Pixel 8 chipset is different anyway)."
+              fi
+            else
+              echo "::warning::Could not fetch OnePlus 12 Wi-Fi patch; skipping."
+            fi
+          else
+            echo "⏭️  OnePlus 12 Wi-Fi patch disabled (apply_oneplus12_wifi_patch=false)"
+          fi
 
           # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
           if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
@@ -1406,6 +1448,71 @@ jobs:
           echo "✅ Patch verification complete"
           echo "::endgroup::"
 
+      - name: Patch Manifest Gate
+        run: |
+          set -e
+          MANIFEST="${PATCH_MANIFEST:-$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt}"
+          STRICT="${STRICT_SUSFS:-${{ inputs.strict_susfs || 'false' }}}"
+          DISABLE_REQUESTED="${{ inputs.disable_susfs }}"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::warning::Patch manifest not found at $MANIFEST; skipping gate"
+            exit 0
+          fi
+
+          echo "::group::Patch Manifest"
+          cat "$MANIFEST"
+          echo "::endgroup::"
+
+          FAILED_COUNT=$(grep -c '| failed$'   "$MANIFEST" || true)
+          DISABLED_COUNT=$(grep -c '| disabled$' "$MANIFEST" || true)
+          STALE_COUNT=$(grep -c '| skipped-stale$\|| stale-fallback$' "$MANIFEST" || true)
+          FUZZ_COUNT=$(grep -c '| applied-fuzz$\|| applied-3way$\|| applied-fuzz+manual$' "$MANIFEST" || true)
+
+          echo "Manifest summary: failed=$FAILED_COUNT disabled=$DISABLED_COUNT stale=$STALE_COUNT fuzz/3way=$FUZZ_COUNT"
+
+          {
+            echo "### Patch manifest gate (\`${KSU_VARIANT}\`)"
+            echo
+            echo "| Status | Count |"
+            echo "|---|---|"
+            echo "| failed              | $FAILED_COUNT |"
+            echo "| disabled (auto-off) | $DISABLED_COUNT |"
+            echo "| stale (skipped)     | $STALE_COUNT |"
+            echo "| applied with fuzz/3way | $FUZZ_COUNT |"
+            echo
+            echo "SuSFS shipped: **\`${ENABLE_SUSFS}\`**"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Hard fail: any explicit `failed` line.
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            echo "::error::Patch manifest contains $FAILED_COUNT 'failed' entries"
+            grep '| failed$' "$MANIFEST" | sed 's/^/::error::/'
+            exit 1
+          fi
+
+          # If SuSFS got silently disabled even though the user did NOT request it,
+          # that's a regression — flag it. Hard fail in strict mode.
+          if [ "$DISABLED_COUNT" -gt 0 ] && [ "$DISABLE_REQUESTED" != "true" ]; then
+            grep '| disabled$' "$MANIFEST" | sed 's/^/::warning::SuSFS auto-disabled: /'
+            if [ "$STRICT" = "true" ]; then
+              echo "::error::strict_susfs=true and SuSFS was auto-disabled by patch fallback. Failing build."
+              exit 1
+            fi
+          fi
+
+          # Stale patches: warning only by default, hard fail in strict mode.
+          if [ "$STALE_COUNT" -gt 0 ]; then
+            grep '| skipped-stale$\|| stale-fallback$' "$MANIFEST" | sed 's/^/::warning::Patch stale: /'
+            if [ "$STRICT" = "true" ]; then
+              echo "::error::strict_susfs=true and $STALE_COUNT patches drifted. Failing build."
+              exit 1
+            fi
+          fi
+
+          echo "✅ Patch manifest gate passed (strict=$STRICT, disable_susfs=$DISABLE_REQUESTED)"
+
       - name: Stop After Patch Validation
         if: env.DRY_RUN_ONLY == 'true'
         run: |
@@ -1419,6 +1526,30 @@ jobs:
             echo "- SuSFS ref: \`${{ needs.setup.outputs.susfs_ref }}\`"
             echo "- Result: Patch and config verification passed; compile intentionally skipped."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compute build cache key
+        id: cache_key
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          set -e
+          KEY_INPUT="${KSU_VARIANT}|${TUNING_PROFILE}|${LTO_MODE}|${ENABLE_SUSFS}|${GOVERNOR_MODE}|${TOOLCHAIN_ID}|${{ needs.setup.outputs.kernel_ref }}|${{ needs.setup.outputs.susfs_ref }}|${KSU_BRANCH}"
+          MANIFEST_HASH=""
+          if [ -n "${PATCH_MANIFEST:-}" ] && [ -f "$PATCH_MANIFEST" ]; then
+            MANIFEST_HASH=$(sha256sum "$PATCH_MANIFEST" | cut -d' ' -f1)
+          fi
+          KEY_HASH=$(printf '%s|%s' "$KEY_INPUT" "$MANIFEST_HASH" | sha256sum | cut -c1-16)
+          echo "key=kernel-out-${KSU_VARIANT}-${KEY_HASH}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Build cache key: kernel-out-${KSU_VARIANT}-${KEY_HASH}"
+
+      - name: Restore kernel/out from cache
+        if: env.DRY_RUN_ONLY != 'true' && env.FORCE_CLEAN != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            kernel/out
+          key: ${{ steps.cache_key.outputs.key }}
+          restore-keys: |
+            kernel-out-${{ matrix.variant }}-
 
       - name: Build Kernel
         if: env.DRY_RUN_ONLY != 'true'
@@ -1478,6 +1609,15 @@ jobs:
             KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
           fi
 
+          # If FORCE_CLEAN was requested, scrub the build tree BEFORE running
+          # gki_defconfig so the appended Pixel 8 / SuSFS / LTO config fragments
+          # below are not wiped by a late `make clean`.
+          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+            echo "🧹 Force-clean requested: running mrproper before defconfig"
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out mrproper || true
+            rm -rf out
+          fi
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
@@ -1505,6 +1645,10 @@ jobs:
           CONFIG_NET_SCH_FQ=y
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
+          # I/O schedulers: kyber for low-latency UFS, bfq as alternate.
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_BFQ_GROUP_IOSCHED=y
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
           CONFIG_TMPFS_XATTR=y
@@ -1523,6 +1667,9 @@ jobs:
           CONFIG_HZ_300=y
           CONFIG_HZ=300
           CONFIG_UCLAMP_TASK=y
+          # MGLRU for better page-revisit hit rates under heavy multi-tasking.
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
             battery)
@@ -1530,12 +1677,18 @@ jobs:
           CONFIG_HZ_250=y
           CONFIG_HZ=250
           CONFIG_CPU_IDLE=y
+          # MGLRU keeps hot pages resident longer with less reclaim CPU,
+          # which is a measurable battery win on Tensor G3.
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
             balanced)
               cat << 'EOF' >> "$PROFILE_FRAGMENT"
           CONFIG_HZ_300=y
           CONFIG_HZ=300
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
           esac
@@ -1579,9 +1732,11 @@ jobs:
           EOF
           fi
 
-          # Tiann occasionally crashes ld.lld while emitting deep DWARF trees.
-          # Disable debug info on this variant to keep link stage stable.
-          if [ "${KSU_VARIANT}" = "tiann" ]; then
+          # Tiann / Enhance occasionally crash ld.lld while emitting deep DWARF
+          # trees. Disable debug info on these variants to keep the link stage
+          # stable. (Enhance is built from the tiann KernelSU base so it inherits
+          # the same susceptibility.)
+          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
             cat << 'EOF' >> out/.config
           CONFIG_DEBUG_INFO=n
           CONFIG_DEBUG_INFO_BTF=n
@@ -1596,9 +1751,9 @@ jobs:
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out olddefconfig
 
-          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
-            make -j$MAKE_JOBS O=out clean
-          fi
+          # NB: FORCE_CLEAN is intentionally handled BEFORE gki_defconfig above
+          # (via mrproper). Running `make clean` here would wipe out/.config and
+          # the Pixel 8 / SuSFS fragments we just appended.
 
           make -j$MAKE_JOBS O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
@@ -1611,6 +1766,105 @@ jobs:
 
           echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
           ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Save kernel/out to cache
+        if: env.DRY_RUN_ONLY != 'true' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            kernel/out
+          key: ${{ steps.cache_key.outputs.key }}
+
+      - name: Headers install smoke check
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          cd kernel
+          mkdir -p out/usr-staging
+          # Best-effort: don't fail the build on header export quirks since
+          # GKI defconfig sometimes ships incomplete UAPI on certain refs.
+          if make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+               CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" \
+               OBJDUMP="$OBJDUMP" READELF="$READELF" STRIP="$STRIP" \
+               HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" \
+               CLANG_TRIPLE="$CLANG_TRIPLE" \
+               CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+               O=out INSTALL_HDR_PATH=out/usr-staging headers_install 2>logs/headers_install-${KSU_VARIANT}.log; then
+            HDR_COUNT=$(find out/usr-staging -type f -name '*.h' | wc -l)
+            echo "::notice::headers_install exported $HDR_COUNT UAPI headers"
+            if [ "$HDR_COUNT" -lt 100 ]; then
+              echo "::warning::Suspiciously few headers exported ($HDR_COUNT). UAPI may be broken."
+            fi
+          else
+            echo "::warning::headers_install failed (non-fatal). See logs/headers_install-${KSU_VARIANT}.log"
+            tail -n 40 logs/headers_install-${KSU_VARIANT}.log || true
+          fi
+        env:
+          CC: "ccache ${{ env.CLANG_BIN }}/clang"
+          LD: "${{ env.CLANG_BIN }}/ld.lld"
+          AR: "${{ env.CLANG_BIN }}/llvm-ar"
+          NM: "${{ env.CLANG_BIN }}/llvm-nm"
+          OBJCOPY: "${{ env.CLANG_BIN }}/llvm-objcopy"
+          OBJDUMP: "${{ env.CLANG_BIN }}/llvm-objdump"
+          READELF: "${{ env.CLANG_BIN }}/llvm-readelf"
+          STRIP: "${{ env.CLANG_BIN }}/llvm-strip"
+          HOSTCC: "ccache ${{ env.CLANG_BIN }}/clang"
+          HOSTCXX: "ccache ${{ env.CLANG_BIN }}/clang++"
+          HOSTLD: "${{ env.CLANG_BIN }}/ld.lld"
+          HOSTAR: "${{ env.CLANG_BIN }}/llvm-ar"
+          CLANG_TRIPLE: "aarch64-linux-gnu-"
+          CROSS_COMPILE: ${{ env.ARM64_TOOLCHAIN }}
+          CROSS_COMPILE_COMPAT: ${{ env.ARM32_TOOLCHAIN }}
+
+      - name: Capture KMI / kernel.release
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          set -e
+          mkdir -p success-metadata
+          MANIFEST="success-metadata/source-manifest-${KSU_VARIANT}.txt"
+          KREL=""
+          KMI_VER=""
+          KMI_GEN=""
+          if [ -f "kernel/out/include/config/kernel.release" ]; then
+            KREL=$(cat kernel/out/include/config/kernel.release)
+          fi
+          if [ -f "kernel/out/.config" ]; then
+            KMI_VER=$(grep -E '^CONFIG_VERSION=' kernel/out/.config | cut -d= -f2- | tr -d '"' || true)
+            KMI_GEN=$(grep -E '^CONFIG_KMI_GENERATION=' kernel/out/.config | cut -d= -f2- | tr -d '"' || true)
+          fi
+          {
+            echo "kernel_release=${KREL}"
+            echo "kmi_version=${KMI_VER}"
+            echo "kmi_generation=${KMI_GEN}"
+            echo "build_time_seconds=${BUILD_TIME%s}"
+          } >> "$MANIFEST"
+          {
+            echo
+            echo "### Build metadata (\`${KSU_VARIANT}\`)"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| kernel.release | \`${KREL:-N/A}\` |"
+            echo "| KMI generation | \`${KMI_GEN:-N/A}\` |"
+            echo "| Build time | \`${BUILD_TIME:-N/A}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compress Image to Image.lz4
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          set -e
+          IMG="kernel/out/arch/arm64/boot/Image"
+          if [ ! -f "$IMG" ]; then
+            echo "::warning::No Image at $IMG; skipping lz4 compression"
+            exit 0
+          fi
+          if ! command -v lz4 >/dev/null 2>&1; then
+            echo "::warning::lz4 not installed; skipping lz4 compression"
+            exit 0
+          fi
+          # Pixel 8 stock boot.img carries an lz4-compressed kernel.
+          # Producing both Image and Image.lz4 lets AnyKernel ship either.
+          lz4 -l -12 --favor-decSpeed -f "$IMG" "${IMG}.lz4"
+          ls -lh "$IMG" "${IMG}.lz4"
 
       - name: Package Kernel (AnyKernel3)
         if: env.DRY_RUN_ONLY != 'true'
@@ -1629,8 +1883,8 @@ jobs:
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
 
-          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
-            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+          if ! grep -Eiq 'akita|shiba|husky' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include any Pixel 8 series codename (akita / shiba / husky). Refusing to package a potentially non-bootable zip."
             echo "::group::anykernel.sh (device-related lines)"
             grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
             echo "::endgroup::"
@@ -1638,40 +1892,47 @@ jobs:
           fi
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
-          [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
+          [ -f kernel/out/arch/arm64/boot/Image.lz4 ] && cp kernel/out/arch/arm64/boot/Image.lz4 AnyKernel3/
+          [ -f kernel/out/arch/arm64/boot/dtb ]      && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
 
           cd AnyKernel3 && rm -rf .git .github
           ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
           zip -r9 "../$ZIP_NAME" .
           cd ..
 
+          # Generate sha256 alongside the zip so we can detect transport corruption.
+          sha256sum "$ZIP_NAME" | tee "${ZIP_NAME}.sha256"
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+          echo "KERNEL_ZIP_SHA256=${ZIP_NAME}.sha256" >> $GITHUB_ENV
 
       - name: Generate Pixel 8 Runtime Tuner Script
         if: env.DRY_RUN_ONLY != 'true'
         run: |
           mkdir -p success-metadata
           TUNER_SCRIPT="success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh"
-          GOV_MODE="${GOVERNOR_MODE}"
           if [ "${RUNTIME_TUNER}" != "true" ]; then
             cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
           # Runtime tuner generation disabled for this run.
-          # Governor mode: __GOV_MODE__
           exit 0
           EOF
-            sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
             chmod +x "$TUNER_SCRIPT"
             exit 0
           fi
           cat << 'EOF' > "$TUNER_SCRIPT"
           #!/system/bin/sh
-          # Pixel 8 runtime tuner for responsiveness + battery life.
-          # Custom mode "dynasched" exports schedutil under a kernel-specific governor name.
+          # Pixel 8 / 8a / 8 Pro runtime tuner for Tensor G3.
+          # Auto-detects schedutil/dynasched governor and CPU policy IDs,
+          # so the same script works regardless of which kernel variant is flashed.
+          #
+          # Tensor G3 topology (1+4+4):
+          #   policy0 -> Cortex-A510 little (cpu0-3)
+          #   policy4 -> Cortex-A715 mid    (cpu4-7)
+          #   policy8 -> Cortex-X3   prime  (cpu8)
+          #
           # Run as root (KernelSU/Magisk service.d) on boot.
 
           set -u
-          GOV_MODE="__GOV_MODE__"
 
           write_if_exists() {
             local value="$1"
@@ -1681,113 +1942,179 @@ jobs:
             done
           }
 
-          governor_sysfs_dir() {
-            if [ "$GOV_MODE" = "dynasched" ]; then
-              echo dynasched
+          # Auto-detect governor name. Prefer dynasched if the kernel exposes it.
+          detect_governor() {
+            local available
+            available=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null || echo "")
+            case " $available " in
+              *" dynasched "*) echo dynasched ;;
+              *" schedutil "*) echo schedutil ;;
+              *) echo schedutil ;;
+            esac
+          }
+
+          GOV_NAME="$(detect_governor)"
+
+          # Discover policies that actually exist on this device.
+          discover_policies() {
+            local p
+            for p in /sys/devices/system/cpu/cpufreq/policy*; do
+              [ -d "$p" ] && basename "$p"
+            done
+          }
+
+          POLICIES="$(discover_policies)"
+
+          # Map policy -> cluster (little/mid/prime) by inspecting cpuinfo_max_freq.
+          # On Tensor G3: little ~1.95 GHz, mid ~2.45 GHz, prime ~3.0 GHz.
+          policy_cluster() {
+            local policy="$1"
+            local maxf
+            maxf=$(cat "/sys/devices/system/cpu/cpufreq/${policy}/cpuinfo_max_freq" 2>/dev/null || echo 0)
+            if [ "$maxf" -ge 2700000 ]; then
+              echo prime
+            elif [ "$maxf" -ge 2200000 ]; then
+              echo mid
             else
-              echo schedutil
+              echo little
             fi
           }
 
-          apply_governor_defaults() {
-            if [ "$GOV_MODE" = "dynasched" ]; then
-              write_if_exists dynasched /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
-            else
-              write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
-            fi
+          apply_governor_for_all_policies() {
+            local p
+            for p in $POLICIES; do
+              write_if_exists "$GOV_NAME" "/sys/devices/system/cpu/cpufreq/${p}/scaling_governor"
+            done
           }
 
           write_governor_tuning() {
             local up="$1"
             local down="$2"
-            local gov_dir
-            gov_dir="$(governor_sysfs_dir)"
-            write_if_exists "$up" /sys/devices/system/cpu/cpufreq/policy*/"$gov_dir"/up_rate_limit_us
-            write_if_exists "$down" /sys/devices/system/cpu/cpufreq/policy*/"$gov_dir"/down_rate_limit_us
+            local p
+            for p in $POLICIES; do
+              write_if_exists "$up"   "/sys/devices/system/cpu/cpufreq/${p}/${GOV_NAME}/up_rate_limit_us"
+              write_if_exists "$down" "/sys/devices/system/cpu/cpufreq/${p}/${GOV_NAME}/down_rate_limit_us"
+            done
           }
 
-          set_policy_limits() {
-            local policy="$1"
-            local minf="$2"
-            local maxf="$3"
-            write_if_exists "$minf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_min_freq"
-            write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${policy}/scaling_max_freq"
-          }
-
-          apply_dynasched() {
+          # Per-cluster rate-limits give better Tensor G3 behaviour than uniform values.
+          # X3 prefers fast scale-up; A510 wants slower oscillation.
+          write_governor_tuning_per_cluster() {
             local mode="$1"
-            case "$mode" in
-              eco)
-                set_policy_limits policy0 300000 1700000
-                set_policy_limits policy4 500000 2000000
-                set_policy_limits policy6 500000 2100000
-                set_policy_limits policy7 500000 2200000
-                write_governor_tuning 25000 60000
-                ;;
-              turbo)
-                set_policy_limits policy0 600000 2100000
-                set_policy_limits policy4 700000 2600000
-                set_policy_limits policy6 700000 2700000
-                set_policy_limits policy7 900000 2918000
-                write_governor_tuning 4000 12000
-                ;;
-              *)
-                set_policy_limits policy0 300000 1900000
-                set_policy_limits policy4 500000 2300000
-                set_policy_limits policy6 500000 2400000
-                set_policy_limits policy7 700000 2700000
-                write_governor_tuning 9000 25000
-                ;;
-            esac
+            local p cluster up down
+            for p in $POLICIES; do
+              cluster="$(policy_cluster "$p")"
+              case "${mode}_${cluster}" in
+                eco_little)    up=20000 down=50000 ;;
+                eco_mid)       up=15000 down=40000 ;;
+                eco_prime)     up=12000 down=30000 ;;
+                balanced_little) up=12000 down=30000 ;;
+                balanced_mid)    up=8000  down=20000 ;;
+                balanced_prime)  up=5000  down=14000 ;;
+                turbo_little)  up=8000  down=20000 ;;
+                turbo_mid)     up=4000  down=12000 ;;
+                turbo_prime)   up=2000  down=8000  ;;
+                *) up=8000 down=20000 ;;
+              esac
+              write_if_exists "$up"   "/sys/devices/system/cpu/cpufreq/${p}/${GOV_NAME}/up_rate_limit_us"
+              write_if_exists "$down" "/sys/devices/system/cpu/cpufreq/${p}/${GOV_NAME}/down_rate_limit_us"
+            done
           }
 
+          set_cluster_limits() {
+            local mode="$1"
+            local p cluster minf maxf
+            for p in $POLICIES; do
+              cluster="$(policy_cluster "$p")"
+              case "${mode}_${cluster}" in
+                eco_little)    minf=300000  maxf=1700000 ;;
+                eco_mid)       minf=400000  maxf=1900000 ;;
+                eco_prime)     minf=500000  maxf=2000000 ;;
+                balanced_little) minf=300000 maxf=1900000 ;;
+                balanced_mid)    minf=500000 maxf=2300000 ;;
+                balanced_prime)  minf=700000 maxf=2700000 ;;
+                turbo_little)  minf=600000  maxf=1950000 ;;
+                turbo_mid)     minf=700000  maxf=2450000 ;;
+                turbo_prime)   minf=900000  maxf=2950000 ;;
+                *) continue ;;
+              esac
+              write_if_exists "$minf" "/sys/devices/system/cpu/cpufreq/${p}/scaling_min_freq"
+              write_if_exists "$maxf" "/sys/devices/system/cpu/cpufreq/${p}/scaling_max_freq"
+            done
+          }
+
+          # Pixel 8a panel sysfs path varies between firmwares; iterate over all backlights.
           is_screen_off() {
-            local brightness
-            brightness=$(cat /sys/class/backlight/panel0-backlight/brightness 2>/dev/null || echo 1)
-            [ "$brightness" -eq 0 ] && return 0
+            local b brightness
+            for b in /sys/class/backlight/*/brightness; do
+              [ -e "$b" ] || continue
+              brightness=$(cat "$b" 2>/dev/null || echo 1)
+              [ "${brightness:-1}" -eq 0 ] && return 0
+            done
             return 1
           }
 
-          apply_governor_defaults
+          # Apply Pixel 8 thermal-zone tweaks once on boot (best-effort).
+          # step_wise on BIG_* gives less aggressive throttling under sustained load.
+          apply_thermal_profile() {
+            local zone t_type
+            for zone in /sys/class/thermal/thermal_zone*; do
+              [ -e "$zone/type" ] || continue
+              t_type=$(cat "$zone/type" 2>/dev/null || echo "")
+              case "$t_type" in
+                BIG_*|big_*|TPU|tpu|PRIME_*|prime_*)
+                  write_if_exists step_wise "$zone/policy"
+                  ;;
+              esac
+            done
+          }
+
+          # Fixed-point load math (load * 100). 0.95 -> 95, 5.00 -> 500.
+          read_load_centi() {
+            awk '{ printf "%d", $1 * 100 }' /proc/loadavg 2>/dev/null || echo 0
+          }
+
+          # Apply governor + thermal once on entry. The PowerHAL may rewrite
+          # scaling_governor on screen state changes, so we re-apply each loop.
+          apply_governor_for_all_policies
+          apply_thermal_profile
 
           while true; do
             batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
             batt_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
-            load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
-            load_int=${load_one%.*}
+            load_centi=$(read_load_centi)
 
-            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
+            if is_screen_off || [ "${batt_cap:-50}" -le 30 ] || [ "${batt_temp:-320}" -ge 420 ]; then
               profile_mode="eco"
-              write_if_exists 60 /proc/sys/vm/swappiness
+              write_if_exists 60  /proc/sys/vm/swappiness
               write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
-            elif [ "${load_int:-0}" -ge 5 ] && [ "$batt_temp" -le 390 ]; then
+            elif [ "${load_centi:-0}" -ge 250 ] && [ "${batt_temp:-320}" -le 390 ]; then
+              # >= 2.50 load average on a 9-core SoC = sustained work.
               profile_mode="turbo"
               write_if_exists 110 /proc/sys/vm/swappiness
               write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
             else
               profile_mode="balanced"
-              write_if_exists 90 /proc/sys/vm/swappiness
+              write_if_exists 90  /proc/sys/vm/swappiness
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
 
-            if [ "$GOV_MODE" = "dynasched" ]; then
-              apply_dynasched "$profile_mode"
-            else
-              # stock schedutil with adaptive response limits only
-              if [ "$profile_mode" = "eco" ]; then
-                write_governor_tuning 20000 50000
-              elif [ "$profile_mode" = "turbo" ]; then
-                write_governor_tuning 4000 12000
-              else
-                write_governor_tuning 8000 20000
-              fi
+            # Re-assert governor each iteration in case PowerHAL stomped it.
+            apply_governor_for_all_policies
+            set_cluster_limits "$profile_mode"
+            write_governor_tuning_per_cluster "$profile_mode"
+
+            # Adaptive UFS / I/O scheduler: bfq under load, mq-deadline idle.
+            if [ "$profile_mode" = "turbo" ]; then
+              for q in /sys/block/sd*/queue/scheduler /sys/block/mmcblk*/queue/scheduler; do
+                [ -e "$q" ] && grep -q kyber "$q" && echo kyber > "$q" 2>/dev/null || true
+              done
             fi
 
             sleep 20
           done
           EOF
 
-          sed -i "s/__GOV_MODE__/${GOV_MODE}/g" "$TUNER_SCRIPT"
           chmod +x "$TUNER_SCRIPT"
 
       - name: Upload Artifacts
@@ -1797,10 +2124,13 @@ jobs:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
             ${{ env.KERNEL_ZIP }}
+            ${{ env.KERNEL_ZIP_SHA256 }}
             ${{ env.CHANGELOG_FILE }}
             logs/build-${{ matrix.variant }}.log
+            logs/headers_install-${{ matrix.variant }}.log
             kernel/out/.config
             kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
+            kernel/out/arch/arm64/boot/Image.lz4
             success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh
             ${{ env.PATCH_MANIFEST }}
             success-metadata/source-manifest-${{ matrix.variant }}.txt
@@ -1914,6 +2244,12 @@ jobs:
           RELEASE_TAG="build-${{ github.run_number }}"
           RELEASE_TITLE="Android 14 Kernel Build #${{ github.run_number }}"
 
+          # Build the release-asset list. sha256 may not be present for older
+          # artifact bundles, so glob defensively.
+          shopt -s nullglob
+          RELEASE_FILES=( ./*.zip ./*.md ./*.sha256 )
+          shopt -u nullglob
+
           # Added ./*.md to upload the changelogs alongside the zips!
           if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "ℹ️ Release $RELEASE_TAG already exists; updating notes and replacing artifacts."
@@ -1921,13 +2257,13 @@ jobs:
               --title "$RELEASE_TITLE" \
               --notes "$RELEASE_NOTES" \
               --repo "${{ github.repository }}"
-            gh release upload "$RELEASE_TAG" --repo "${{ github.repository }}" --clobber ./*.zip ./*.md
+            gh release upload "$RELEASE_TAG" --repo "${{ github.repository }}" --clobber "${RELEASE_FILES[@]}"
           else
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TITLE" \
               --notes "$RELEASE_NOTES" \
               --repo "${{ github.repository }}" \
-              ./*.zip ./*.md
+              "${RELEASE_FILES[@]}"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

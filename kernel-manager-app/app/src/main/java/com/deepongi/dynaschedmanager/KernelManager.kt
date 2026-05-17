@@ -224,6 +224,7 @@ class KernelManager(private val context: Context) {
 
     val profile = detectProfile(policies)
     val managedKernel = dynaschedSupported && "dynasched" in available
+    val dynaschedDefault = lines.value("dynasched_default") == "1"
 
     // GPU state
     val gpuState = GpuState(
@@ -287,8 +288,10 @@ class KernelManager(private val context: Context) {
       ioState = ioState,
       displayState = displayState,
       overclockState = overclockState,
-      statusMessage = if (managedKernel) {
-        "Managed kernel detected. Dynasched controls are live."
+      statusMessage = if (managedKernel && dynaschedDefault) {
+        "Managed kernel active. Dynasched is the default governor."
+      } else if (managedKernel) {
+        "Managed kernel detected. Dynasched available but not active as default."
       } else if (dynaschedSupported) {
         "Dynasched nodes exist, but this build did not fully match the expected kernel signature."
       } else {
@@ -349,6 +352,11 @@ class KernelManager(private val context: Context) {
     echo "variant=${'$'}{VARIANT}"
     echo "available=${'$'}{AVAILABLE}"
     echo "current=${'$'}{CURRENT}"
+    DYNASCHED_DEFAULT="0"
+    if [ "${'$'}{CURRENT}" = "dynasched" ]; then
+      DYNASCHED_DEFAULT="1"
+    fi
+    echo "dynasched_default=${'$'}{DYNASCHED_DEFAULT}"
     echo "selinux=${'$'}{SELINUX}"
     echo "loadavg=${'$'}{LOADAVG}"
     echo "mem_total_kb=${'$'}{MEM_TOTAL_KB}"
@@ -639,6 +647,7 @@ class KernelManager(private val context: Context) {
     appendLine("Kernel: $kernelVersion")
     appendLine("Variant: $variant")
     appendLine("Governor: $currentGovernor")
+    appendLine("Dynasched default: ${if (currentGovernor == "dynasched") "Yes" else "No"}")
     appendLine("Available: ${availableGovernors.joinToString()}")
     appendLine("SELinux: $selinux")
     appendLine("Detected profile: ${profile?.title ?: "Unknown"}")

@@ -1148,22 +1148,22 @@ jobs:
           echo "🔧 Ensuring selinux_hide symbols have global linkage..."
           if [ -f "kernel/feature/selinux_hide.c" ]; then
             python3 - <<'PYEOF'
-from pathlib import Path
-p = Path("kernel/feature/selinux_hide.c")
-t = p.read_text()
-changed = False
-if "static struct selinux_state fake_state;" in t:
-    t = t.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;", 1)
-    changed = True
-if "static bool ksu_selinux_hide_running" in t:
-    t = t.replace("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running", 1)
-    changed = True
-if changed:
-    p.write_text(t)
-    print("✅ selinux_hide.c: promoted static symbols to global")
-else:
-    print("ℹ️  selinux_hide.c: symbols already global or file layout differs")
-PYEOF
+          from pathlib import Path
+          p = Path("kernel/feature/selinux_hide.c")
+          t = p.read_text()
+          changed = False
+          if "static struct selinux_state fake_state;" in t:
+              t = t.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;", 1)
+              changed = True
+          if "static bool ksu_selinux_hide_running" in t:
+              t = t.replace("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running", 1)
+              changed = True
+          if changed:
+              p.write_text(t)
+              print("✅ selinux_hide.c: promoted static symbols to global")
+          else:
+              print("ℹ️  selinux_hide.c: symbols already global or file layout differs")
+          PYEOF
           else
             echo "ℹ️  kernel/feature/selinux_hide.c not found, skipping"
           fi

@@ -79,6 +79,11 @@ on:
           - strict
           - best_effort
           - 'off'
+      strict_susfs:
+        description: 'Fail build if any SuSFS patch auto-disables or drifts'
+        required: false
+        default: false
+        type: boolean
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false
@@ -165,6 +170,10 @@ on:
         required: false
         default: 'best_effort'
         type: string
+      strict_susfs:
+        required: false
+        default: false
+        type: boolean
       dry_run_only:
         required: false
         default: false

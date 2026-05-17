@@ -166,6 +166,7 @@ jobs:
       include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
       governor_mode: ${{ steps.config.outputs.governor_mode }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
+      strict_susfs: ${{ steps.config.outputs.strict_susfs }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -240,6 +241,7 @@ jobs:
           INCLUDE_RUNTIME_TUNER=""
           GOVERNOR_MODE=""
           KERNELTOAST_PATCH_POLICY=""
+          STRICT_SUSFS=""
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
           __BUILD_OPTIONS_EOF__
@@ -262,6 +264,7 @@ jobs:
               include_runtime_tuner) INCLUDE_RUNTIME_TUNER="$value" ;;
               governor_mode) GOVERNOR_MODE="$value" ;;
               kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
+              strict_susfs) STRICT_SUSFS="$value" ;;
               *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
             esac
           done <<< "$BUILD_OPTIONS_INPUT"
@@ -331,6 +334,8 @@ jobs:
           esac
           echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
 
+          echo "strict_susfs=${STRICT_SUSFS:-false}" >> $GITHUB_OUTPUT
+
   build:
     needs: setup
     runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
@@ -353,6 +358,7 @@ jobs:
       RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
+      STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -453,7 +459,7 @@ jobs:
       - name: Static analysis (shellcheck)
         run: |
           if command -v shellcheck >/dev/null; then
-            shellcheck **/*.sh || true
+            find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck || true
           else
             echo "shellcheck not installed; skipping"
           fi
@@ -499,6 +505,7 @@ jobs:
 
       - name: Store Commit Info (Workflow, Kernel, SuSFS)
         run: |
+          set -e
           record_commit_info() {
             local prefix="$1"
             local repo_path="$2"
@@ -609,6 +616,7 @@ jobs:
 
       - name: Generate Comprehensive Changelog
         run: |
+          set -e
           mkdir -p changelogs
           CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
 
@@ -736,6 +744,10 @@ jobs:
               echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
               log_patch_failure "$default_patch" "$default_desc"
+              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                exit 1
+              fi
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               return 0
             fi
@@ -1037,6 +1049,10 @@ jobs:
             else
               echo "⚠️ KernelSU-Next SuSFS integration missing; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                exit 1
+              fi
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
@@ -1110,6 +1126,10 @@ jobs:
                   if [ "$KSU_VARIANT" = "enhance" ]; then
                     echo "⚠️ Enhance SuSFS patchset stale; disabling SuSFS for this variant to keep build green."
                     printf '%s | %s | disabled\n' "Enhance SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                    if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                      echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                      exit 1
+                    fi
                     echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
                     SUSFS_RUNTIME_ENABLED=false
                   else
@@ -1561,6 +1581,8 @@ jobs:
           CONFIG_HZ_300=y
           CONFIG_HZ=300
           CONFIG_UCLAMP_TASK=y
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
             battery)
@@ -1574,6 +1596,8 @@ jobs:
               cat << 'EOF' >> "$PROFILE_FRAGMENT"
           CONFIG_HZ_300=y
           CONFIG_HZ=300
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
           esac
@@ -1632,6 +1656,33 @@ jobs:
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
             O=out olddefconfig
 
+          # Validate critical configs survived olddefconfig
+          echo "::group::Config Validation"
+          CONFIG_ERRORS=0
+          if ! grep -q '^CONFIG_KSU=y' out/.config; then
+            echo "::error::CONFIG_KSU=y not set after olddefconfig!"
+            CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+          fi
+          if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
+            if ! grep -q '^CONFIG_KSU_SUSFS=y' out/.config; then
+              echo "::error::CONFIG_KSU_SUSFS=y not set after olddefconfig!"
+              CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+            fi
+          fi
+          if [ "$CONFIG_ERRORS" -gt 0 ]; then
+            echo "::endgroup::"
+            echo "::error::$CONFIG_ERRORS critical config(s) missing. Aborting build to avoid a non-functional kernel."
+            echo "::group::Current .config (KSU/SuSFS lines)"
+            grep -E 'CONFIG_KSU' out/.config || echo "(none found)"
+            echo "::endgroup::"
+            exit 1
+          fi
+          if ! grep -q '^CONFIG_LRU_GEN=y' out/.config; then
+            echo "::warning::CONFIG_LRU_GEN=y (MGLRU) was requested but not set after olddefconfig. Kernel tree may lack MGLRU support."
+          fi
+          echo "Config validation passed"
+          echo "::endgroup::"
+
           if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
             make -j$MAKE_JOBS O=out clean
           fi
@@ -1681,6 +1732,17 @@ jobs:
           zip -r9 "../$ZIP_NAME" .
           cd ..
 
+          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+
+          # Generate lz4-compressed kernel image for direct boot.img patching
+          if command -v lz4 >/dev/null 2>&1; then
+            lz4 -9 -f kernel/out/arch/arm64/boot/Image "Image-${KERNEL_VERSION}-${{ matrix.variant }}.lz4"
+            echo "IMAGE_LZ4=Image-${KERNEL_VERSION}-${{ matrix.variant }}.lz4" >> $GITHUB_ENV
+          else
+            echo "::warning::lz4 not available; skipping Image compression"
+            echo "IMAGE_LZ4=" >> $GITHUB_ENV
+          fi
+
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Generate Pixel 8 Runtime Tuner Script
@@ -1708,6 +1770,28 @@ jobs:
 
           set -u
           GOV_MODE="__GOV_MODE__"
+
+          LOG_TAG="dynasched-tuner"
+          LOG_FILE="/data/local/tmp/dynasched.log"
+
+          # Rotate log if larger than 512KB
+          if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 524288 ]; then
+            mv "$LOG_FILE" "${LOG_FILE}.old" 2>/dev/null || true
+          fi
+
+          log() {
+            local ts
+            ts="$(date '+%Y-%m-%d %H:%M:%S')"
+            echo "[$ts] $*" >> "$LOG_FILE" 2>/dev/null
+          }
+
+          cleanup() {
+            log "Received SIGTERM, resetting governor to schedutil"
+            write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+            exit 0
+          }
+
+          trap cleanup SIGTERM SIGINT
 
           write_if_exists() {
             local value="$1"
@@ -1784,15 +1868,29 @@ jobs:
             return 1
           }
 
+          get_thermal_temp() {
+            # Read the hottest thermal zone (in millidegrees C)
+            local max_temp=0
+            for tz in /sys/class/thermal/thermal_zone*/temp; do
+              [ -r "$tz" ] || continue
+              local t
+              t=$(cat "$tz" 2>/dev/null) || continue
+              [ "${t:-0}" -gt "$max_temp" ] && max_temp="$t"
+            done
+            echo "$max_temp"
+          }
+
           apply_governor_defaults
 
           while true; do
             batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
             batt_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
+            thermal_temp=$(get_thermal_temp)
             load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
             load_int=${load_one%.*}
 
-            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ]; then
+            # 85000 = 85 degrees Celsius in millidegrees (thermal zone units)
+            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ] || [ "${thermal_temp:-0}" -ge 85000 ]; then
               profile_mode="eco"
               write_if_exists 60 /proc/sys/vm/swappiness
               write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
@@ -1805,6 +1903,8 @@ jobs:
               write_if_exists 90 /proc/sys/vm/swappiness
               write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
             fi
+
+            log "profile=$profile_mode batt=$batt_cap% temp=$batt_temp thermal=$thermal_temp load=$load_one"
 
             if [ "$GOV_MODE" = "dynasched" ]; then
               apply_dynasched "$profile_mode"
@@ -1833,6 +1933,8 @@ jobs:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
             ${{ env.KERNEL_ZIP }}
+            ${{ env.KERNEL_ZIP }}.sha256
+            ${{ env.IMAGE_LZ4 }}
             ${{ env.CHANGELOG_FILE }}
             logs/build-${{ matrix.variant }}.log
             kernel/out/.config

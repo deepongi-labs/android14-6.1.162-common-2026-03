@@ -1141,32 +1141,43 @@ jobs:
             exit 0
           fi
 
-          # Ensure selinux_hide symbols are globally visible for all variants.
-          # The 50_add_susfs patch adds extern references in security/selinux/hooks.c
-          # and selinuxfs.c, but the definitions in selinux_hide.c may still be static.
-          # We're currently in kernel/KernelSU, so the path is relative to that.
+          # Ensure selinux_hide compatibility symbols exist for all variants.
+          # Older KernelSU trees keep them in feature/selinux_hide.c; current Tiann
+          # trees do not ship that feature file, so provide disabled symbols in
+          # selinux.c to satisfy the kernel-side SuSFS manual hooks.
           echo "🔧 Ensuring selinux_hide symbols have global linkage..."
-          if [ -f "kernel/feature/selinux_hide.c" ]; then
-            python3 - <<'PYEOF'
-          from pathlib import Path
-          p = Path("kernel/feature/selinux_hide.c")
-          t = p.read_text()
-          changed = False
-          if "static struct selinux_state fake_state;" in t:
-              t = t.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;", 1)
-              changed = True
-          if "static bool ksu_selinux_hide_running" in t:
-              t = t.replace("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running", 1)
-              changed = True
-          if changed:
-              p.write_text(t)
-              print("✅ selinux_hide.c: promoted static symbols to global")
-          else:
-              print("ℹ️  selinux_hide.c: symbols already global or file layout differs")
-          PYEOF
-          else
-            echo "ℹ️  kernel/feature/selinux_hide.c not found, skipping"
-          fi
+          printf '%s\n' \
+            'from pathlib import Path' \
+            'feature = Path("kernel/feature/selinux_hide.c")' \
+            'selinux = Path("kernel/selinux/selinux.c")' \
+            'if feature.exists():' \
+            '    text = feature.read_text()' \
+            '    changed = False' \
+            '    if "static struct selinux_state fake_state;" in text:' \
+            '        text = text.replace("static struct selinux_state fake_state;", "struct selinux_state fake_state;", 1)' \
+            '        changed = True' \
+            '    if "static bool ksu_selinux_hide_running" in text:' \
+            '        text = text.replace("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running", 1)' \
+            '        changed = True' \
+            '    if changed:' \
+            '        feature.write_text(text)' \
+            '        print("✅ selinux_hide.c: promoted static symbols to global")' \
+            '    else:' \
+            '        print("ℹ️  selinux_hide.c: symbols already global or file layout differs")' \
+            'elif selinux.exists():' \
+            '    text = selinux.read_text()' \
+            '    if "ksu_selinux_hide_running" not in text and "struct selinux_state fake_state" not in text:' \
+            '        marker = "u32 ksu_file_sid __read_mostly = 0;\n"' \
+            '        compat = marker + "\n#ifdef CONFIG_KSU_SUSFS\nstruct selinux_state fake_state;\nbool ksu_selinux_hide_running __read_mostly = false;\n#endif\n"' \
+            '        if marker not in text:' \
+            '            raise SystemExit("kernel/selinux/selinux.c layout drifted; could not add selinux_hide compatibility symbols")' \
+            '        selinux.write_text(text.replace(marker, compat, 1))' \
+            '        print("✅ selinux.c: added disabled selinux_hide compatibility symbols")' \
+            '    else:' \
+            '        print("ℹ️  selinux_hide compatibility symbols already present")' \
+            'else:' \
+            '    raise SystemExit("KernelSU SELinux sources not found; cannot satisfy selinux_hide symbols")' \
+            | python3 -
 
           if [ "$KSU_VARIANT" = "enhance" ]; then
             ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"

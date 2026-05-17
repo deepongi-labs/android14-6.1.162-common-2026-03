@@ -583,9 +583,21 @@ jobs:
           # We manually integrate KSU to prevent fork setup scripts from rogue cloning
           if [ "$USE_SETUP_SH" = "true" ]; then
             echo "🔗 Manually symlinking KernelSU..."
+            mkdir -p drivers
+            if [ ! -d "KernelSU/kernel" ]; then
+              echo "❌ KernelSU/kernel directory not found after clone"
+              ls -la KernelSU/ || true
+              exit 1
+            fi
             ln -sf ../KernelSU/kernel drivers/kernelsu
           else
             echo "📋 Manually copying KernelSU (No symlink)..."
+            mkdir -p drivers
+            if [ ! -d "KernelSU/kernel" ]; then
+              echo "❌ KernelSU/kernel directory not found after clone"
+              ls -la KernelSU/ || true
+              exit 1
+            fi
             cp -r KernelSU/kernel drivers/kernelsu
           fi
 

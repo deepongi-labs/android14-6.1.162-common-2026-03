@@ -1575,6 +1575,20 @@ jobs:
           CONFIG_NET_SCH_FQ=y
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
+          # I/O Schedulers
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_BFQ_GROUP_IOSCHED=y
+          CONFIG_MQ_IOSCHED_DEADLINE=y
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_DEFAULT_IOSCHED="bfq"
+          # GPU Power Management (Mali/devfreq)
+          CONFIG_PM_DEVFREQ=y
+          CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y
+          CONFIG_DEVFREQ_GOV_PERFORMANCE=y
+          CONFIG_DEVFREQ_GOV_POWERSAVE=y
+          CONFIG_DEVFREQ_GOV_USERSPACE=y
+          CONFIG_MALI_MIDGARD=m
+          CONFIG_MALI_PLATFORM_NAME="tensor"
           CONFIG_KSU=y
           CONFIG_KSU_DEBUG=n
           CONFIG_TMPFS_XATTR=y
@@ -1924,6 +1938,114 @@ jobs:
             fi
           }
 
+          # GPU Governor Management
+          GPU_OVERRIDE_FILE="/data/local/tmp/.dynasched_gpu_governor"
+          IO_OVERRIDE_FILE="/data/local/tmp/.dynasched_io_scheduler"
+          DISPLAY_OVERRIDE_FILE="/data/local/tmp/.dynasched_display_mode"
+          OVERCLOCK_FILE="/data/local/tmp/.dynasched_overclock"
+
+          # Initialize state files with safe defaults if they don't exist
+          [ -f "$GPU_OVERRIDE_FILE" ] || echo "auto" > "$GPU_OVERRIDE_FILE"
+          [ -f "$IO_OVERRIDE_FILE" ] || echo "auto" > "$IO_OVERRIDE_FILE"
+          [ -f "$DISPLAY_OVERRIDE_FILE" ] || echo "auto" > "$DISPLAY_OVERRIDE_FILE"
+          [ -f "$OVERCLOCK_FILE" ] || echo "disabled" > "$OVERCLOCK_FILE"
+
+          apply_gpu_governor() {
+            local mode="$1"
+            local gov=""
+            case "$mode" in
+              performance) gov="performance" ;;
+              powersave) gov="powersave" ;;
+              balanced) gov="simple_ondemand" ;;
+              *) gov="simple_ondemand" ;;
+            esac
+            for node in /sys/class/devfreq/*/governor; do
+              [ -e "$node" ] && echo "$gov" > "$node" 2>/dev/null || true
+            done
+          }
+
+          apply_io_scheduler() {
+            local sched="$1"
+            case "$sched" in
+              bfq|mq-deadline|kyber|none) ;;
+              *) sched="bfq" ;;
+            esac
+            for queue in /sys/block/*/queue/scheduler; do
+              [ -e "$queue" ] && echo "$sched" > "$queue" 2>/dev/null || true
+            done
+          }
+
+          apply_display_mode() {
+            local mode="$1"
+            # Pixel 8 uses /sys/devices/platform/exynos-drm/* for panel control
+            # Also try generic drm idle_timeout approach
+            case "$mode" in
+              60hz)
+                write_if_exists 0 /sys/devices/platform/exynos-drm/*/idle_timeout
+                for node in /sys/class/drm/card*/device/idle_timeout; do
+                  [ -e "$node" ] && echo 0 > "$node" 2>/dev/null || true
+                done
+                # Force 60Hz by setting min refresh interval
+                write_if_exists 16666 /sys/devices/platform/exynos-drm/*/min_vrefresh_interval
+                ;;
+              120hz)
+                write_if_exists 1 /sys/devices/platform/exynos-drm/*/idle_timeout
+                for node in /sys/class/drm/card*/device/idle_timeout; do
+                  [ -e "$node" ] && echo 1 > "$node" 2>/dev/null || true
+                done
+                write_if_exists 8333 /sys/devices/platform/exynos-drm/*/min_vrefresh_interval
+                ;;
+              *)
+                # Auto/adaptive: let the system manage refresh rate
+                write_if_exists 100 /sys/devices/platform/exynos-drm/*/idle_timeout
+                ;;
+            esac
+          }
+
+          # Overclock safety constants (conservative 5-10% above stock max)
+          OC_POLICY0_MAX=2100000   # stock max ~1900000, +10%
+          OC_POLICY4_MAX=2500000   # stock max ~2300000, +8%
+          OC_POLICY6_MAX=2600000   # stock max ~2400000, +8%
+          OC_POLICY7_MAX=3000000   # stock max ~2700000, +11%
+
+          SAFE_POLICY0_MAX=1900000
+          SAFE_POLICY4_MAX=2300000
+          SAFE_POLICY6_MAX=2400000
+          SAFE_POLICY7_MAX=2700000
+
+          THERMAL_OC_LIMIT=90000    # 90C - disable overclock
+          BATTERY_OC_LIMIT=450      # 45C - disable overclock
+
+          apply_overclock() {
+            local oc_state
+            oc_state=$(cat "$OVERCLOCK_FILE" 2>/dev/null | tr -d '[:space:]')
+            local thermal_t
+            thermal_t=$(get_thermal_temp)
+            local batt_t
+            batt_t=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
+
+            # Safety check: disable overclock if thermal limits exceeded
+            if [ "${thermal_t:-0}" -ge "$THERMAL_OC_LIMIT" ] || [ "${batt_t:-320}" -ge "$BATTERY_OC_LIMIT" ]; then
+              if [ "$oc_state" = "enabled" ]; then
+                log "OVERCLOCK SAFETY: thermal=$thermal_t batt=$batt_t - forcing safe frequencies"
+              fi
+              # Reset to safe limits
+              set_policy_limits policy0 300000 "$SAFE_POLICY0_MAX"
+              set_policy_limits policy4 500000 "$SAFE_POLICY4_MAX"
+              set_policy_limits policy6 500000 "$SAFE_POLICY6_MAX"
+              set_policy_limits policy7 700000 "$SAFE_POLICY7_MAX"
+              return
+            fi
+
+            if [ "$oc_state" = "enabled" ]; then
+              # Apply overclock limits only to max freq
+              write_if_exists "$OC_POLICY0_MAX" /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+              write_if_exists "$OC_POLICY4_MAX" /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+              write_if_exists "$OC_POLICY6_MAX" /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
+              write_if_exists "$OC_POLICY7_MAX" /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
+            fi
+          }
+
           apply_tcp_congestion
 
           while true; do
@@ -1990,6 +2112,53 @@ jobs:
               else
                 write_governor_tuning 8000 20000
               fi
+            fi
+
+            # Apply GPU governor based on override or profile
+            gpu_mode=""
+            if [ -r "$GPU_OVERRIDE_FILE" ]; then
+              gpu_mode=$(cat "$GPU_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
+            fi
+            case "$gpu_mode" in
+              performance|powersave|balanced) apply_gpu_governor "$gpu_mode" ;;
+              *) apply_gpu_governor "$profile_mode" ;;
+            esac
+
+            # Apply I/O scheduler based on override or profile
+            io_sched=""
+            if [ -r "$IO_OVERRIDE_FILE" ]; then
+              io_sched=$(cat "$IO_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
+            fi
+            case "$io_sched" in
+              bfq|mq-deadline|kyber|none) apply_io_scheduler "$io_sched" ;;
+              *)
+                case "$profile_mode" in
+                  eco) apply_io_scheduler "bfq" ;;
+                  turbo) apply_io_scheduler "none" ;;
+                  *) apply_io_scheduler "bfq" ;;
+                esac
+                ;;
+            esac
+
+            # Apply display mode based on override or profile
+            disp_mode=""
+            if [ -r "$DISPLAY_OVERRIDE_FILE" ]; then
+              disp_mode=$(cat "$DISPLAY_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
+            fi
+            case "$disp_mode" in
+              60hz|120hz) apply_display_mode "$disp_mode" ;;
+              *)
+                case "$profile_mode" in
+                  eco) apply_display_mode "60hz" ;;
+                  turbo) apply_display_mode "120hz" ;;
+                  *) apply_display_mode "auto" ;;
+                esac
+                ;;
+            esac
+
+            # Apply overclock if in turbo mode
+            if [ "$profile_mode" = "turbo" ]; then
+              apply_overclock
             fi
 
             sleep 20

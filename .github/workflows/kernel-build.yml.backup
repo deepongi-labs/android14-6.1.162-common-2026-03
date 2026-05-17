@@ -639,7 +639,7 @@ jobs:
             if git apply --3way "$VARIANT_KSU_PATCH"; then
               printf '%s | %s | applied\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
             else
-              if rg -q '^(<<<<<<<|=======|>>>>>>>)' kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c 2>/dev/null; then
+              if grep -qE '^(<<<<<<<|=======|>>>>>>>)' kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c 2>/dev/null; then
                 echo "⚠️ Tiann KernelSU SuSFS patch drift detected, applying known auto-merge."
                 auto_merge_tiann_ksu_susfs_patch
                 printf '%s | %s | applied-with-auto-merge\n' "Custom KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"

@@ -138,3 +138,4 @@ jobs:
         include_runtime_tuner=${{ inputs.include_runtime_tuner }}
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
+        strict_susfs=${{ inputs.strict_susfs }}

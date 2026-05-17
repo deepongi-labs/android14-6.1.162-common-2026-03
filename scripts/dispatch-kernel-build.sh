@@ -5,14 +5,13 @@ set -euo pipefail
 # Requires:
 #   - GH_TOKEN or GITHUB_TOKEN with repo/workflow scope
 # Optional env overrides:
-#   - REPO (default: deepongi-labs/android14-6.1.173-common-2026-06)
-#   - REF (default: work)
+#   - REPO (default: deepongi-labs/android14-6.1.162-common-2026-03)
+#   - REF (default: main)
 #   - KSU_VARIANT (default: all)
 #   - DISABLE_SUSFS (default: false)
 #   - FORCE_CLEAN_BUILD (default: false)
 #   - ENABLE_TELEGRAM (default: false)
 #   - CREATE_RELEASE (default: false)
-#   - DEBUG (default: true)
 #   - DRY_RUN_ONLY (default: false)
 
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
@@ -21,14 +20,13 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-REPO="${REPO:-deepongi-labs/android14-6.1.173-common-2026-06}"
-REF="${REF:-work}"
+REPO="${REPO:-deepongi-labs/android14-6.1.162-common-2026-03}"
+REF="${REF:-main}"
 KSU_VARIANT="${KSU_VARIANT:-all}"
 DISABLE_SUSFS="${DISABLE_SUSFS:-false}"
 FORCE_CLEAN_BUILD="${FORCE_CLEAN_BUILD:-false}"
 ENABLE_TELEGRAM="${ENABLE_TELEGRAM:-false}"
 CREATE_RELEASE="${CREATE_RELEASE:-false}"
-DEBUG="${DEBUG:-true}"
 DRY_RUN_ONLY="${DRY_RUN_ONLY:-false}"
 
 API_URL="https://api.github.com/repos/${REPO}/actions/workflows/kernel-build.yml/dispatches"
@@ -42,7 +40,6 @@ payload=$(cat <<EOF
     "force_clean_build": ${FORCE_CLEAN_BUILD},
     "enable_telegram": ${ENABLE_TELEGRAM},
     "create_release": ${CREATE_RELEASE},
-    "debug": ${DEBUG},
     "dry_run_only": ${DRY_RUN_ONLY}
   }
 }

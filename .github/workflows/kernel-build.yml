@@ -166,6 +166,7 @@ jobs:
       include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
       governor_mode: ${{ steps.config.outputs.governor_mode }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
+      strict_susfs: ${{ steps.config.outputs.strict_susfs }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -240,6 +241,7 @@ jobs:
           INCLUDE_RUNTIME_TUNER=""
           GOVERNOR_MODE=""
           KERNELTOAST_PATCH_POLICY=""
+          STRICT_SUSFS=""
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
           __BUILD_OPTIONS_EOF__
@@ -262,6 +264,7 @@ jobs:
               include_runtime_tuner) INCLUDE_RUNTIME_TUNER="$value" ;;
               governor_mode) GOVERNOR_MODE="$value" ;;
               kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
+              strict_susfs) STRICT_SUSFS="$value" ;;
               *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
             esac
           done <<< "$BUILD_OPTIONS_INPUT"
@@ -331,6 +334,8 @@ jobs:
           esac
           echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
 
+          echo "strict_susfs=${STRICT_SUSFS:-false}" >> $GITHUB_OUTPUT
+
   build:
     needs: setup
     runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
@@ -353,6 +358,7 @@ jobs:
       RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
+      STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -453,7 +459,7 @@ jobs:
       - name: Static analysis (shellcheck)
         run: |
           if command -v shellcheck >/dev/null; then
-            shellcheck **/*.sh || true
+            find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck || true
           else
             echo "shellcheck not installed; skipping"
           fi
@@ -1561,6 +1567,8 @@ jobs:
           CONFIG_HZ_300=y
           CONFIG_HZ=300
           CONFIG_UCLAMP_TASK=y
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
             battery)
@@ -1574,6 +1582,8 @@ jobs:
               cat << 'EOF' >> "$PROFILE_FRAGMENT"
           CONFIG_HZ_300=y
           CONFIG_HZ=300
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
           EOF
               ;;
           esac

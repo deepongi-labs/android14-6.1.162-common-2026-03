@@ -550,10 +550,20 @@ jobs:
             local target="$4"
             local mirror="${SOURCE_MIRROR_DIR}/${name}.git"
 
+            if [ -d "$mirror" ]; then
+              # Check if the mirror points to the correct upstream URL
+              local current_url
+              current_url=$(git -C "$mirror" remote get-url origin 2>/dev/null || echo "")
+              if [ "$current_url" != "$url" ]; then
+                echo "⚠️ Mirror URL mismatch for ${name}: '${current_url}' != '${url}'"
+                echo "   Deleting stale mirror and re-cloning..."
+                rm -rf "$mirror"
+              fi
+            fi
+
             if [ ! -d "$mirror" ]; then
               git clone --mirror "$url" "$mirror"
             else
-              git -C "$mirror" remote set-url origin "$url"
               git -C "$mirror" fetch --prune origin
             fi
 

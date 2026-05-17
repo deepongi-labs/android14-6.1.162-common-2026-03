@@ -1,6 +1,6 @@
 # Pixel 8 Series Kernel Builder
 
-[![Kernel](https://img.shields.io/badge/kernel-6.1.162-blue.svg)](https://android.googlesource.com/kernel/common)
+[![Kernel](https://img.shields.io/badge/kernel-6.1.173-blue.svg)](https://android.googlesource.com/kernel/common)
 [![Android](https://img.shields.io/badge/android-14%20GKI-green.svg)](https://source.android.com/)
 [![Devices](https://img.shields.io/badge/devices-akita%20%7C%20shiba%20%7C%20husky-orange.svg)](https://store.google.com/category/phones_pixel)
 [![KernelSU](https://img.shields.io/badge/KernelSU-5%20variants-purple.svg)](https://github.com/tiann/KernelSU)
@@ -59,7 +59,7 @@ Inputs you can set when dispatching the workflow:
 
 Source pin overrides:
 
-* `kernel_ref`  default `android14-6.1-2026-03`
+* `kernel_ref`  default `android14-6.1-2026-06`
 * `susfs_ref`   default `gki-android14-6.1-dev`
 * `tiann_ref`   default pinned commit (bump deliberately)
 * `kowsu_ref`, `resukisu_ref`, `next_ref` — branches

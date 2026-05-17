@@ -12,7 +12,7 @@ on:
       kernel_ref:
         description: 'Kernel ref to test'
         required: false
-        default: 'android14-6.1-2026-03'
+        default: 'android14-6.1-2026-06'
         type: string
       susfs_ref:
         description: 'SuSFS ref to test (use HEAD branch to detect drift)'
@@ -41,7 +41,7 @@ jobs:
       create_release: false
       dry_run_only: true
       refs: |
-        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-06' }}
         susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
         tiann_ref=${{ inputs.tiann_ref || 'master' }}
         kowsu_ref=master
@@ -67,7 +67,7 @@ jobs:
       create_release: false
       dry_run_only: true
       refs: |
-        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-06' }}
         susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
         tiann_ref=${{ inputs.tiann_ref || 'master' }}
         kowsu_ref=master

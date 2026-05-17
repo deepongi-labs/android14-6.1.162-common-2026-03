@@ -15,7 +15,9 @@ data class TelemetrySnapshot(
   val memAvailableMb: String = "",
   val memTotalMb: String = "",
   val batteryTempC: String = "",
-  val thermalTempC: String = ""
+  val thermalTempC: String = "",
+  val tcpCongestion: String = "",
+  val fkmProfile: String = ""
 )
 
 data class BuildInfo(

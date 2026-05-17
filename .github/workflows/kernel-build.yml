@@ -1559,7 +1559,19 @@ jobs:
           CONFIG_CMA=y
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
+          # TCP Congestion Control
+          CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_TCP_CONG_VEGAS=y
+          CONFIG_TCP_CONG_VENO=y
+          CONFIG_TCP_CONG_YEAH=y
+          CONFIG_TCP_CONG_ILLINOIS=y
+          CONFIG_TCP_CONG_DCTCP=y
+          CONFIG_TCP_CONG_CDG=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_NET_SCH_FQ=y
           CONFIG_IP_SET=y
           CONFIG_NET_SCH_CAKE=y
@@ -1882,27 +1894,88 @@ jobs:
 
           apply_governor_defaults
 
+          # FKM / kernel-manager profile override support.
+          # External managers write one of: performance, balanced, battery
+          # to this file. The tuner respects it instead of auto-detecting.
+          PROFILE_OVERRIDE_FILE="/data/local/tmp/.dynasched_profile"
+          TCP_OVERRIDE_FILE="/data/local/tmp/.dynasched_tcp_congestion"
+
+          # Initialize default files if missing
+          if [ ! -f "$PROFILE_OVERRIDE_FILE" ]; then
+            echo "auto" > "$PROFILE_OVERRIDE_FILE"
+          fi
+          if [ ! -f "$TCP_OVERRIDE_FILE" ]; then
+            echo "bbr" > "$TCP_OVERRIDE_FILE"
+          fi
+
+          # Log available TCP congestion algorithms
+          if [ -r /proc/sys/net/ipv4/tcp_available_congestion_control ]; then
+            log "tcp_available=$(cat /proc/sys/net/ipv4/tcp_available_congestion_control)"
+          fi
+          log "tcp_active=$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unknown)"
+
+          apply_tcp_congestion() {
+            if [ -r "$TCP_OVERRIDE_FILE" ]; then
+              local algo
+              algo=$(cat "$TCP_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
+              if [ -n "$algo" ] && grep -qw "$algo" /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+                echo "$algo" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
+              fi
+            fi
+          }
+
+          apply_tcp_congestion
+
           while true; do
+            # Check for external profile override (FKM, Dynasched Manager, etc.)
+            fkm_profile=""
+            if [ -r "$PROFILE_OVERRIDE_FILE" ]; then
+              fkm_profile=$(cat "$PROFILE_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
+            fi
+
+            # Apply TCP congestion override each cycle
+            apply_tcp_congestion
+
             batt_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo 50)
             batt_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 320)
             thermal_temp=$(get_thermal_temp)
             load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
             load_int=${load_one%.*}
 
-            # 85000 = 85 degrees Celsius in millidegrees (thermal zone units)
-            if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ] || [ "${thermal_temp:-0}" -ge 85000 ]; then
-              profile_mode="eco"
-              write_if_exists 60 /proc/sys/vm/swappiness
-              write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
-            elif [ "${load_int:-0}" -ge 5 ] && [ "$batt_temp" -le 390 ]; then
-              profile_mode="turbo"
-              write_if_exists 110 /proc/sys/vm/swappiness
-              write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
-            else
-              profile_mode="balanced"
-              write_if_exists 90 /proc/sys/vm/swappiness
-              write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
-            fi
+            # Use FKM override if set, otherwise auto-detect
+            case "$fkm_profile" in
+              performance)
+                profile_mode="turbo"
+                write_if_exists 110 /proc/sys/vm/swappiness
+                write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
+                ;;
+              battery)
+                profile_mode="eco"
+                write_if_exists 60 /proc/sys/vm/swappiness
+                write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
+                ;;
+              balanced)
+                profile_mode="balanced"
+                write_if_exists 90 /proc/sys/vm/swappiness
+                write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
+                ;;
+              *)
+                # Auto-detect based on device state
+                if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ] || [ "${thermal_temp:-0}" -ge 85000 ]; then
+                  profile_mode="eco"
+                  write_if_exists 60 /proc/sys/vm/swappiness
+                  write_if_exists 500 /proc/sys/vm/dirty_expire_centisecs
+                elif [ "${load_int:-0}" -ge 5 ] && [ "$batt_temp" -le 390 ]; then
+                  profile_mode="turbo"
+                  write_if_exists 110 /proc/sys/vm/swappiness
+                  write_if_exists 200 /proc/sys/vm/dirty_expire_centisecs
+                else
+                  profile_mode="balanced"
+                  write_if_exists 90 /proc/sys/vm/swappiness
+                  write_if_exists 300 /proc/sys/vm/dirty_expire_centisecs
+                fi
+                ;;
+            esac
 
             log "profile=$profile_mode batt=$batt_cap% temp=$batt_temp thermal=$thermal_temp load=$load_one"
 

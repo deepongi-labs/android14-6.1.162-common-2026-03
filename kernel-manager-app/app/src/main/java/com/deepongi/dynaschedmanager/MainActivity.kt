@@ -326,6 +326,8 @@ private fun TelemetryCard(state: KernelState) {
       MetaRow("Memory", "${state.telemetry.memAvailableMb} free / ${state.telemetry.memTotalMb}")
       MetaRow("Battery temp", state.telemetry.batteryTempC.ifBlank { "Unavailable" })
       MetaRow("Thermal zone", state.telemetry.thermalTempC.ifBlank { "Unavailable" })
+      MetaRow("TCP congestion", state.telemetry.tcpCongestion.ifBlank { "Unknown" })
+      MetaRow("Profile override", state.telemetry.fkmProfile.ifBlank { "auto" })
       MetaRow("Available governors", state.availableGovernors.joinToString().ifBlank { "Unavailable" })
     }
   }

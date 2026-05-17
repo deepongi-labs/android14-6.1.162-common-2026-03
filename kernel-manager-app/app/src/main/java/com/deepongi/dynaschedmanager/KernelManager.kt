@@ -141,6 +141,9 @@ class KernelManager(private val context: Context) {
     val dirtyWriteback = lines.value("dirty_writeback").ifBlank { "75" }
     val topAppBoost = lines.value("top_app_boost").ifBlank { "15" }
     val topAppUclampMin = lines.value("top_app_uclamp_min").ifBlank { "256" }
+    val tcpCongestion = lines.value("tcp_congestion").ifBlank { "unknown" }
+    val tcpAvailable = lines.value("tcp_available").ifBlank { "unknown" }
+    val fkmProfile = lines.value("fkm_profile").ifBlank { "auto" }
     val customTuning = CustomTuning.fromPolicies(
       policies = policies,
       swappiness = swappiness,
@@ -164,7 +167,10 @@ class KernelManager(private val context: Context) {
         availableGovernors = available,
         selinux = lines.value("selinux"),
         missingNodes = missingNodes,
-        profile = detectProfile(policies)
+        profile = detectProfile(policies),
+        tcpCongestion = tcpCongestion,
+        tcpAvailable = tcpAvailable,
+        fkmProfile = fkmProfile
       ),
       lastError = ""
     )
@@ -188,7 +194,9 @@ class KernelManager(private val context: Context) {
         memAvailableMb = kbToMb(lines.value("mem_available_kb")),
         memTotalMb = kbToMb(lines.value("mem_total_kb")),
         batteryTempC = normalizeTemp(lines.value("battery_temp")),
-        thermalTempC = normalizeTemp(lines.value("thermal_temp"))
+        thermalTempC = normalizeTemp(lines.value("thermal_temp")),
+        tcpCongestion = tcpCongestion,
+        fkmProfile = fkmProfile
       ),
       detectedProfile = profile,
       bootSettings = prefs.bootSettings,
@@ -269,6 +277,12 @@ class KernelManager(private val context: Context) {
     echo "top_app_boost=${'$'}{TOP_APP_BOOST}"
     echo "top_app_uclamp_min=${'$'}{TOP_APP_UCLAMP_MIN}"
     echo "missing_nodes=${'$'}{MISSING_NODES:-none}"
+    TCP_CONG="${'$'}(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unknown)"
+    TCP_AVAILABLE="${'$'}(cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null || echo unknown)"
+    FKM_PROFILE="${'$'}(cat /data/local/tmp/.dynasched_profile 2>/dev/null || echo auto)"
+    echo "tcp_congestion=${'$'}{TCP_CONG}"
+    echo "tcp_available=${'$'}{TCP_AVAILABLE}"
+    echo "fkm_profile=${'$'}{FKM_PROFILE}"
     for policy in /sys/devices/system/cpu/cpufreq/policy*; do
       [ -d "${'$'}policy" ] || continue
       name="${'$'}(basename "${'$'}policy")"
@@ -286,6 +300,12 @@ class KernelManager(private val context: Context) {
     val profileName = when (profile) {
       KernelProfile.Eco -> "eco"
       KernelProfile.Turbo -> "turbo"
+      else -> "balanced"
+    }
+
+    val fkmName = when (profile) {
+      KernelProfile.Eco -> "battery"
+      KernelProfile.Turbo -> "performance"
       else -> "balanced"
     }
 
@@ -322,6 +342,7 @@ class KernelManager(private val context: Context) {
           apply_latency_values 15 256
           ;;
       esac
+      echo "${fkmName}" > /data/local/tmp/.dynasched_profile
     """.trimIndent()
   }
 
@@ -485,7 +506,10 @@ class KernelManager(private val context: Context) {
     availableGovernors: List<String>,
     selinux: String,
     missingNodes: List<String>,
-    profile: KernelProfile?
+    profile: KernelProfile?,
+    tcpCongestion: String,
+    tcpAvailable: String,
+    fkmProfile: String
   ): String = buildString {
     appendLine("Kernel: $kernelVersion")
     appendLine("Variant: $variant")
@@ -494,5 +518,8 @@ class KernelManager(private val context: Context) {
     appendLine("SELinux: $selinux")
     appendLine("Detected profile: ${profile?.title ?: "Unknown"}")
     appendLine("Missing nodes: ${if (missingNodes.isEmpty()) "none" else missingNodes.joinToString()}")
+    appendLine("TCP congestion: $tcpCongestion")
+    appendLine("TCP available: $tcpAvailable")
+    appendLine("FKM profile override: $fkmProfile")
   }
 }

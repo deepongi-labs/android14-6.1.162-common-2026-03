@@ -15,7 +15,9 @@ Signed-off-by: deepongi-labs
 diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
 --- a/kernel/sched/cpufreq_schedutil.c
 +++ b/kernel/sched/cpufreq_schedutil.c
-@@ -1,6 +1,6 @@
+@@ -858,7 +858,7 @@
+ }
+ 
  struct cpufreq_governor schedutil_gov = {
 -	.name			= "schedutil",
 +	.name			= "dynasched",

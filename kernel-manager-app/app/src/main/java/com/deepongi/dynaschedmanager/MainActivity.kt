@@ -682,22 +682,26 @@ private fun DisplayCard(state: KernelState, busy: Boolean, onSetMode: (String) -
       verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
       Text("Display Control", style = MaterialTheme.typography.titleLarge, color = Color.White)
-      MetaRow("Current mode", state.displayState.currentMode)
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        state.displayState.availableModes.forEach { mode ->
-          FilterChip(
-            selected = mode == state.displayState.currentMode,
-            onClick = { onSetMode(mode) },
-            label = { Text(mode) },
-            enabled = !busy
-          )
+      if (!state.displayState.available) {
+        Text("Not available on this device", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C4D2))
+      } else {
+        MetaRow("Current mode", state.displayState.currentMode)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          state.displayState.availableModes.forEach { mode ->
+            FilterChip(
+              selected = mode == state.displayState.currentMode,
+              onClick = { onSetMode(mode) },
+              label = { Text(mode) },
+              enabled = !busy
+            )
+          }
         }
+        Text(
+          "Controls display refresh rate. 60Hz saves battery, 120Hz maximizes smoothness.",
+          style = MaterialTheme.typography.bodySmall,
+          color = Color(0xFFB7C4D2)
+        )
       }
-      Text(
-        "Controls display refresh rate. 60Hz saves battery, 120Hz maximizes smoothness.",
-        style = MaterialTheme.typography.bodySmall,
-        color = Color(0xFFB7C4D2)
-      )
     }
   }
 }

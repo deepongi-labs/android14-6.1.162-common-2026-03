@@ -1814,6 +1814,11 @@ jobs:
           cleanup() {
             log "Received SIGTERM, resetting governor to schedutil"
             write_if_exists schedutil /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
+            # Reset max frequencies to safe stock values
+            write_if_exists 1900000 /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+            write_if_exists 2300000 /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+            write_if_exists 2400000 /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
+            write_if_exists 2700000 /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
             exit 0
           }
 
@@ -1957,6 +1962,8 @@ jobs:
               performance) gov="performance" ;;
               powersave) gov="powersave" ;;
               balanced) gov="simple_ondemand" ;;
+              simple_ondemand) gov="simple_ondemand" ;;
+              userspace) gov="userspace" ;;
               *) gov="simple_ondemand" ;;
             esac
             for node in /sys/class/devfreq/*/governor; do
@@ -2019,6 +2026,12 @@ jobs:
           apply_overclock() {
             local oc_state
             oc_state=$(cat "$OVERCLOCK_FILE" 2>/dev/null | tr -d '[:space:]')
+
+            # Only act if user has explicitly enabled overclock
+            if [ "$oc_state" != "enabled" ]; then
+              return
+            fi
+
             local thermal_t
             thermal_t=$(get_thermal_temp)
             local batt_t
@@ -2026,9 +2039,7 @@ jobs:
 
             # Safety check: disable overclock if thermal limits exceeded
             if [ "${thermal_t:-0}" -ge "$THERMAL_OC_LIMIT" ] || [ "${batt_t:-320}" -ge "$BATTERY_OC_LIMIT" ]; then
-              if [ "$oc_state" = "enabled" ]; then
-                log "OVERCLOCK SAFETY: thermal=$thermal_t batt=$batt_t - forcing safe frequencies"
-              fi
+              log "OVERCLOCK SAFETY: thermal=$thermal_t batt=$batt_t - forcing safe frequencies"
               # Reset to safe limits
               set_policy_limits policy0 300000 "$SAFE_POLICY0_MAX"
               set_policy_limits policy4 500000 "$SAFE_POLICY4_MAX"
@@ -2037,13 +2048,11 @@ jobs:
               return
             fi
 
-            if [ "$oc_state" = "enabled" ]; then
-              # Apply overclock limits only to max freq
-              write_if_exists "$OC_POLICY0_MAX" /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
-              write_if_exists "$OC_POLICY4_MAX" /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
-              write_if_exists "$OC_POLICY6_MAX" /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
-              write_if_exists "$OC_POLICY7_MAX" /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
-            fi
+            # Apply overclock limits only to max freq
+            write_if_exists "$OC_POLICY0_MAX" /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
+            write_if_exists "$OC_POLICY4_MAX" /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq
+            write_if_exists "$OC_POLICY6_MAX" /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq
+            write_if_exists "$OC_POLICY7_MAX" /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq
           }
 
           apply_tcp_congestion
@@ -2120,7 +2129,7 @@ jobs:
               gpu_mode=$(cat "$GPU_OVERRIDE_FILE" 2>/dev/null | tr -d '[:space:]')
             fi
             case "$gpu_mode" in
-              performance|powersave|balanced) apply_gpu_governor "$gpu_mode" ;;
+              performance|powersave|balanced|simple_ondemand|userspace) apply_gpu_governor "$gpu_mode" ;;
               *) apply_gpu_governor "$profile_mode" ;;
             esac
 
@@ -2156,10 +2165,8 @@ jobs:
                 ;;
             esac
 
-            # Apply overclock if in turbo mode
-            if [ "$profile_mode" = "turbo" ]; then
-              apply_overclock
-            fi
+            # Apply overclock (function checks oc_state internally)
+            apply_overclock
 
             sleep 20
           done

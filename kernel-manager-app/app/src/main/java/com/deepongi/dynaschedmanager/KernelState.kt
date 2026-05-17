@@ -114,7 +114,8 @@ data class IoSchedulerState(
 
 data class DisplayState(
   val currentMode: String = "auto",
-  val availableModes: List<String> = listOf("60hz", "120hz", "auto")
+  val availableModes: List<String> = listOf("60hz", "120hz", "auto"),
+  val available: Boolean = false
 )
 
 data class OverclockState(

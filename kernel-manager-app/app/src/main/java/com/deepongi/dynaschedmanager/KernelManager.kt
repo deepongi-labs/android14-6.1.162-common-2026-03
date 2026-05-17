@@ -127,33 +127,36 @@ class KernelManager(private val context: Context) {
   }
 
   suspend fun setGpuGovernor(governor: String): String {
+    val safe = sanitizeShellArg(governor) ?: return "Invalid governor name."
     val script = """
-      echo "$governor" > /data/local/tmp/.dynasched_gpu_governor
+      echo "$safe" > /data/local/tmp/.dynasched_gpu_governor
       for node in /sys/class/devfreq/*/governor; do
-        [ -e "${'$'}node" ] && echo "$governor" > "${'$'}node" 2>/dev/null || true
+        [ -e "${'$'}node" ] && echo "$safe" > "${'$'}node" 2>/dev/null || true
       done
     """.trimIndent()
     val result = RootShell.run(script)
-    return if (result.exitCode == 0) "GPU governor set to $governor" else result.stderr.ifBlank { "Failed to set GPU governor." }
+    return if (result.exitCode == 0) "GPU governor set to $safe" else result.stderr.ifBlank { "Failed to set GPU governor." }
   }
 
   suspend fun setIoScheduler(scheduler: String): String {
+    val safe = sanitizeShellArg(scheduler) ?: return "Invalid scheduler name."
     val script = """
-      echo "$scheduler" > /data/local/tmp/.dynasched_io_scheduler
+      echo "$safe" > /data/local/tmp/.dynasched_io_scheduler
       for queue in /sys/block/*/queue/scheduler; do
-        [ -e "${'$'}queue" ] && echo "$scheduler" > "${'$'}queue" 2>/dev/null || true
+        [ -e "${'$'}queue" ] && echo "$safe" > "${'$'}queue" 2>/dev/null || true
       done
     """.trimIndent()
     val result = RootShell.run(script)
-    return if (result.exitCode == 0) "I/O scheduler set to $scheduler" else result.stderr.ifBlank { "Failed to set I/O scheduler." }
+    return if (result.exitCode == 0) "I/O scheduler set to $safe" else result.stderr.ifBlank { "Failed to set I/O scheduler." }
   }
 
   suspend fun setDisplayMode(mode: String): String {
+    val safe = sanitizeShellArg(mode) ?: return "Invalid display mode."
     val script = """
-      echo "$mode" > /data/local/tmp/.dynasched_display_mode
+      echo "$safe" > /data/local/tmp/.dynasched_display_mode
     """.trimIndent()
     val result = RootShell.run(script)
-    return if (result.exitCode == 0) "Display mode set to $mode" else result.stderr.ifBlank { "Failed to set display mode." }
+    return if (result.exitCode == 0) "Display mode set to $safe" else result.stderr.ifBlank { "Failed to set display mode." }
   }
 
   suspend fun setOverclockEnabled(enabled: Boolean): String {
@@ -244,7 +247,8 @@ class KernelManager(private val context: Context) {
 
     // Display state
     val displayState = DisplayState(
-      currentMode = lines.value("display_mode").ifBlank { "auto" }
+      currentMode = lines.value("display_mode").ifBlank { "auto" },
+      available = lines.value("display_available") == "1"
     )
 
     // Overclock state
@@ -413,6 +417,15 @@ class KernelManager(private val context: Context) {
     # Display mode state
     DISPLAY_MODE=${'$'}(cat /data/local/tmp/.dynasched_display_mode 2>/dev/null || echo auto)
     echo "display_mode=${'$'}{DISPLAY_MODE}"
+    # Check if display control sysfs nodes exist
+    DISPLAY_AVAILABLE=0
+    for node in /sys/devices/platform/exynos-drm/*/idle_timeout /sys/class/drm/card*/device/idle_timeout; do
+      if [ -e "${'$'}node" ]; then
+        DISPLAY_AVAILABLE=1
+        break
+      fi
+    done
+    echo "display_available=${'$'}{DISPLAY_AVAILABLE}"
     # Overclock state
     OC_ENABLED=${'$'}(cat /data/local/tmp/.dynasched_overclock 2>/dev/null || echo disabled)
     echo "overclock_enabled=${'$'}{OC_ENABLED}"
@@ -620,6 +633,10 @@ class KernelManager(private val context: Context) {
   private fun kbToMb(value: String): String {
     val kb = value.toLongOrNull() ?: return "n/a"
     return "${kb / 1024} MB"
+  }
+
+  private fun sanitizeShellArg(value: String): String? {
+    return if (value.matches(Regex("[a-zA-Z0-9_-]+"))) value else null
   }
 
   private fun normalizeTemp(raw: String): String {

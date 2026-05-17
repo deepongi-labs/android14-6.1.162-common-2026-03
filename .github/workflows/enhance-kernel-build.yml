@@ -123,17 +123,18 @@ jobs:
       force_clean_build: ${{ inputs.force_clean_build }}
       enable_telegram: ${{ inputs.enable_telegram }}
       create_release: ${{ inputs.create_release }}
-      tuning_profile: ${{ inputs.tuning_profile }}
-      lto_mode: ${{ inputs.lto_mode }}
-      make_jobs: ${{ inputs.make_jobs }}
-      include_runtime_tuner: ${{ inputs.include_runtime_tuner }}
-      governor_mode: ${{ inputs.governor_mode }}
-      kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}
       dry_run_only: ${{ inputs.dry_run_only }}
-      kernel_ref: ${{ inputs.kernel_ref }}
-      susfs_ref: ${{ inputs.susfs_ref }}
-      tiann_ref: ${{ inputs.tiann_ref }}
-      kowsu_ref: ${{ inputs.kowsu_ref }}
-      resukisu_ref: ${{ inputs.resukisu_ref }}
-      next_ref: ${{ inputs.next_ref }}
-      strict_susfs: ${{ inputs.strict_susfs }}
+      refs: |
+        kernel_ref=${{ inputs.kernel_ref }}
+        susfs_ref=${{ inputs.susfs_ref }}
+        tiann_ref=${{ inputs.tiann_ref }}
+        kowsu_ref=${{ inputs.kowsu_ref }}
+        resukisu_ref=${{ inputs.resukisu_ref }}
+        next_ref=${{ inputs.next_ref }}
+      build_options: |
+        tuning_profile=${{ inputs.tuning_profile }}
+        lto_mode=${{ inputs.lto_mode }}
+        make_jobs=${{ inputs.make_jobs }}
+        include_runtime_tuner=${{ inputs.include_runtime_tuner }}
+        governor_mode=${{ inputs.governor_mode }}
+        kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}

@@ -101,61 +101,17 @@ on:
         required: false
         default: true
         type: boolean
-      tuning_profile:
-        required: false
-        default: 'balanced'
-        type: string
-      lto_mode:
-        required: false
-        default: 'thin'
-        type: string
-      make_jobs:
-        required: false
-        default: 'auto'
-        type: string
-      include_runtime_tuner:
-        required: false
-        default: true
-        type: boolean
-      governor_mode:
-        required: false
-        default: 'dynasched'
-        type: string
-      kerneltoast_patch_policy:
-        required: false
-        default: 'best_effort'
-        type: string
-      strict_susfs:
-        required: false
-        default: false
-        type: boolean
       dry_run_only:
         required: false
         default: false
         type: boolean
-      kernel_ref:
+      refs:
         required: false
-        default: 'android14-6.1-2026-03'
+        default: ''
         type: string
-      susfs_ref:
+      build_options:
         required: false
-        default: 'gki-android14-6.1-dev'
-        type: string
-      tiann_ref:
-        required: false
-        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
-        type: string
-      kowsu_ref:
-        required: false
-        default: 'master'
-        type: string
-      resukisu_ref:
-        required: false
-        default: 'main'
-        type: string
-      next_ref:
-        required: false
-        default: 'dev'
+        default: ''
         type: string
 
 permissions:
@@ -241,35 +197,107 @@ jobs:
       - name: Set Build Config
         id: config
         run: |
+          # Parse consolidated `refs` and `build_options` string inputs.
+          # Format: newline-separated key=value lines. Whitespace around `=` is
+          # trimmed. Blank lines and `#`-prefixed lines are ignored. Unknown
+          # keys are a hard error.
+          KERNEL_REF=""
+          SUSFS_REF=""
+          TIANN_REF=""
+          KOWSU_REF=""
+          RESUKISU_REF=""
+          NEXT_REF=""
+          REFS_INPUT=$(cat <<'__REFS_EOF__'
+          ${{ inputs.refs }}
+          __REFS_EOF__
+          )
+          while IFS= read -r line; do
+            # Strip leading/trailing whitespace.
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            key="${key%"${key##*[![:space:]]}"}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+              kernel_ref) KERNEL_REF="$value" ;;
+              susfs_ref) SUSFS_REF="$value" ;;
+              tiann_ref) TIANN_REF="$value" ;;
+              kowsu_ref) KOWSU_REF="$value" ;;
+              resukisu_ref) RESUKISU_REF="$value" ;;
+              next_ref) NEXT_REF="$value" ;;
+              *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
+            esac
+          done <<< "$REFS_INPUT"
+
+          TUNING_PROFILE=""
+          LTO_MODE=""
+          MAKE_JOBS=""
+          INCLUDE_RUNTIME_TUNER=""
+          GOVERNOR_MODE=""
+          KERNELTOAST_PATCH_POLICY=""
+          BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
+          ${{ inputs.build_options }}
+          __BUILD_OPTIONS_EOF__
+          )
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            key="${key%"${key##*[![:space:]]}"}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+              tuning_profile) TUNING_PROFILE="$value" ;;
+              lto_mode) LTO_MODE="$value" ;;
+              make_jobs) MAKE_JOBS="$value" ;;
+              include_runtime_tuner) INCLUDE_RUNTIME_TUNER="$value" ;;
+              governor_mode) GOVERNOR_MODE="$value" ;;
+              kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
+              *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
+            esac
+          done <<< "$BUILD_OPTIONS_INPUT"
+
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
-          echo "susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}" >> $GITHUB_OUTPUT
-          echo "tiann_ref=${{ inputs.tiann_ref || '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a' }}" >> $GITHUB_OUTPUT
-          echo "kowsu_ref=${{ inputs.kowsu_ref || 'master' }}" >> $GITHUB_OUTPUT
-          echo "resukisu_ref=${{ inputs.resukisu_ref || 'main' }}" >> $GITHUB_OUTPUT
-          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref || 'dev' }}" = "stable" ]; then
+          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-03}" >> $GITHUB_OUTPUT
+          echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
+          echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
+          echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
+          echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
+          RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
+          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${RESOLVED_NEXT_REF}" = "stable" ]; then
             echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
           else
-            echo "next_ref=${{ inputs.next_ref || 'dev' }}" >> $GITHUB_OUTPUT
+            echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT
           fi
 
-          case "${{ inputs.tuning_profile }}" in
+          TUNING_PROFILE="${TUNING_PROFILE:-balanced}"
+          case "$TUNING_PROFILE" in
             balanced|performance|battery) ;;
-            *) echo "❌ Invalid tuning_profile: ${{ inputs.tuning_profile }}"; exit 1 ;;
+            *) echo "❌ Invalid tuning_profile: $TUNING_PROFILE"; exit 1 ;;
           esac
-          echo "tuning_profile=${{ inputs.tuning_profile }}" >> $GITHUB_OUTPUT
+          echo "tuning_profile=$TUNING_PROFILE" >> $GITHUB_OUTPUT
 
-          case "${{ inputs.lto_mode }}" in
+          LTO_MODE="${LTO_MODE:-thin}"
+          case "$LTO_MODE" in
             thin|full|none) ;;
-            *) echo "❌ Invalid lto_mode: ${{ inputs.lto_mode }}"; exit 1 ;;
+            *) echo "❌ Invalid lto_mode: $LTO_MODE"; exit 1 ;;
           esac
-          echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
+          echo "lto_mode=$LTO_MODE" >> $GITHUB_OUTPUT
 
-          MAKE_JOBS_INPUT="${{ inputs.make_jobs || 'auto' }}"
+          MAKE_JOBS_INPUT="${MAKE_JOBS:-auto}"
           if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
@@ -277,23 +305,31 @@ jobs:
             exit 1
           fi
 
-          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner == '' && 'true' || inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
+          if [ -z "$INCLUDE_RUNTIME_TUNER" ]; then
+            INCLUDE_RUNTIME_TUNER="true"
+          fi
+          case "$INCLUDE_RUNTIME_TUNER" in
+            true|false) ;;
+            *) echo "❌ Invalid include_runtime_tuner: $INCLUDE_RUNTIME_TUNER (expected true or false)"; exit 1 ;;
+          esac
+          echo "include_runtime_tuner=$INCLUDE_RUNTIME_TUNER" >> $GITHUB_OUTPUT
 
-          GOVERNOR_MODE_INPUT="${{ inputs.governor_mode }}"
+          GOVERNOR_MODE_INPUT="${GOVERNOR_MODE:-dynasched}"
           case "$GOVERNOR_MODE_INPUT" in
             dynasched|pixel8_dynamic_schedutil)
               GOVERNOR_MODE_INPUT="dynasched"
               ;;
             stock_schedutil) ;;
-            *) echo "❌ Invalid governor_mode: ${{ inputs.governor_mode }}"; exit 1 ;;
+            *) echo "❌ Invalid governor_mode: $GOVERNOR_MODE_INPUT"; exit 1 ;;
           esac
           echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
 
-          case "${{ inputs.kerneltoast_patch_policy }}" in
+          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-best_effort}"
+          case "$KERNELTOAST_PATCH_POLICY" in
             strict|best_effort|off) ;;
-            *) echo "❌ Invalid kerneltoast_patch_policy: ${{ inputs.kerneltoast_patch_policy }}"; exit 1 ;;
+            *) echo "❌ Invalid kerneltoast_patch_policy: $KERNELTOAST_PATCH_POLICY"; exit 1 ;;
           esac
-          echo "kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}" >> $GITHUB_OUTPUT
+          echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
 
   build:
     needs: setup

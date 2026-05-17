@@ -744,6 +744,10 @@ jobs:
               echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
               log_patch_failure "$default_patch" "$default_desc"
+              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                exit 1
+              fi
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               return 0
             fi
@@ -1045,6 +1049,10 @@ jobs:
             else
               echo "⚠️ KernelSU-Next SuSFS integration missing; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                exit 1
+              fi
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
@@ -1118,6 +1126,10 @@ jobs:
                   if [ "$KSU_VARIANT" = "enhance" ]; then
                     echo "⚠️ Enhance SuSFS patchset stale; disabling SuSFS for this variant to keep build green."
                     printf '%s | %s | disabled\n' "Enhance SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
+                    if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                      echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                      exit 1
+                    fi
                     echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
                     SUSFS_RUNTIME_ENABLED=false
                   else
@@ -1658,11 +1670,15 @@ jobs:
             fi
           fi
           if [ "$CONFIG_ERRORS" -gt 0 ]; then
+            echo "::endgroup::"
             echo "::error::$CONFIG_ERRORS critical config(s) missing. Aborting build to avoid a non-functional kernel."
             echo "::group::Current .config (KSU/SuSFS lines)"
             grep -E 'CONFIG_KSU' out/.config || echo "(none found)"
             echo "::endgroup::"
             exit 1
+          fi
+          if ! grep -q '^CONFIG_LRU_GEN=y' out/.config; then
+            echo "::warning::CONFIG_LRU_GEN=y (MGLRU) was requested but not set after olddefconfig. Kernel tree may lack MGLRU support."
           fi
           echo "Config validation passed"
           echo "::endgroup::"
@@ -1724,6 +1740,7 @@ jobs:
             echo "IMAGE_LZ4=Image-${KERNEL_VERSION}-${{ matrix.variant }}.lz4" >> $GITHUB_ENV
           else
             echo "::warning::lz4 not available; skipping Image compression"
+            echo "IMAGE_LZ4=" >> $GITHUB_ENV
           fi
 
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
@@ -1756,6 +1773,11 @@ jobs:
 
           LOG_TAG="dynasched-tuner"
           LOG_FILE="/data/local/tmp/dynasched.log"
+
+          # Rotate log if larger than 512KB
+          if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 524288 ]; then
+            mv "$LOG_FILE" "${LOG_FILE}.old" 2>/dev/null || true
+          fi
 
           log() {
             local ts
@@ -1867,6 +1889,7 @@ jobs:
             load_one=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
             load_int=${load_one%.*}
 
+            # 85000 = 85 degrees Celsius in millidegrees (thermal zone units)
             if is_screen_off || [ "$batt_cap" -le 30 ] || [ "$batt_temp" -ge 420 ] || [ "${thermal_temp:-0}" -ge 85000 ]; then
               profile_mode="eco"
               write_if_exists 60 /proc/sys/vm/swappiness

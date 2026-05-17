@@ -72,7 +72,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2026-03'
+        default: 'android14-6.1-2026-06'
         type: string
 
   workflow_call:
@@ -271,7 +271,7 @@ jobs:
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-03}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-06}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
@@ -903,7 +903,7 @@ jobs:
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
             if [ "$KSU_VARIANT" = "enhance" ]; then
-              # Kernel 6.1.162 already has #include <trace/hooks/blk.h> after internal.h,
+              # Kernel 6.1.173 already has #include <trace/hooks/blk.h> after internal.h,
               # which breaks hunk #1 of the susfs patch. Inject it manually first.
               printf '%s\n' \
                 'from pathlib import Path' \

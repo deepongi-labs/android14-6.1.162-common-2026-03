@@ -5,7 +5,7 @@ set -euo pipefail
 # Requires:
 #   - GH_TOKEN or GITHUB_TOKEN with repo/workflow scope
 # Optional env overrides:
-#   - REPO (default: deepongi-labs/android14-6.1.162-common-2026-03)
+#   - REPO (default: deepongi-labs/android14-6.1.173-common-2026-06)
 #   - REF (default: work)
 #   - KSU_VARIANT (default: all)
 #   - DISABLE_SUSFS (default: false)
@@ -21,7 +21,7 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-REPO="${REPO:-deepongi-labs/android14-6.1.162-common-2026-03}"
+REPO="${REPO:-deepongi-labs/android14-6.1.173-common-2026-06}"
 REF="${REF:-work}"
 KSU_VARIANT="${KSU_VARIANT:-all}"
 DISABLE_SUSFS="${DISABLE_SUSFS:-false}"

@@ -24,11 +24,6 @@ on:
         required: false
         default: false
         type: boolean
-      enable_telegram:
-        description: 'Enable Telegram notifications'
-        required: false
-        default: false
-        type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
@@ -52,16 +47,6 @@ on:
           - thin
           - full
           - none
-      make_jobs:
-        description: 'Override make parallel jobs (auto or integer)'
-        required: false
-        default: 'auto'
-        type: string
-      include_runtime_tuner:
-        description: 'Generate on-device runtime tuner script'
-        required: false
-        default: true
-        type: boolean
       governor_mode:
         description: 'CPU governor strategy'
         required: false
@@ -79,11 +64,6 @@ on:
           - strict
           - best_effort
           - 'off'
-      strict_susfs:
-        description: 'Fail build if any SuSFS patch auto-disables or drifts'
-        required: false
-        default: false
-        type: boolean
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false
@@ -93,31 +73,6 @@ on:
         description: 'Override kernel ref'
         required: false
         default: 'android14-6.1-2026-03'
-        type: string
-      susfs_ref:
-        description: 'Override SuSFS ref'
-        required: false
-        default: 'gki-android14-6.1-dev'
-        type: string
-      tiann_ref:
-        description: 'Override tiann KernelSU ref'
-        required: false
-        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
-        type: string
-      kowsu_ref:
-        description: 'Override kowsu KernelSU ref'
-        required: false
-        default: 'master'
-        type: string
-      resukisu_ref:
-        description: 'Override ReSukiSU ref'
-        required: false
-        default: 'main'
-        type: string
-      next_ref:
-        description: 'Override KernelSU-Next ref'
-        required: false
-        default: 'dev'
         type: string
 
   workflow_call:
@@ -292,14 +247,14 @@ jobs:
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
           echo "kernel_ref=${{ inputs.kernel_ref }}" >> $GITHUB_OUTPUT
-          echo "susfs_ref=${{ inputs.susfs_ref }}" >> $GITHUB_OUTPUT
-          echo "tiann_ref=${{ inputs.tiann_ref }}" >> $GITHUB_OUTPUT
-          echo "kowsu_ref=${{ inputs.kowsu_ref }}" >> $GITHUB_OUTPUT
-          echo "resukisu_ref=${{ inputs.resukisu_ref }}" >> $GITHUB_OUTPUT
-          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref }}" = "stable" ]; then
+          echo "susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}" >> $GITHUB_OUTPUT
+          echo "tiann_ref=${{ inputs.tiann_ref || '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a' }}" >> $GITHUB_OUTPUT
+          echo "kowsu_ref=${{ inputs.kowsu_ref || 'master' }}" >> $GITHUB_OUTPUT
+          echo "resukisu_ref=${{ inputs.resukisu_ref || 'main' }}" >> $GITHUB_OUTPUT
+          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${{ inputs.next_ref || 'dev' }}" = "stable" ]; then
             echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
           else
-            echo "next_ref=${{ inputs.next_ref }}" >> $GITHUB_OUTPUT
+            echo "next_ref=${{ inputs.next_ref || 'dev' }}" >> $GITHUB_OUTPUT
           fi
 
           case "${{ inputs.tuning_profile }}" in
@@ -314,7 +269,7 @@ jobs:
           esac
           echo "lto_mode=${{ inputs.lto_mode }}" >> $GITHUB_OUTPUT
 
-          MAKE_JOBS_INPUT="${{ inputs.make_jobs }}"
+          MAKE_JOBS_INPUT="${{ inputs.make_jobs || 'auto' }}"
           if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
           else
@@ -322,7 +277,7 @@ jobs:
             exit 1
           fi
 
-          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
+          echo "include_runtime_tuner=${{ inputs.include_runtime_tuner == '' && 'true' || inputs.include_runtime_tuner }}" >> $GITHUB_OUTPUT
 
           GOVERNOR_MODE_INPUT="${{ inputs.governor_mode }}"
           case "$GOVERNOR_MODE_INPUT" in

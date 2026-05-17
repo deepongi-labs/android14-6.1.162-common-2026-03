@@ -81,6 +81,22 @@ class MainViewModel(
     }
   }
 
+  fun setGpuGovernor(governor: String) {
+    runBusyAction("Setting GPU governor...") { manager.setGpuGovernor(governor) }
+  }
+
+  fun setIoScheduler(scheduler: String) {
+    runBusyAction("Setting I/O scheduler...") { manager.setIoScheduler(scheduler) }
+  }
+
+  fun setDisplayMode(mode: String) {
+    runBusyAction("Setting display mode...") { manager.setDisplayMode(mode) }
+  }
+
+  fun toggleOverclock(enabled: Boolean) {
+    runBusyAction("${if (enabled) "Enabling" else "Disabling"} overclock...") { manager.setOverclockEnabled(enabled) }
+  }
+
   private fun runBusyAction(loadingMessage: String, action: suspend () -> String) {
     viewModelScope.launch {
       _state.update { it.copy(busy = true, statusMessage = loadingMessage) }

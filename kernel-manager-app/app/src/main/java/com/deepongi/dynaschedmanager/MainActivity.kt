@@ -83,7 +83,11 @@ class MainActivity : ComponentActivity() {
             onRestoreDefaults = viewModel::restoreBalancedDefaults,
             onUpdateBootSettings = viewModel::updateBootSettings,
             onImportBackup = viewModel::importBackup,
-            onDownloadRelease = viewModel::downloadLatestRelease
+            onDownloadRelease = viewModel::downloadLatestRelease,
+            onSetGpuGovernor = viewModel::setGpuGovernor,
+            onSetIoScheduler = viewModel::setIoScheduler,
+            onSetDisplayMode = viewModel::setDisplayMode,
+            onToggleOverclock = viewModel::toggleOverclock
           )
         }
       }
@@ -101,7 +105,11 @@ private fun KernelManagerScreen(
   onRestoreDefaults: () -> Unit,
   onUpdateBootSettings: (BootSettings) -> Unit,
   onImportBackup: (String) -> Unit,
-  onDownloadRelease: () -> Unit
+  onDownloadRelease: () -> Unit,
+  onSetGpuGovernor: (String) -> Unit,
+  onSetIoScheduler: (String) -> Unit,
+  onSetDisplayMode: (String) -> Unit,
+  onToggleOverclock: (Boolean) -> Unit
 ) {
   val context = LocalContext.current
   var customEditor by remember(state.customTuning) { mutableStateOf(state.customTuning) }
@@ -147,6 +155,11 @@ private fun KernelManagerScreen(
       item {
         TelemetryCard(state = state)
       }
+
+      item { GpuCard(state = state, busy = state.busy, onSetGovernor = onSetGpuGovernor) }
+      item { IoSchedulerCard(state = state, busy = state.busy, onSetScheduler = onSetIoScheduler) }
+      item { DisplayCard(state = state, busy = state.busy, onSetMode = onSetDisplayMode) }
+      item { OverclockCard(state = state, busy = state.busy, onToggle = onToggleOverclock) }
 
       item {
         BootCard(
@@ -326,6 +339,8 @@ private fun TelemetryCard(state: KernelState) {
       MetaRow("Memory", "${state.telemetry.memAvailableMb} free / ${state.telemetry.memTotalMb}")
       MetaRow("Battery temp", state.telemetry.batteryTempC.ifBlank { "Unavailable" })
       MetaRow("Thermal zone", state.telemetry.thermalTempC.ifBlank { "Unavailable" })
+      MetaRow("TCP congestion", state.telemetry.tcpCongestion.ifBlank { "Unknown" })
+      MetaRow("Profile override", state.telemetry.fkmProfile.ifBlank { "auto" })
       MetaRow("Available governors", state.availableGovernors.joinToString().ifBlank { "Unavailable" })
     }
   }
@@ -589,6 +604,150 @@ private fun PolicyCard(policy: PolicySnapshot) {
       MetaRow("Current freq", policy.currentFreq)
       MetaRow("Freq range", "${policy.minFreq} - ${policy.maxFreq}")
       MetaRow("Rate limits", "${policy.upRateLimit} / ${policy.downRateLimit}")
+    }
+  }
+}
+
+@Composable
+private fun GpuCard(state: KernelState, busy: Boolean, onSetGovernor: (String) -> Unit) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = Color(0xCC101923)),
+    shape = RoundedCornerShape(24.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Text("GPU Governor", style = MaterialTheme.typography.titleLarge, color = Color.White)
+      if (state.gpuState.availableGovernors.isEmpty()) {
+        Text("Not available on this device", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C4D2))
+      } else {
+        MetaRow("Active", state.gpuState.governor)
+        MetaRow("Frequency", state.gpuState.currentFreq)
+        MetaRow("Range", "${state.gpuState.minFreq} - ${state.gpuState.maxFreq}")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          state.gpuState.availableGovernors.forEach { gov ->
+            FilterChip(
+              selected = gov == state.gpuState.governor,
+              onClick = { onSetGovernor(gov) },
+              label = { Text(gov) },
+              enabled = !busy
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun IoSchedulerCard(state: KernelState, busy: Boolean, onSetScheduler: (String) -> Unit) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = Color(0xCC101923)),
+    shape = RoundedCornerShape(24.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Text("I/O Scheduler", style = MaterialTheme.typography.titleLarge, color = Color.White)
+      if (state.ioState.availableSchedulers.isEmpty()) {
+        Text("Not available on this device", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C4D2))
+      } else {
+        MetaRow("Active", state.ioState.activeScheduler)
+        MetaRow("Device", state.ioState.blockDevice)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          state.ioState.availableSchedulers.forEach { sched ->
+            FilterChip(
+              selected = sched == state.ioState.activeScheduler,
+              onClick = { onSetScheduler(sched) },
+              label = { Text(sched) },
+              enabled = !busy
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun DisplayCard(state: KernelState, busy: Boolean, onSetMode: (String) -> Unit) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = Color(0xCC101923)),
+    shape = RoundedCornerShape(24.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Text("Display Control", style = MaterialTheme.typography.titleLarge, color = Color.White)
+      if (!state.displayState.available) {
+        Text("Not available on this device", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB7C4D2))
+      } else {
+        MetaRow("Current mode", state.displayState.currentMode)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          state.displayState.availableModes.forEach { mode ->
+            FilterChip(
+              selected = mode == state.displayState.currentMode,
+              onClick = { onSetMode(mode) },
+              label = { Text(mode) },
+              enabled = !busy
+            )
+          }
+        }
+        Text(
+          "Controls display refresh rate. 60Hz saves battery, 120Hz maximizes smoothness.",
+          style = MaterialTheme.typography.bodySmall,
+          color = Color(0xFFB7C4D2)
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun OverclockCard(state: KernelState, busy: Boolean, onToggle: (Boolean) -> Unit) {
+  Card(
+    colors = CardDefaults.cardColors(containerColor = Color(0xCC101923)),
+    shape = RoundedCornerShape(24.dp)
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Text("CPU Overclock", style = MaterialTheme.typography.titleLarge, color = Color.White)
+      Text(
+        "Conservative overclock (5-10% above stock). Thermal safety limits enforced automatically.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = Color(0xFFB7C4D2)
+      )
+      MetaRow("Status", if (state.overclockState.enabled) "Enabled" else "Disabled")
+      MetaRow("Thermal safe", if (state.overclockState.thermalSafe) "Yes" else "No - throttled")
+      MetaRow("Current max (policy7)", state.overclockState.currentMaxFreq)
+      MetaRow("OC target (policy7)", state.overclockState.overclockMaxFreq)
+      MetaRow("Thermal", state.overclockState.thermalTemp)
+      if (state.overclockState.safetyMessage.isNotBlank()) {
+        Text(
+          state.overclockState.safetyMessage,
+          style = MaterialTheme.typography.bodyMedium,
+          color = Color(0xFFFF6B6B)
+        )
+      }
+      SwitchRow(
+        label = "Enable overclock",
+        description = "Push CPU frequencies 5-10% above stock maximum. Use at your own risk.",
+        checked = state.overclockState.enabled,
+        enabled = !busy && state.overclockState.thermalSafe,
+        onCheckedChange = { onToggle(it) }
+      )
+      if (!state.overclockState.thermalSafe) {
+        Text(
+          "Overclock disabled: device temperature too high.",
+          style = MaterialTheme.typography.bodySmall,
+          color = Color(0xFFFF6B6B)
+        )
+      }
     }
   }
 }

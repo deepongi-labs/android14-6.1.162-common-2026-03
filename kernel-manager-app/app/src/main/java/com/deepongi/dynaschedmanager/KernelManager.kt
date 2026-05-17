@@ -126,6 +126,53 @@ class KernelManager(private val context: Context) {
     manager.enqueue(request)
   }
 
+  suspend fun setGpuGovernor(governor: String): String {
+    val script = """
+      echo "$governor" > /data/local/tmp/.dynasched_gpu_governor
+      for node in /sys/class/devfreq/*/governor; do
+        [ -e "${'$'}node" ] && echo "$governor" > "${'$'}node" 2>/dev/null || true
+      done
+    """.trimIndent()
+    val result = RootShell.run(script)
+    return if (result.exitCode == 0) "GPU governor set to $governor" else result.stderr.ifBlank { "Failed to set GPU governor." }
+  }
+
+  suspend fun setIoScheduler(scheduler: String): String {
+    val script = """
+      echo "$scheduler" > /data/local/tmp/.dynasched_io_scheduler
+      for queue in /sys/block/*/queue/scheduler; do
+        [ -e "${'$'}queue" ] && echo "$scheduler" > "${'$'}queue" 2>/dev/null || true
+      done
+    """.trimIndent()
+    val result = RootShell.run(script)
+    return if (result.exitCode == 0) "I/O scheduler set to $scheduler" else result.stderr.ifBlank { "Failed to set I/O scheduler." }
+  }
+
+  suspend fun setDisplayMode(mode: String): String {
+    val script = """
+      echo "$mode" > /data/local/tmp/.dynasched_display_mode
+    """.trimIndent()
+    val result = RootShell.run(script)
+    return if (result.exitCode == 0) "Display mode set to $mode" else result.stderr.ifBlank { "Failed to set display mode." }
+  }
+
+  suspend fun setOverclockEnabled(enabled: Boolean): String {
+    val value = if (enabled) "enabled" else "disabled"
+    val safetyScript = if (!enabled) """
+      # Reset to safe max frequencies when disabling
+      echo 1900000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
+      echo 2300000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null || true
+      echo 2400000 > /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq 2>/dev/null || true
+      echo 2700000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null || true
+    """.trimIndent() else ""
+    val script = """
+      echo "$value" > /data/local/tmp/.dynasched_overclock
+      $safetyScript
+    """.trimIndent()
+    val result = RootShell.run(script)
+    return if (result.exitCode == 0) "Overclock ${if (enabled) "enabled" else "disabled"}" else result.stderr.ifBlank { "Failed to toggle overclock." }
+  }
+
   private fun parseState(raw: String, prefs: StoredPrefs): KernelState {
     val lines = raw.lines().filter { it.isNotBlank() }
     val dynaschedSupported = lines.value("supported") == "1"
@@ -178,6 +225,39 @@ class KernelManager(private val context: Context) {
     val profile = detectProfile(policies)
     val managedKernel = dynaschedSupported && "dynasched" in available
 
+    // GPU state
+    val gpuState = GpuState(
+      governor = lines.value("gpu_governor").ifBlank { "unknown" },
+      currentFreq = lines.value("gpu_freq").ifBlank { "n/a" },
+      minFreq = lines.value("gpu_min").ifBlank { "n/a" },
+      maxFreq = lines.value("gpu_max").ifBlank { "n/a" },
+      availableGovernors = lines.value("gpu_available").split(" ").filter { it.isNotBlank() }
+    )
+
+    // I/O scheduler state
+    val ioState = IoSchedulerState(
+      activeScheduler = lines.value("io_scheduler").ifBlank { "unknown" },
+      availableSchedulers = lines.value("io_available").split(" ").filter { it.isNotBlank() },
+      blockDevice = lines.value("io_device").ifBlank { "sda" }
+    )
+
+    // Display state
+    val displayState = DisplayState(
+      currentMode = lines.value("display_mode").ifBlank { "auto" }
+    )
+
+    // Overclock state
+    val overclockState = OverclockState(
+      enabled = lines.value("overclock_enabled") == "enabled",
+      thermalSafe = (normalizeTemp(lines.value("thermal_temp")).removeSuffix(" C").toFloatOrNull() ?: 0f) < 85f,
+      currentMaxFreq = policies.firstOrNull { it.name == "policy7" }?.maxFreq ?: "n/a",
+      overclockMaxFreq = "3000000",
+      thermalTemp = normalizeTemp(lines.value("thermal_temp")),
+      safetyMessage = if ((normalizeTemp(lines.value("thermal_temp")).removeSuffix(" C").toFloatOrNull() ?: 0f) >= 85f) {
+        "Thermal limit reached. Overclock disabled for safety."
+      } else ""
+    )
+
     val state = KernelState(
       rootAvailable = true,
       dynaschedSupported = dynaschedSupported,
@@ -203,6 +283,10 @@ class KernelManager(private val context: Context) {
       activeProfile = profile ?: prefs.lastProfile,
       customTuning = customTuning,
       diagnostics = diagnostics,
+      gpuState = gpuState,
+      ioState = ioState,
+      displayState = displayState,
+      overclockState = overclockState,
       statusMessage = if (managedKernel) {
         "Managed kernel detected. Dynasched controls are live."
       } else if (dynaschedSupported) {
@@ -283,6 +367,47 @@ class KernelManager(private val context: Context) {
     echo "tcp_congestion=${'$'}{TCP_CONG}"
     echo "tcp_available=${'$'}{TCP_AVAILABLE}"
     echo "fkm_profile=${'$'}{FKM_PROFILE}"
+    # GPU state
+    GPU_GOV="unknown"
+    GPU_FREQ="n/a"
+    GPU_MIN="n/a"
+    GPU_MAX="n/a"
+    GPU_AVAILABLE=""
+    for devfreq in /sys/class/devfreq/*; do
+      [ -d "${'$'}devfreq" ] || continue
+      GPU_GOV=${'$'}(cat "${'$'}devfreq/governor" 2>/dev/null || echo unknown)
+      GPU_FREQ=${'$'}(cat "${'$'}devfreq/cur_freq" 2>/dev/null || echo n/a)
+      GPU_MIN=${'$'}(cat "${'$'}devfreq/min_freq" 2>/dev/null || echo n/a)
+      GPU_MAX=${'$'}(cat "${'$'}devfreq/max_freq" 2>/dev/null || echo n/a)
+      GPU_AVAILABLE=${'$'}(cat "${'$'}devfreq/available_governors" 2>/dev/null || echo "")
+      break
+    done
+    echo "gpu_governor=${'$'}{GPU_GOV}"
+    echo "gpu_freq=${'$'}{GPU_FREQ}"
+    echo "gpu_min=${'$'}{GPU_MIN}"
+    echo "gpu_max=${'$'}{GPU_MAX}"
+    echo "gpu_available=${'$'}{GPU_AVAILABLE}"
+    # I/O scheduler state
+    IO_SCHED="unknown"
+    IO_AVAILABLE=""
+    IO_DEVICE="sda"
+    for blk in /sys/block/sd* /sys/block/mmcblk* /sys/block/dm-*; do
+      [ -e "${'$'}blk/queue/scheduler" ] || continue
+      IO_DEVICE=${'$'}(basename "${'$'}blk")
+      IO_SCHED_RAW=${'$'}(cat "${'$'}blk/queue/scheduler" 2>/dev/null || echo "")
+      IO_SCHED=${'$'}(echo "${'$'}IO_SCHED_RAW" | grep -o '\[.*\]' | tr -d '[]')
+      IO_AVAILABLE=${'$'}(echo "${'$'}IO_SCHED_RAW" | tr -d '[]')
+      break
+    done
+    echo "io_scheduler=${'$'}{IO_SCHED}"
+    echo "io_available=${'$'}{IO_AVAILABLE}"
+    echo "io_device=${'$'}{IO_DEVICE}"
+    # Display mode state
+    DISPLAY_MODE=${'$'}(cat /data/local/tmp/.dynasched_display_mode 2>/dev/null || echo auto)
+    echo "display_mode=${'$'}{DISPLAY_MODE}"
+    # Overclock state
+    OC_ENABLED=${'$'}(cat /data/local/tmp/.dynasched_overclock 2>/dev/null || echo disabled)
+    echo "overclock_enabled=${'$'}{OC_ENABLED}"
     for policy in /sys/devices/system/cpu/cpufreq/policy*; do
       [ -d "${'$'}policy" ] || continue
       name="${'$'}(basename "${'$'}policy")"

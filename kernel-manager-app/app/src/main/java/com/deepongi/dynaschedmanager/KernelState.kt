@@ -98,6 +98,34 @@ data class ReleaseInfo(
   val publishedAt: String
 )
 
+data class GpuState(
+  val governor: String = "unknown",
+  val currentFreq: String = "n/a",
+  val minFreq: String = "n/a",
+  val maxFreq: String = "n/a",
+  val availableGovernors: List<String> = emptyList()
+)
+
+data class IoSchedulerState(
+  val activeScheduler: String = "unknown",
+  val availableSchedulers: List<String> = emptyList(),
+  val blockDevice: String = "sda"
+)
+
+data class DisplayState(
+  val currentMode: String = "auto",
+  val availableModes: List<String> = listOf("60hz", "120hz", "auto")
+)
+
+data class OverclockState(
+  val enabled: Boolean = false,
+  val thermalSafe: Boolean = true,
+  val currentMaxFreq: String = "n/a",
+  val overclockMaxFreq: String = "3000000",
+  val thermalTemp: String = "n/a",
+  val safetyMessage: String = ""
+)
+
 data class KernelState(
   val rootAvailable: Boolean = false,
   val dynaschedSupported: Boolean = false,
@@ -110,6 +138,10 @@ data class KernelState(
   val activeProfile: KernelProfile = KernelProfile.Balanced,
   val customTuning: CustomTuning = CustomTuning(),
   val diagnostics: DiagnosticsReport = DiagnosticsReport(),
+  val gpuState: GpuState = GpuState(),
+  val ioState: IoSchedulerState = IoSchedulerState(),
+  val displayState: DisplayState = DisplayState(),
+  val overclockState: OverclockState = OverclockState(),
   val latestRelease: ReleaseInfo? = null,
   val backupPayload: String = "",
   val statusMessage: String = "Loading...",

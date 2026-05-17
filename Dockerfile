@@ -18,11 +18,13 @@ RUN apt-get update \
     flex \
     git \
     kmod \
+    lz4 \
     libelf-dev \
     libncurses-dev \
     libssl-dev \
-    llvm \
-    lld \
+    llvm-17 \
+    lld-17 \
+    clang-17 \
     make \
     openssl \
     pahole \

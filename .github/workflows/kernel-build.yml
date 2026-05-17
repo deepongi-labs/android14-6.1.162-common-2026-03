@@ -474,17 +474,26 @@ jobs:
             local target="$4"
 
             echo "::group::Sync ${name}"
+
+            # If target is a submodule gitlink or has stale .git/modules entry, nuke it
+            if [ -f "${target}/.git" ]; then
+              echo "⚠️ ${target} is a submodule gitlink; removing for standalone sync"
+              rm -rf "$target"
+              rm -rf ".git/modules/${target}" 2>/dev/null || true
+            fi
+
             if [ -d "${target}/.git" ]; then
               git -C "$target" remote set-url origin "$url"
               # Clean working tree FIRST to avoid checkout conflicts from previously applied patches
               git -C "$target" reset --hard HEAD
               git -C "$target" clean -fdx
               git -C "$target" fetch --depth=1 origin "$ref"
-              git -C "$target" checkout --detach FETCH_HEAD
+              git -C "$target" checkout FETCH_HEAD
               git -C "$target" reset --hard FETCH_HEAD
               git -C "$target" clean -fdx
             else
               rm -rf "$target"
+              rm -rf ".git/modules/${target}" 2>/dev/null || true
               # Try branch first, fall back to commit SHA
               if git ls-remote --heads "$url" "$ref" | grep -q "$ref"; then
                 git clone --depth=1 --branch="$ref" "$url" "$target"

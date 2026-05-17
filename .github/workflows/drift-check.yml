@@ -39,20 +39,21 @@ jobs:
       force_clean_build: false
       enable_telegram: false
       create_release: false
-      tuning_profile: balanced
-      lto_mode: none
-      make_jobs: auto
-      include_runtime_tuner: false
-      governor_mode: stock_schedutil
-      kerneltoast_patch_policy: best_effort
       dry_run_only: true
-      kernel_ref: ${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
-      susfs_ref: ${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
-      tiann_ref: ${{ inputs.tiann_ref || 'master' }}
-      kowsu_ref: master
-      resukisu_ref: main
-      next_ref: dev
-      strict_susfs: true
+      refs: |
+        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+        susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
+        tiann_ref=${{ inputs.tiann_ref || 'master' }}
+        kowsu_ref=master
+        resukisu_ref=main
+        next_ref=dev
+      build_options: |
+        tuning_profile=balanced
+        lto_mode=none
+        make_jobs=auto
+        include_runtime_tuner=false
+        governor_mode=stock_schedutil
+        kerneltoast_patch_policy=best_effort
 
   drift-tiann:
     name: Drift / tiann
@@ -64,17 +65,18 @@ jobs:
       force_clean_build: false
       enable_telegram: false
       create_release: false
-      tuning_profile: balanced
-      lto_mode: none
-      make_jobs: auto
-      include_runtime_tuner: false
-      governor_mode: stock_schedutil
-      kerneltoast_patch_policy: best_effort
       dry_run_only: true
-      kernel_ref: ${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
-      susfs_ref: ${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
-      tiann_ref: ${{ inputs.tiann_ref || 'master' }}
-      kowsu_ref: master
-      resukisu_ref: main
-      next_ref: dev
-      strict_susfs: true
+      refs: |
+        kernel_ref=${{ inputs.kernel_ref || 'android14-6.1-2026-03' }}
+        susfs_ref=${{ inputs.susfs_ref || 'gki-android14-6.1-dev' }}
+        tiann_ref=${{ inputs.tiann_ref || 'master' }}
+        kowsu_ref=master
+        resukisu_ref=main
+        next_ref=dev
+      build_options: |
+        tuning_profile=balanced
+        lto_mode=none
+        make_jobs=auto
+        include_runtime_tuner=false
+        governor_mode=stock_schedutil
+        kerneltoast_patch_policy=best_effort

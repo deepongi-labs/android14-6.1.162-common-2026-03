@@ -168,9 +168,6 @@ jobs:
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
       strict_susfs: ${{ steps.config.outputs.strict_susfs }}
     steps:
-      - name: Cancel Workflow Action
-        uses: styfle/cancel-workflow-action@0.13.1
-
       - name: Record Build Start Time
         id: timestamp
         run: |
@@ -364,9 +361,6 @@ jobs:
       STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
 
     steps:
-      - name: Cancel Workflow Action
-        uses: styfle/cancel-workflow-action@0.13.1
-
       - name: Pre-Clean Build Artifacts
         run: |
           echo "🧹 Cleaning previous build artifacts..."

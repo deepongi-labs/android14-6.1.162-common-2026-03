@@ -1,0 +1,227 @@
+name: Build True Pixel 8-series Kernel (Bazel/Kleaf)
+
+# Builds a real Pixel 8a (akita) or Pixel 8/8 Pro (shusky) kernel from
+# Google's manifest using `repo` + `tools/bazel`. Intended for the
+# self-hosted WSL Arch runner labeled [self-hosted, linux, X64, pixel8].
+#
+# This is a parallel pipeline to enhance-kernel-build.yml (which builds GKI
+# and packages with AnyKernel3). The two are independent.
+
+permissions:
+  contents: write
+  packages: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'Pixel device codename'
+        required: true
+        default: 'akita'
+        type: choice
+        options:
+          - akita
+          - shusky
+      manifest_branch:
+        description: 'Override manifest branch (blank = default for device)'
+        required: false
+        default: ''
+        type: string
+      ksu_variant:
+        description: 'KernelSU variant'
+        required: true
+        default: 'next'
+        type: choice
+        options:
+          - next
+          - tiann
+          - kowsu
+          - resukisu
+          - enhance
+      enable_susfs:
+        description: 'Apply SuSFS patches'
+        required: false
+        default: true
+        type: boolean
+      patch_policy:
+        description: 'Patch policy when something fails'
+        required: false
+        default: 'best_effort'
+        type: choice
+        options:
+          - strict
+          - best_effort
+      force_clean:
+        description: 'Wipe the manifest tree before sync (slow)'
+        required: false
+        default: false
+        type: boolean
+      dry_run_only:
+        description: 'Sync + integrate KSU + apply patches, skip Bazel build'
+        required: false
+        default: false
+        type: boolean
+      bazel_target_kind:
+        description: 'Bazel target to build'
+        required: false
+        default: 'dist'
+        type: choice
+        options:
+          - dist          # //private/devices/google/<dev>:<dev>_dist (full image+modules+ramdisk)
+          - kernel        # //private/devices/google/<dev>:<dev>      (kernel only)
+      ksu_ref:
+        description: 'Override KSU ref (branch or SHA)'
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: pixel8-true-${{ github.ref_name }}-${{ inputs.device }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, X64, pixel8]
+    timeout-minutes: 240
+    env:
+      ROOT_BASE: ${{ format('/mnt/Android/{0}', inputs.device) }}
+      WORKFLOW_PATCHES_DIR: ${{ github.workspace }}/.github/patches
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Pre-flight (host tools)
+        run: |
+          set -e
+          for bin in repo bazel git curl python3 java patch; do
+            command -v $bin >/dev/null 2>&1 || { echo "::error::missing $bin"; exit 2; }
+          done
+          echo "::group::Versions"
+          repo --version 2>&1 | head -3 || true
+          java -version 2>&1 | head -1 || true
+          python3 --version
+          git --version
+          echo "::endgroup::"
+
+      - name: Resolve device defaults
+        id: dev
+        run: |
+          set -e
+          DEVICE="${{ inputs.device }}"
+          BRANCH_INPUT="${{ inputs.manifest_branch }}"
+          case "$DEVICE" in
+            akita)  DEFAULT_BRANCH="android-gs-akita-6.1-android16"  ;;
+            shusky) DEFAULT_BRANCH="android-gs-shusky-6.1-android16" ;;
+            *) echo "::error::unsupported device $DEVICE"; exit 2 ;;
+          esac
+          BRANCH="${BRANCH_INPUT:-$DEFAULT_BRANCH}"
+          echo "device=$DEVICE"             >> "$GITHUB_OUTPUT"
+          echo "manifest_branch=$BRANCH"    >> "$GITHUB_OUTPUT"
+          echo "manifest_url=https://android.googlesource.com/kernel/manifest" >> "$GITHUB_OUTPUT"
+
+          case "${{ inputs.ksu_variant }}" in
+            tiann)    URL=https://github.com/tiann/KernelSU.git;            REF=${{ inputs.ksu_ref || '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a' }} ;;
+            kowsu)    URL=https://github.com/KOWX712/KernelSU.git;          REF=${{ inputs.ksu_ref || 'master' }} ;;
+            resukisu) URL=https://github.com/ReSukiSU/ReSukiSU.git;         REF=${{ inputs.ksu_ref || 'main' }} ;;
+            next)     URL=https://github.com/KernelSU-Next/KernelSU-Next.git; REF=${{ inputs.ksu_ref || 'dev' }} ;;
+            enhance)  URL=https://github.com/KernelSU-Next/KernelSU-Next.git; REF=${{ inputs.ksu_ref || 'dev' }} ;;
+            *) echo "::error::unsupported ksu_variant"; exit 2 ;;
+          esac
+          echo "ksu_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "ksu_ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Optional clean root
+        if: inputs.force_clean
+        run: |
+          set -e
+          echo "Wiping ${ROOT_BASE} (force_clean=true)"
+          rm -rf "$ROOT_BASE"
+          mkdir -p "$ROOT_BASE"
+
+      - name: Sync manifest tree (repo)
+        run: |
+          mkdir -p "$ROOT_BASE"
+          bash "${{ github.workspace }}/scripts/sync-pixel8-true-kernel.sh" \
+            "$ROOT_BASE" \
+            "${{ steps.dev.outputs.manifest_url }}" \
+            "${{ steps.dev.outputs.manifest_branch }}"
+
+      - name: Integrate KernelSU
+        run: |
+          bash "${{ github.workspace }}/scripts/integrate-ksu-on-akita.sh" \
+            "$ROOT_BASE" \
+            "${{ inputs.ksu_variant }}" \
+            "${{ steps.dev.outputs.ksu_url }}" \
+            "${{ steps.dev.outputs.ksu_ref }}"
+
+      - name: Apply SuSFS + workflow patches
+        if: inputs.enable_susfs
+        run: |
+          bash "${{ github.workspace }}/scripts/apply-susfs-on-akita.sh" \
+            "$ROOT_BASE" \
+            "${{ inputs.ksu_variant }}" \
+            "$WORKFLOW_PATCHES_DIR" \
+            "${{ inputs.patch_policy }}"
+
+      - name: Stop after dry run
+        if: inputs.dry_run_only
+        run: |
+          echo "::notice::dry_run_only=true — skipping Bazel build"
+          exit 0
+
+      - name: Bazel build (Kleaf)
+        if: ${{ !inputs.dry_run_only }}
+        run: |
+          set -e
+          cd "$ROOT_BASE"
+          DEV="${{ steps.dev.outputs.device }}"
+          if [ "${{ inputs.bazel_target_kind }}" = "dist" ]; then
+            TARGET="//private/devices/google/${DEV}:${DEV}_dist"
+            DIST_DIR="$ROOT_BASE/out/${DEV}/dist"
+            mkdir -p "$DIST_DIR"
+            tools/bazel run \
+              --config=fast \
+              --disk_cache=/mnt/ccache/.bazel-cache \
+              "$TARGET" -- --dist_dir="$DIST_DIR"
+            echo "DIST_DIR=$DIST_DIR" >> "$GITHUB_ENV"
+          else
+            TARGET="//private/devices/google/${DEV}:${DEV}"
+            tools/bazel build \
+              --config=fast \
+              --disk_cache=/mnt/ccache/.bazel-cache \
+              "$TARGET"
+            echo "DIST_DIR=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Collect artifacts
+        if: ${{ !inputs.dry_run_only }}
+        run: |
+          set -e
+          DEV="${{ steps.dev.outputs.device }}"
+          OUT="${{ github.workspace }}/release-assets"
+          mkdir -p "$OUT"
+
+          if [ -n "${DIST_DIR:-}" ] && [ -d "$DIST_DIR" ]; then
+            cp -v "$DIST_DIR"/Image                   "$OUT/" 2>/dev/null || true
+            cp -v "$DIST_DIR"/Image.lz4               "$OUT/" 2>/dev/null || true
+            cp -v "$DIST_DIR"/boot.img                "$OUT/" 2>/dev/null || true
+            cp -v "$DIST_DIR"/vendor_kernel_boot.img  "$OUT/" 2>/dev/null || true
+            cp -v "$DIST_DIR"/dtbo.img                "$OUT/" 2>/dev/null || true
+            cp -v "$DIST_DIR"/system_dlkm.img         "$OUT/" 2>/dev/null || true
+            (cd "$DIST_DIR" && tar -czf "$OUT/${DEV}-dist.tar.gz" .) || true
+            ls -la "$OUT"
+          else
+            echo "::warning::DIST_DIR not set or missing; skipped artifact copy"
+          fi
+
+      - name: Upload artifacts
+        if: ${{ !inputs.dry_run_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel8-${{ steps.dev.outputs.device }}-${{ inputs.ksu_variant }}-${{ github.run_number }}
+          path: release-assets/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,9 @@
+# Keep shell scripts LF on all platforms (they run in Linux/WSL).
+*.sh        text eol=lf
+*.bash      text eol=lf
+# Patches and YAML stay LF too (Bash heredocs, GitHub Actions).
+*.patch     text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+# Powershell stays platform-default (CRLF on Windows is fine).
+*.ps1       text

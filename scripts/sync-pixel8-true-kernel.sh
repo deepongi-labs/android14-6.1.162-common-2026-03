@@ -9,18 +9,18 @@
 # Examples:
 #   sync-pixel8-true-kernel.sh "$HOME/pixel8-akita"  \\
 #       https://android.googlesource.com/kernel/manifest \\
-#       android-gs-akita-6.1-android15-qpr2
+#       android-gs-akita-6.1-android16-beta
 #
 #   sync-pixel8-true-kernel.sh "$HOME/pixel8-shusky" \\
 #       https://android.googlesource.com/kernel/manifest \\
-#       android-gs-shusky-6.1-android15-qpr2
+#       android-gs-shusky-6.1-android16-beta
 #
 # Idempotent. Re-running just refreshes refs.
 set -euo pipefail
 
 ROOT="${1:?root_dir required}"
 MANIFEST_URL="${2:-https://android.googlesource.com/kernel/manifest}"
-MANIFEST_BRANCH="${3:-android-gs-akita-6.1-android15-qpr2}"
+MANIFEST_BRANCH="${3:-android-gs-akita-6.1-android16-beta}"
 
 REPO_BIN="${REPO_BIN:-/usr/local/bin/repo}"
 JOBS="${JOBS:-$(nproc)}"

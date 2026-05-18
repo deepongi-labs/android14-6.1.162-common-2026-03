@@ -146,7 +146,7 @@ env:
 
 jobs:
   setup:
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
@@ -341,7 +341,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
     timeout-minutes: 120
     concurrency:
       group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
@@ -2306,7 +2306,7 @@ jobs:
 
   create_release:
     needs: [setup, build]
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
     if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
@@ -2364,7 +2364,7 @@ jobs:
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
     if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Send Telegram Notification

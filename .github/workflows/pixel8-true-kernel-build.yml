@@ -112,9 +112,13 @@ jobs:
           set -e
           DEVICE="${{ inputs.device }}"
           BRANCH_INPUT="${{ inputs.manifest_branch }}"
+          # NOTE: Google's "android-gs-<dev>-6.1-android16" manifest branch
+          # exists in kernel/manifest only — sub-projects don't carry it yet.
+          # Until Google publishes that line broadly (cycle Q2/Q4 2026), we
+          # default to the latest fully-published stable line.
           case "$DEVICE" in
-            akita)  DEFAULT_BRANCH="android-gs-akita-6.1-android16"  ;;
-            shusky) DEFAULT_BRANCH="android-gs-shusky-6.1-android16" ;;
+            akita)  DEFAULT_BRANCH="android-gs-akita-6.1-android15-qpr2"  ;;
+            shusky) DEFAULT_BRANCH="android-gs-shusky-6.1-android15-qpr2" ;;
             *) echo "::error::unsupported device $DEVICE"; exit 2 ;;
           esac
           BRANCH="${BRANCH_INPUT:-$DEFAULT_BRANCH}"

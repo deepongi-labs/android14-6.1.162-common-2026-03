@@ -2307,7 +2307,7 @@ jobs:
   create_release:
     needs: [setup, build]
     runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
-    if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.build.result != 'skipped' && needs.setup.outputs.dry_run != 'true'
+    if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v5

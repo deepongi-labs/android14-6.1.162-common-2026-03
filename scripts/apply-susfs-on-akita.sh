@@ -52,17 +52,18 @@ apply() {
   fi
 }
 
+# Drift-fix patches FIRST: these add upstream-divergent #include lines so
+# the SuSFS 50-patch hunk anchors line up against akita's aosp/ tree.
+for p in "$PATCHES_DIR/global"/*.patch; do
+  [ -f "$p" ] || continue
+  apply "$p" "global/$(basename "$p")" true
+done
+
 # SuSFS-in-GKI patch (reuses naming from the GKI workflow patch sets).
 apply "$PATCHES_DIR/$VARIANT/50_add_susfs_in_gki-android14-6.1.patch" "$VARIANT/50_add_susfs_in_gki" false
 apply "$PATCHES_DIR/$VARIANT/10_enable_susfs_for_ksu.patch"          "$VARIANT/10_enable_susfs_for_ksu" true
 apply "$PATCHES_DIR/$VARIANT/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch" "$VARIANT/20_spoof_lkm" true
 apply "$PATCHES_DIR/$VARIANT/30-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch" "$VARIANT/30_spoof_lkm" true
-
-# Global fixes (apply to common kernel regardless of variant)
-for p in "$PATCHES_DIR/global"/*.patch; do
-  [ -f "$p" ] || continue
-  apply "$p" "global/$(basename "$p")" true
-done
 
 echo "[patch] manifest -> $manifest"
 echo "[patch] failures -> $failure_log"

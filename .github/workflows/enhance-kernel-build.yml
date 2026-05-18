@@ -84,7 +84,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2026-06'
+        default: 'android14-6.1-2025-08_r11'
         type: string
       susfs_ref:
         description: 'Override SuSFS ref'

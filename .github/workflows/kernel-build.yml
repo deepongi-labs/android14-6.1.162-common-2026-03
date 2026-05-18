@@ -72,7 +72,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2026-06'
+        default: 'android14-6.1-2025-08_r11'
         type: string
 
   workflow_call:
@@ -274,7 +274,7 @@ jobs:
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-06}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2025-08_r11}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
@@ -582,54 +582,47 @@ jobs:
             git -C "$target" checkout --detach FETCH_HEAD
           }
 
-          # Nuke the rogue KernelSU-Next folder as well to clean up the runner
-          cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
+          # Clean any prior KSU artifacts from the kernel tree (legacy KernelSU/ folder,
+          # symlinks, and integrated drivers/kernelsu/) plus the workspace-level staging dir.
+          rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
+          rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
-            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
-            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
-            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
-            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
+            # 'enhance' is built on top of KernelSU-Next plus enhance-specific patches.
+            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}" ;;
+            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
+            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}" ;;
+            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}" ;;
+            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}" ;;
           esac
 
+          # Clone the KSU source tree to a workspace-local staging dir OUTSIDE the
+          # kernel tree. The kernel/ subdirectory will later be copied directly into
+          # kernel/drivers/kernelsu/ by the "Integrate KernelSU into kernel tree" step,
+          # after all KSU-side patches have been applied. This keeps the kernel/ tree
+          # free of any auxiliary KernelSU/ folder.
+          KSU_STAGE="${GITHUB_WORKSPACE}/.ksu-src"
           echo "::group::Sync KernelSU Variant"
-          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" KernelSU
-          echo "KernelSU repo: $KSU_REPO"
-          echo "KernelSU ref: $KSU_BRANCH"
+          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" "$KSU_STAGE"
+          echo "KernelSU repo:    $KSU_REPO"
+          echo "KernelSU ref:     $KSU_BRANCH"
+          echo "Staged at:        $KSU_STAGE"
           echo "::endgroup::"
 
-          # We manually integrate KSU to prevent fork setup scripts from rogue cloning
-          if [ "$USE_SETUP_SH" = "true" ]; then
-            echo "🔗 Manually symlinking KernelSU..."
-            mkdir -p drivers
-            if [ ! -d "KernelSU/kernel" ]; then
-              echo "❌ KernelSU/kernel directory not found after clone"
-              ls -la KernelSU/ || true
-              exit 1
-            fi
-            ln -sf ../KernelSU/kernel drivers/kernelsu
-          else
-            echo "📋 Manually copying KernelSU (No symlink)..."
-            mkdir -p drivers
-            if [ ! -d "KernelSU/kernel" ]; then
-              echo "❌ KernelSU/kernel directory not found after clone"
-              ls -la KernelSU/ || true
-              exit 1
-            fi
-            cp -r KernelSU/kernel drivers/kernelsu
+          if [ ! -d "$KSU_STAGE/kernel" ]; then
+            echo "❌ ${KSU_STAGE}/kernel directory not found after clone"
+            ls -la "$KSU_STAGE" || true
+            exit 1
           fi
 
-          # Add KSU to kernel makefiles
-          grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          grep -q "kernelsu" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
-          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV && echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_STAGE=$KSU_STAGE" >> $GITHUB_ENV
           echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
 
       - name: Get KSU Version Info & Commit
         run: |
-          cd kernel/KernelSU
+          cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
           git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
 
           if [ "${{ matrix.variant }}" = "resukisu" ]; then
@@ -949,25 +942,6 @@ jobs:
           if [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for tiann"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          elif [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "📋 Applying SuSFS for enhance (Tiann KernelSU base)"
-            # Kernel 6.1.173 already has #include <trace/hooks/blk.h> after internal.h,
-            # which breaks hunk #1 of the susfs patch. Inject it manually first.
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'if "susfs_is_current_ksu_domain" in text: raise SystemExit(0)' \
-              'old = "#include <linux/mnt_idmapping.h>\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n"' \
-              'new = "#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n"' \
-              'if old not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS hunk #1")' \
-              'path.write_text(text.replace(old, new, 1))' \
-              | python3 -
-            printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
-            # Apply remaining hunks; namespace.c hunk #1 already done so it will be skipped
-            patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" 2>&1 | grep -v "^Reversed\|^[0-9]* out of.*ignored" || true
-            rm -f fs/namespace.c.rej
-            printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
@@ -978,7 +952,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -1032,10 +1006,10 @@ jobs:
           # Always attempt the KernelSU-side SuSFS integration patch.
           # Some upstream variants drift over time; the helper will skip cleanly
           # when the integration is already present.
-          cd KernelSU
+          cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
 
-          VARIANT_KSU_PATCH="../../.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
-          DEFAULT_KSU_PATCH="../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          VARIANT_KSU_PATCH="${GITHUB_WORKSPACE}/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
           SUSFS_RUNTIME_ENABLED=true
 
           ksu_susfs_integrated() {
@@ -1070,8 +1044,8 @@ jobs:
           if ksu_susfs_integrated; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "next" ]; then
-            echo "🔍 Validating KernelSU-Next SuSFS integration..."
+          elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "🔍 Validating KernelSU-Next SuSFS integration (variant=${KSU_VARIANT})..."
             if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
               :
             elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
@@ -1089,58 +1063,12 @@ jobs:
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
+            echo "📋 Enforcing default-only KernelSU SuSFS patch for tiann"
             if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
               if ksu_susfs_integrated; then
                 echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
                 printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
-              elif [ "$KSU_VARIANT" = "enhance" ]; then
-                echo "📋 Applying enhance KernelSU SuSFS patch with fuzz=3 + manual rej fixes..."
-                patch -p1 --forward --fuzz=3 < "$VARIANT_KSU_PATCH" || true
-                # Fix Kbuild reject: replace KBUILD_EXTMOD block with hardcoded GKI path
-                printf '%s\n' \
-                  'from pathlib import Path' \
-                  'p = Path("kernel/Kbuild")' \
-                  't = p.read_text()' \
-                  'old = "ifdef KBUILD_EXTMOD\nccflags-y += -I$(src) -I$(src)/include\nelse\nccflags-y += -I$(srctree)/$(src) -I$(srctree)/$(src)/include\nendif"' \
-                  'new = "## As we are building gki only, no KBUILD_EXTMOD is needed\n## Since there is still a build error for 6.12 as $(src) returns absolute path, so here we just hardcode it\nccflags-y += -I$(srctree)/drivers/kernelsu -I$(srctree)/drivers/kernelsu/include"' \
-                  'if old in t: p.write_text(t.replace(old, new, 1))' \
-                  | python3 -
-                # Fix kernel_umount.c reject: remove old scenario comments block
-                printf '%s\n' \
-                  'from pathlib import Path' \
-                  'p = Path("kernel/feature/kernel_umount.c")' \
-                  't = p.read_text()' \
-                  'old = "    // There are 5 scenarios:\n    // 1. Normal app: zygote -> appuid\n    // 2. Isolated process forked from zygote: zygote -> isolated_process\n    // 3. App zygote forked from zygote: zygote -> appuid\n    // 4. Isolated process froked from app zygote: appuid -> isolated_process (already handled by 3)\n    // 5. Isolated process froked from webview zygote (no need to handle, app cannot run custom code)\n    if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {\n        return 0;\n    }\n\n    // check old process'\''s selinux context, if it is not zygote, ignore it!\n    // because some su apps may setuid to untrusted_app but they are in global mount namespace\n    // when we umount for such process, that is a disaster!\n    // also handle case 4 and 5\n    bool is_zygote_child = is_zygote(current_cred());\n    if (!is_zygote_child) {\n        pr_info(\"handle umount ignore non zygote child: %d\\n\", current->pid);\n        return 0;\n    }\n"' \
-                  'if old in t: p.write_text(t.replace(old, "", 1))' \
-                  | python3 -
-                rm -f kernel/Kbuild.rej kernel/feature/kernel_umount.c.rej
-                # Define symbols missing from the enhance custom patch
-                printf '%s\n' \
-                  'from pathlib import Path' \
-                  'files = {' \
-                  '  "kernel/feature/selinux_hide.c": [' \
-                  '    ("static struct selinux_state fake_state;", "struct selinux_state fake_state;"),' \
-                  '    ("static bool ksu_selinux_hide_running", "bool ksu_selinux_hide_running"),' \
-                  '  ],' \
-                  '}' \
-                  'for path_str, replacements in files.items():' \
-                  '  p = Path(path_str)' \
-                  '  if not p.exists(): continue' \
-                  '  t = p.read_text()' \
-                  '  for old, new in replacements:' \
-                  '    if old in t: t = t.replace(old, new, 1)' \
-                  '  p.write_text(t)' \
-                  '# Add static key definitions to init.c if missing' \
-                  'p = Path("kernel/core/init.c")' \
-                  't = p.read_text()' \
-                  'keys = "DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\nDEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n"' \
-                  'if "ksu_is_init_rc_hook_enabled" not in t:' \
-                  '  marker = "#include <linux/susfs.h>\n"' \
-                  '  if marker in t: p.write_text(t.replace(marker, marker + keys, 1))' \
-                  | python3 -
-                printf '%s | %s | applied-fuzz+manual\n' "Enhance KernelSU SuSFS patch" "$VARIANT_KSU_PATCH" >> "$PATCH_MANIFEST"
               else
                 echo "❌ Default KernelSU SuSFS patch could not be applied cleanly: $DEFAULT_KSU_PATCH"
                 printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
@@ -1233,19 +1161,19 @@ jobs:
             | python3 -
 
           if [ "$KSU_VARIANT" = "enhance" ]; then
-            ENHANCE_SPOOF_PATCH="../../.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
+            ENHANCE_SPOOF_PATCH="${GITHUB_WORKSPACE}/.github/patches/enhance/20-KernelSU-Spoof-LKM-mode-to-suppress-manager-warning.patch"
             if ! try_apply_patch "$ENHANCE_SPOOF_PATCH" "Enhance KernelSU manager compatibility spoof"; then
               echo "⚠️ Enhance manager compatibility spoof patch is stale, skipping: $ENHANCE_SPOOF_PATCH"
               printf '%s | %s | skipped-stale\n' "Enhance KernelSU manager compatibility spoof" "$ENHANCE_SPOOF_PATCH" >> "$PATCH_MANIFEST"
             fi
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
+          if { [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; } && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
             printf '%s\n' \
               'from pathlib import Path' \
               'target = Path("kernel/hook/setuid_hook.c")' \
@@ -1257,9 +1185,9 @@ jobs:
             printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
-            WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
-            echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            WK_SUSFS_FIX_DIR="${GITHUB_WORKSPACE}/.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next (variant=${KSU_VARIANT})..."
 
             try_wk_patch() {
               local patch_file="$1"
@@ -1293,6 +1221,33 @@ jobs:
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
           echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+
+      - name: Integrate KernelSU into kernel tree
+        run: |
+          set -e
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          if [ ! -d "$KSU_STAGE/kernel" ]; then
+            echo "❌ ${KSU_STAGE}/kernel missing; cannot integrate KernelSU."
+            exit 1
+          fi
+
+          # Place patched KernelSU sources directly inside the kernel tree at
+          # drivers/kernelsu/. We avoid a top-level KernelSU/ folder inside the
+          # kernel tree entirely; the staging dir lives at $GITHUB_WORKSPACE/.ksu-src.
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers
+          cp -a "$KSU_STAGE/kernel/." kernel/drivers/kernelsu/
+          echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
+
+          # Wire kernelsu/ into the upstream drivers Kbuild + Kconfig (idempotent).
+          if ! grep -q "kernelsu" kernel/drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> kernel/drivers/Makefile
+            echo "  + drivers/Makefile: obj-\$(CONFIG_KSU) += kernelsu/"
+          fi
+          if ! grep -q "kernelsu" kernel/drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' kernel/drivers/Kconfig
+            echo "  + drivers/Kconfig: source drivers/kernelsu/Kconfig"
+          fi
 
       - name: Apply Remote Patches & Source Fixes
         run: |
@@ -1770,7 +1725,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="KernelSU" ;;
+            "enhance") AK3_BRANCH="next" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

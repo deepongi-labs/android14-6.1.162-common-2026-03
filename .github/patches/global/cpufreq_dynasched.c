@@ -128,8 +128,8 @@ struct dynasched_cpu {
 };
 
 static DEFINE_PER_CPU(struct dynasched_cpu, dynasched_cpu);
-static DEFINE_MUTEX(global_tunables_lock);
-static struct dynasched_tunables *global_tunables;
+static DEFINE_MUTEX(dynasched_global_tunables_lock);
+static struct dynasched_tunables *dynasched_global_tunables;
 
 /************************ Cluster detection ***********************/
 
@@ -746,16 +746,16 @@ static int dynasched_init(struct cpufreq_policy *policy)
 	if (ret)
 		goto free_policy;
 
-	mutex_lock(&global_tunables_lock);
+	mutex_lock(&dynasched_global_tunables_lock);
 
-	if (global_tunables) {
+	if (dynasched_global_tunables) {
 		if (WARN_ON(have_governor_per_policy())) {
 			ret = -EINVAL;
 			goto stop_kthread;
 		}
 		policy->governor_data = dyn_policy;
-		dyn_policy->tunables = global_tunables;
-		gov_attr_set_get(&global_tunables->attr_set,
+		dyn_policy->tunables = dynasched_global_tunables;
+		gov_attr_set_get(&dynasched_global_tunables->attr_set,
 				 &dyn_policy->tunables_hook);
 		goto out;
 	}
@@ -772,7 +772,7 @@ static int dynasched_init(struct cpufreq_policy *policy)
 
 	gov_attr_set_init(&tunables->attr_set, &dyn_policy->tunables_hook);
 	if (!have_governor_per_policy())
-		global_tunables = tunables;
+		dynasched_global_tunables = tunables;
 
 	policy->governor_data = dyn_policy;
 	dyn_policy->tunables  = tunables;
@@ -785,17 +785,17 @@ static int dynasched_init(struct cpufreq_policy *policy)
 		goto fail;
 
 out:
-	mutex_unlock(&global_tunables_lock);
+	mutex_unlock(&dynasched_global_tunables_lock);
 	return 0;
 
 fail:
 	kobject_put(&tunables->attr_set.kobj);
 	policy->governor_data = NULL;
 	if (!have_governor_per_policy())
-		global_tunables = NULL;
+		dynasched_global_tunables = NULL;
 stop_kthread:
 	dyn_kthread_stop(dyn_policy);
-	mutex_unlock(&global_tunables_lock);
+	mutex_unlock(&dynasched_global_tunables_lock);
 free_policy:
 	kfree(dyn_policy);
 disable_fast_switch:
@@ -810,12 +810,12 @@ static void dynasched_exit(struct cpufreq_policy *policy)
 	struct dynasched_tunables *tunables = dyn_policy->tunables;
 	unsigned int count;
 
-	mutex_lock(&global_tunables_lock);
+	mutex_lock(&dynasched_global_tunables_lock);
 	count = gov_attr_set_put(&tunables->attr_set, &dyn_policy->tunables_hook);
 	policy->governor_data = NULL;
 	if (!count && !have_governor_per_policy())
-		global_tunables = NULL;
-	mutex_unlock(&global_tunables_lock);
+		dynasched_global_tunables = NULL;
+	mutex_unlock(&dynasched_global_tunables_lock);
 
 	dyn_kthread_stop(dyn_policy);
 	kfree(dyn_policy);

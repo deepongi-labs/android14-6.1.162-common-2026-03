@@ -586,7 +586,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
@@ -950,7 +950,7 @@ jobs:
             echo "📋 Enforcing default-only core SuSFS patch for tiann"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
           elif [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "📋 Applying SuSFS for enhance (KernelSU-Next base)"
+            echo "📋 Applying SuSFS for enhance (Tiann KernelSU base)"
             # Kernel 6.1.173 already has #include <trace/hooks/blk.h> after internal.h,
             # which breaks hunk #1 of the susfs patch. Inject it manually first.
             printf '%s\n' \
@@ -978,7 +978,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -1770,7 +1770,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="next" ;;
+            "enhance") AK3_BRANCH="KernelSU" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

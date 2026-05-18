@@ -22,8 +22,11 @@ jobs:
   patch-lint:
     runs-on: ubuntu-latest
     steps:
+      - name: Cancel Workflow Action
+        uses: styfle/cancel-workflow-action@0.13.1
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Fetch checkpatch.pl from kernel.org
         run: |

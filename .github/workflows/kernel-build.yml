@@ -168,6 +168,9 @@ jobs:
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
       strict_susfs: ${{ steps.config.outputs.strict_susfs }}
     steps:
+      - name: Cancel Workflow Action
+        uses: styfle/cancel-workflow-action@0.13.1
+
       - name: Record Build Start Time
         id: timestamp
         run: |
@@ -361,13 +364,16 @@ jobs:
       STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
 
     steps:
+      - name: Cancel Workflow Action
+        uses: styfle/cancel-workflow-action@0.13.1
+
       - name: Pre-Clean Build Artifacts
         run: |
           echo "🧹 Cleaning previous build artifacts..."
           rm -rf AnyKernel3 release-assets changelogs logs failure-logs success-metadata || true
 
       - name: Checkout Workflow Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           clean: false
 
@@ -448,7 +454,7 @@ jobs:
 
       - name: Cache ccache
         if: ${{ !startsWith(env.CCACHE_DIR, '/mnt/ccache') }}
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}
@@ -1403,10 +1409,14 @@ jobs:
           apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
 
           if [ "${GOVERNOR_MODE}" = "dynasched" ]; then
-            echo "🔧 Renaming schedutil governor to dynasched..."
-            apply_repo_patch_or_fail ".github/patches/global/rename_schedutil_to_dynasched.patch" "dynasched governor rename"
+            echo "🔧 Installing dynasched cluster-aware governor..."
+            cp "$GITHUB_WORKSPACE/.github/patches/global/cpufreq_dynasched.c" \
+               kernel/sched/cpufreq_dynasched.c
+            apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"
+            echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
+            printf 'dynasched governor | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
           else
-            echo "⏭️  dynasched governor rename disabled by governor_mode=${GOVERNOR_MODE}"
+            echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
           fi
 
       - name: Verify Patched Tree
@@ -2210,7 +2220,7 @@ jobs:
 
       - name: Upload Artifacts
         if: env.DRY_RUN_ONLY != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
@@ -2258,7 +2268,7 @@ jobs:
 
       - name: Upload Failure Logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
           path: failure-logs/${{ matrix.variant }}
@@ -2300,10 +2310,10 @@ jobs:
     if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result != 'cancelled' && needs.build.result != 'skipped' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-assets
 

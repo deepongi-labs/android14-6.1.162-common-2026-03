@@ -1,0 +1,33 @@
+Subject: [PATCH] sched/cpufreq: add dynasched cluster-aware governor for Tensor G3
+
+diff --git a/drivers/cpufreq/Kconfig b/drivers/cpufreq/Kconfig
+index c93954613691..2439e5cf8272 100644
+--- a/drivers/cpufreq/Kconfig
++++ b/drivers/cpufreq/Kconfig
+@@ -214,1 +214,15 @@ config CPU_FREQ_GOV_SCHEDUTIL
++
++config CPU_FREQ_GOV_DYNASCHED
++	bool "'dynasched' cluster-aware cpufreq governor (Tensor G3)"
++	depends on CPU_FREQ && SMP
++	select CPU_FREQ_GOV_ATTR_SET
++	select IRQ_WORK
++	help
++	  Cluster-aware governor for Tensor G3 (Pixel 8 series).
++	  Detects X3/A715/A510 clusters and applies per-cluster asymmetric
++	  rate limits and util headroom. Supports performance/balanced/battery
++	  bias modes selectable at runtime via sysfs.
++
++	  If in doubt, say N.
++
+ comment "CPU frequency scaling drivers"
+diff --git a/kernel/sched/build_utility.c b/kernel/sched/build_utility.c
+index 99bdd96f454f..31b2abf179af 100644
+--- a/kernel/sched/build_utility.c
++++ b/kernel/sched/build_utility.c
+@@ -73,1 +73,6 @@
++
++#ifdef CONFIG_CPU_FREQ_GOV_DYNASCHED
++# include "cpufreq_dynasched.c"
++#endif
++
+ #ifdef CONFIG_SCHED_DEBUG

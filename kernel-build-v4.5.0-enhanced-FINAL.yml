@@ -139,7 +139,7 @@ jobs:
 
     steps:
       - name: Checkout with Submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: false
           fetch-depth: 0
@@ -1304,7 +1304,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
@@ -1323,7 +1323,7 @@ jobs:
       duration: ${{ env.BUILD_DURATION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Calculate Build Duration
         run: |
@@ -1357,7 +1357,7 @@ jobs:
           echo "BUILD_DURATION=$BUILD_DURATION" >> $GITHUB_ENV
 
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
 
@@ -1688,7 +1688,7 @@ jobs:
 
       - name: Download Build Artifacts
         if: always()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: notify-artifacts
         continue-on-error: true

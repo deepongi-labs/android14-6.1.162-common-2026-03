@@ -2214,7 +2214,7 @@ jobs:
 
       - name: Upload Artifacts
         if: env.DRY_RUN_ONLY != 'true'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: kernel-${{ matrix.variant }}-${{ github.run_number }}
           path: |
@@ -2262,7 +2262,7 @@ jobs:
 
       - name: Upload Failure Logs
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
           path: failure-logs/${{ matrix.variant }}
@@ -2307,7 +2307,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download All Artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
 

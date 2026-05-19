@@ -6,14 +6,14 @@ on:
       ksu_variant:
         description: 'KernelSU variant to build'
         required: true
-        default: 'all'
+        default: 'next'
         type: choice
         options:
+          - next
           - all
           - tiann
           - kowsu
           - resukisu
-          - next
       disable_susfs:
         description: 'Disable SuSFS features'
         required: false
@@ -279,6 +279,11 @@ jobs:
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
+          # Default to upstream KernelSU-Next 'dev' branch.
+          # Special-case: if SuSFS is enabled and the user explicitly passes
+          # 'stable', remap to the susfs-aware fork branch
+          # 'next-susfs-a14-6.1-dev' so SuSFS hooks line up. 'dev' is passed
+          # through unchanged (KernelSU-Next upstream dev branch).
           RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
           if [ "${ENABLE_SUSFS}" = "true" ] && [ "${RESOLVED_NEXT_REF}" = "stable" ]; then
             echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT

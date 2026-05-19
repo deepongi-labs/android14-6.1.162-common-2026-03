@@ -81,6 +81,11 @@ on:
         required: false
         default: false
         type: boolean
+      dirty_module_abi_bypass:
+        description: 'Dirty build: force vendor module CRC/version mismatches'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -128,6 +133,7 @@ jobs:
       enable_telegram: ${{ inputs.enable_telegram }}
       create_release: ${{ inputs.create_release }}
       dry_run_only: ${{ inputs.dry_run_only }}
+      dirty_module_abi_bypass: ${{ inputs.dirty_module_abi_bypass }}
       refs: |
         kernel_ref=${{ inputs.kernel_ref }}
         susfs_ref=${{ inputs.susfs_ref }}

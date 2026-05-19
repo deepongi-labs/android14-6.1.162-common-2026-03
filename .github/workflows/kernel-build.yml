@@ -69,6 +69,11 @@ on:
         required: false
         default: false
         type: boolean
+      dirty_module_abi_bypass:
+        description: 'Dirty build: force vendor module CRC/version mismatches'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -102,6 +107,10 @@ on:
         default: true
         type: boolean
       dry_run_only:
+        required: false
+        default: false
+        type: boolean
+      dirty_module_abi_bypass:
         required: false
         default: false
         type: boolean
@@ -167,6 +176,7 @@ jobs:
       governor_mode: ${{ steps.config.outputs.governor_mode }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
       strict_susfs: ${{ steps.config.outputs.strict_susfs }}
+      dirty_module_abi_bypass: ${{ steps.config.outputs.dirty_module_abi_bypass }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -242,6 +252,7 @@ jobs:
           GOVERNOR_MODE=""
           KERNELTOAST_PATCH_POLICY=""
           STRICT_SUSFS=""
+          DIRTY_MODULE_ABI_BYPASS=""
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
           __BUILD_OPTIONS_EOF__
@@ -265,6 +276,7 @@ jobs:
               governor_mode) GOVERNOR_MODE="$value" ;;
               kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
               strict_susfs) STRICT_SUSFS="$value" ;;
+              dirty_module_abi_bypass) DIRTY_MODULE_ABI_BYPASS="$value" ;;
               *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
             esac
           done <<< "$BUILD_OPTIONS_INPUT"
@@ -336,6 +348,13 @@ jobs:
 
           echo "strict_susfs=${STRICT_SUSFS:-false}" >> $GITHUB_OUTPUT
 
+          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-${{ inputs.dirty_module_abi_bypass }}}"
+          case "$DIRTY_MODULE_ABI_BYPASS" in
+            true|false) ;;
+            *) echo "❌ Invalid dirty_module_abi_bypass: $DIRTY_MODULE_ABI_BYPASS (expected true or false)"; exit 1 ;;
+          esac
+          echo "dirty_module_abi_bypass=$DIRTY_MODULE_ABI_BYPASS" >> $GITHUB_OUTPUT
+
   build:
     needs: setup
     runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
@@ -359,6 +378,7 @@ jobs:
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
       STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
+      DIRTY_MODULE_ABI_BYPASS: ${{ needs.setup.outputs.dirty_module_abi_bypass }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -1237,6 +1257,18 @@ jobs:
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers
           cp -a "$KSU_STAGE/kernel/." kernel/drivers/kernelsu/
+
+          # KernelSU-Next keeps some public headers outside kernel/ while its
+          # in-tree Kbuild includes drivers/kernelsu. Copy them into both
+          # include roots so quoted includes like "uapi/app_profile.h" resolve.
+          if [ -d "$KSU_STAGE/uapi" ]; then
+            mkdir -p kernel/drivers/kernelsu/uapi
+            cp -a "$KSU_STAGE/uapi/." kernel/drivers/kernelsu/uapi/
+          fi
+          if [ -d "$KSU_STAGE/kernel/include/uapi" ]; then
+            mkdir -p kernel/drivers/kernelsu/include/uapi
+            cp -a "$KSU_STAGE/kernel/include/uapi/." kernel/drivers/kernelsu/include/uapi/
+          fi
           echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
 
           # Wire kernelsu/ into the upstream drivers Kbuild + Kconfig (idempotent).
@@ -1353,6 +1385,11 @@ jobs:
           # 4. Fix localversion script appending dirty flags
           apply_repo_patch_or_fail ".github/patches/global/fix_setlocalversion_dirty.patch" "setlocalversion dirty suffix fix"
 
+          if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
+            echo "⚠️  Applying dirty vendor module ABI bypass"
+            apply_repo_patch_or_fail ".github/patches/global/dirty_allow_vendor_module_crcs.patch" "dirty vendor module CRC bypass"
+          fi
+
           # 5. Fix libbpf compilation error
           echo "🔧 Patching libbpf.c type casting..."
           apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
@@ -1450,6 +1487,7 @@ jobs:
             echo "runtime_tuner=${RUNTIME_TUNER}"
             echo "governor_mode=${GOVERNOR_MODE}"
             echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
+            echo "dirty_module_abi_bypass=${DIRTY_MODULE_ABI_BYPASS}"
             echo "patch_repo_sha=${GITHUB_SHA}"
           } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
 
@@ -1667,6 +1705,12 @@ jobs:
           CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n
           EOF
 
+          if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
+            cat << 'EOF' >> out/.config
+          CONFIG_MODULE_FORCE_LOAD=y
+          EOF
+          fi
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
@@ -1724,6 +1768,11 @@ jobs:
           KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
           cd ..
 
+          DIRTY_SUFFIX=""
+          if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
+            DIRTY_SUFFIX="-dirtyabi"
+          fi
+
           case "${{ matrix.variant }}" in
             "enhance") AK3_BRANCH="next" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
@@ -1746,7 +1795,7 @@ jobs:
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
 
           cd AnyKernel3 && rm -rf .git .github
-          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}-r${{ env.KSU_VERSION }}.zip"
+          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}-r${{ env.KSU_VERSION }}.zip"
           zip -r9 "../$ZIP_NAME" .
           cd ..
 
@@ -1754,8 +1803,8 @@ jobs:
 
           # Generate lz4-compressed kernel image for direct boot.img patching
           if command -v lz4 >/dev/null 2>&1; then
-            lz4 -9 -f kernel/out/arch/arm64/boot/Image "Image-${KERNEL_VERSION}-${{ matrix.variant }}.lz4"
-            echo "IMAGE_LZ4=Image-${KERNEL_VERSION}-${{ matrix.variant }}.lz4" >> $GITHUB_ENV
+            lz4 -9 -f kernel/out/arch/arm64/boot/Image "Image-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}.lz4"
+            echo "IMAGE_LZ4=Image-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}.lz4" >> $GITHUB_ENV
           else
             echo "::warning::lz4 not available; skipping Image compression"
             echo "IMAGE_LZ4=" >> $GITHUB_ENV

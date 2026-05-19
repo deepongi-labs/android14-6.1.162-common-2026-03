@@ -6,14 +6,14 @@ on:
       ksu_variant:
         description: 'KernelSU variant to build'
         required: true
-        default: 'next'
+        default: 'all'
         type: choice
         options:
-          - next
           - all
           - tiann
           - kowsu
           - resukisu
+          - next
       disable_susfs:
         description: 'Disable SuSFS features'
         required: false
@@ -591,7 +591,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
@@ -954,28 +954,10 @@ jobs:
           if [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for tiann"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          elif [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "📋 Applying SuSFS for enhance (Tiann KernelSU base)"
-            # Kernel 6.1.173 already has #include <trace/hooks/blk.h> after internal.h,
-            # which breaks hunk #1 of the susfs patch. Inject it manually first.
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'if "susfs_is_current_ksu_domain" in text: raise SystemExit(0)' \
-              'old = "#include <linux/mnt_idmapping.h>\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n"' \
-              'new = "#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n"' \
-              'if old not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS hunk #1")' \
-              'path.write_text(text.replace(old, new, 1))' \
-              | python3 -
-            printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
-            # Apply remaining hunks; namespace.c hunk #1 already done so it will be skipped
-            patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" 2>&1 | grep -v "^Reversed\|^[0-9]* out of.*ignored" || true
-            rm -f fs/namespace.c.rej
-            printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
+            # 'next' and 'enhance' (both KernelSU-Next based) fall here.
             apply_variant_or_default_patch \
               "$VARIANT_SUSFS_PATCH" \
               "$DEFAULT_SUSFS_PATCH" \
@@ -983,7 +965,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -1029,7 +1011,7 @@ jobs:
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             ensure_namespace_susfs_prologue
           fi
           ensure_namespace_susfs_helpers
@@ -1075,7 +1057,7 @@ jobs:
           if ksu_susfs_integrated; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "next" ]; then
+          elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "🔍 Validating KernelSU-Next SuSFS integration..."
             if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
               :
@@ -1094,7 +1076,7 @@ jobs:
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
             if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
               if ksu_susfs_integrated; then
@@ -1245,12 +1227,12 @@ jobs:
             fi
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
+          if { [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; } && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
             printf '%s\n' \
               'from pathlib import Path' \
               'target = Path("kernel/hook/setuid_hook.c")' \
@@ -1262,7 +1244,7 @@ jobs:
             printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
 
@@ -1484,15 +1466,15 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
-              if [ "${KSU_VARIANT}" = "next" ]; then
-                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
+              if [ "${KSU_VARIANT}" = "next" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
+                echo "❌ SuSFS Kconfig entry missing for ${KSU_VARIANT} variant; failing early."
                 exit 1
               fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
-            # Verify hooks for non-resukisu/next variants
-            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ]; then
+            # Verify hooks for tiann/kowsu (KernelSU-Next based variants handle hooks differently)
+            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ] && [ "${KSU_VARIANT}" != "enhance" ]; then
               if grep -rq 'ksu_init_rc_hook\|ksu_execveat_hook\|ksu_input_hook' kernel/drivers/kernelsu 2>/dev/null; then
                 echo "✅ KSU hooks found"
               else
@@ -1795,7 +1777,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="KernelSU" ;;
+            "enhance") AK3_BRANCH="next" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

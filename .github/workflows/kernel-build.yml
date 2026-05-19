@@ -56,14 +56,14 @@ on:
           - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
-        description: 'Policy for kerneltoast patchset application'
+        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
         required: false
-        default: 'best_effort'
+        default: 'off'
         type: choice
         options:
-          - strict
-          - best_effort
           - 'off'
+          - best_effort
+          - strict
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false
@@ -279,6 +279,11 @@ jobs:
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
+          # Default to upstream KernelSU-Next 'dev' branch.
+          # Special-case: if SuSFS is enabled and the user explicitly passes
+          # 'stable', remap to the susfs-aware fork branch
+          # 'next-susfs-a14-6.1-dev' so SuSFS hooks line up. 'dev' is passed
+          # through unchanged (KernelSU-Next upstream dev branch).
           RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
           if [ "${ENABLE_SUSFS}" = "true" ] && [ "${RESOLVED_NEXT_REF}" = "stable" ]; then
             echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
@@ -327,7 +332,7 @@ jobs:
           esac
           echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
 
-          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-best_effort}"
+          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-off}"
           case "$KERNELTOAST_PATCH_POLICY" in
             strict|best_effort|off) ;;
             *) echo "❌ Invalid kerneltoast_patch_policy: $KERNELTOAST_PATCH_POLICY"; exit 1 ;;
@@ -586,7 +591,7 @@ jobs:
           cd kernel && rm -rf KernelSU drivers/kernelsu KernelSU-Next
 
           case "${{ matrix.variant }}" in
-            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
+            "enhance") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}"; USE_SETUP_SH="true" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}"; USE_SETUP_SH="true" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}"; USE_SETUP_SH="true" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}"; USE_SETUP_SH="true" ;;
@@ -949,28 +954,10 @@ jobs:
           if [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for tiann"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
-          elif [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "📋 Applying SuSFS for enhance (Tiann KernelSU base)"
-            # Kernel 6.1.173 already has #include <trace/hooks/blk.h> after internal.h,
-            # which breaks hunk #1 of the susfs patch. Inject it manually first.
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'if "susfs_is_current_ksu_domain" in text: raise SystemExit(0)' \
-              'old = "#include <linux/mnt_idmapping.h>\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n"' \
-              'new = "#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include \"pnode.h\"\n#include \"internal.h\"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n"' \
-              'if old not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS hunk #1")' \
-              'path.write_text(text.replace(old, new, 1))' \
-              | python3 -
-            printf '%s | %s | applied\n' "Enhance namespace.c SuSFS hunk#1 (manual)" "fs/namespace.c" >> "$PATCH_MANIFEST"
-            # Apply remaining hunks; namespace.c hunk #1 already done so it will be skipped
-            patch -p1 --forward --fuzz=3 < "$DEFAULT_SUSFS_PATCH" 2>&1 | grep -v "^Reversed\|^[0-9]* out of.*ignored" || true
-            rm -f fs/namespace.c.rej
-            printf '%s | %s | applied-fuzz\n' "Default core SuSFS patch (remaining hunks)" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else
+            # 'next' and 'enhance' (both KernelSU-Next based) fall here.
             apply_variant_or_default_patch \
               "$VARIANT_SUSFS_PATCH" \
               "$DEFAULT_SUSFS_PATCH" \
@@ -978,7 +965,7 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             printf '%s\n' \
               'from pathlib import Path' \
@@ -1024,7 +1011,7 @@ jobs:
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             ensure_namespace_susfs_prologue
           fi
           ensure_namespace_susfs_helpers
@@ -1070,7 +1057,7 @@ jobs:
           if ksu_susfs_integrated; then
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
-          elif [ "$KSU_VARIANT" = "next" ]; then
+          elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "🔍 Validating KernelSU-Next SuSFS integration..."
             if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
               :
@@ -1089,7 +1076,7 @@ jobs:
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          elif [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
             if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
               if ksu_susfs_integrated; then
@@ -1240,12 +1227,12 @@ jobs:
             fi
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] && [ -f fix_susfs.py ]; then
+          if { [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; } && [ -f fix_susfs.py ]; then
             python3 fix_susfs.py
             printf '%s | %s | applied\n' "KernelSU-Next repo susfs fixer" "fix_susfs.py" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ]; then
             printf '%s\n' \
               'from pathlib import Path' \
               'target = Path("kernel/hook/setuid_hook.c")' \
@@ -1257,7 +1244,7 @@ jobs:
             printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             WK_SUSFS_FIX_DIR="../../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next..."
 
@@ -1361,20 +1348,37 @@ jobs:
 
           cd kernel
 
-          # 0. Bypass GKI ABI symbol checks
-          echo "🚫 Removing GKI protected exports..."
-          rm -f android/abi_gki_protected_exports_* || true
+          # 0. GKI ABI symbol checks: keep stripped on akita.
+          # Background: removing android/abi_gki_protected_exports_* lets the
+          # kernel add new EXPORT_SYMBOLs without ABI-hash check failures.
+          # On Pixel 8 (akita) Wi-Fi (BCM4389) the vendor module needs symbols
+          # that aren't in the protected list, so leaving the file in place
+          # blocks Wi-Fi module load. We strip by default; opt out by setting
+          # KEEP_PROTECTED_EXPORTS=true if/when the underlying symbol is
+          # added to the GKI protected ABI properly.
+          if [ "${KEEP_PROTECTED_EXPORTS:-false}" = "true" ]; then
+            echo "🔒 Keeping android/abi_gki_protected_exports_* (KEEP_PROTECTED_EXPORTS=true)"
+          else
+            echo "🚫 Removing GKI protected exports (akita Wi-Fi BCM4389 workaround)..."
+            rm -f android/abi_gki_protected_exports_* || true
+          fi
 
-          # 1. CLIDR uninitialized fix
-          fetch_patch_or_fail "${{ env.CLIDR_PATCH_URL }}" /tmp/fix-clidr.patch
-            if [ -s /tmp/fix-clidr.patch ]; then echo "✅ CLIDR patch downloaded"; else echo "❌ CLIDR patch missing"; exit 1; fi
-          apply_patch_or_fail /tmp/fix-clidr.patch "CLIDR initialization fix"
+          # 1. CLIDR uninitialized fix (use local copy, not a remote SHA-pinned URL)
+          apply_repo_patch_or_fail ".github/patches/fix-clidr-uninitialized.patch" "CLIDR initialization fix"
 
-          # 2. Apply Wi-Fi patch (from OnePlus 12 Development)
-          echo "📶 Applying Wi-Fi patch..."
-          fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
+          # 2. (Optional) Wi-Fi patch from OnePlus 12 (Qualcomm SM8650 tree)
+          # Tensor G3 (Pixel 8, akita) uses Broadcom BCM4389 Wi-Fi, NOT QCA.
+          # The 3-way fallback in apply_patch_or_fail can land hunks in the wrong
+          # place on a foreign WLAN driver, panicking on first wpa_supplicant up.
+          # Disabled by default; opt in with apply_oneplus12_wifi_patch=true.
+          if [ "${APPLY_ONEPLUS12_WIFI_PATCH:-false}" = "true" ]; then
+            echo "📶 Applying OnePlus 12 (SM8650) Wi-Fi patch (opt-in)..."
+            fetch_patch_or_fail "${{ env.WIFI_PATCH_URL }}" /tmp/wifi-fix.patch
             if [ -s /tmp/wifi-fix.patch ]; then echo "✅ Wi-Fi patch downloaded"; else echo "❌ Wi-Fi patch missing"; exit 1; fi
-          apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+            apply_patch_or_fail /tmp/wifi-fix.patch "Wi-Fi fix"
+          else
+            echo "⏭️  OnePlus 12 (SM8650) Wi-Fi patch skipped: incompatible with Pixel 8 (BCM4389)"
+          fi
 
           # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
           if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
@@ -1462,15 +1466,15 @@ jobs:
             if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
               echo "✅ SuSFS Kconfig entry found"
             else
-              if [ "${KSU_VARIANT}" = "next" ]; then
-                echo "❌ SuSFS Kconfig entry missing for next variant; failing early."
+              if [ "${KSU_VARIANT}" = "next" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
+                echo "❌ SuSFS Kconfig entry missing for ${KSU_VARIANT} variant; failing early."
                 exit 1
               fi
               echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
             fi
 
-            # Verify hooks for non-resukisu/next variants
-            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ]; then
+            # Verify hooks for tiann/kowsu (KernelSU-Next based variants handle hooks differently)
+            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ] && [ "${KSU_VARIANT}" != "enhance" ]; then
               if grep -rq 'ksu_init_rc_hook\|ksu_execveat_hook\|ksu_input_hook' kernel/drivers/kernelsu 2>/dev/null; then
                 echo "✅ KSU hooks found"
               else
@@ -1704,12 +1708,15 @@ jobs:
           EOF
           fi
 
-          # Disable BTF debug info to avoid .btf.vmlinux.bin.o link failures
-          # when pahole is missing or incompatible on the build runner.
+          # Re-enable BTF: Android 14 bpfloader requires /sys/kernel/btf/vmlinux
+          # to load network/storage BPF programs at boot. Without it, bpfloader
+          # fails -> init re-enters loop -> bootloop. Runner installs `dwarves`
+          # (pahole >= 1.21) in the toolchain step.
           cat << 'EOF' >> out/.config
-          CONFIG_DEBUG_INFO=n
-          CONFIG_DEBUG_INFO_BTF=n
-          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n
+          CONFIG_DEBUG_INFO=y
+          CONFIG_DEBUG_INFO_BTF=y
+          CONFIG_DEBUG_INFO_REDUCED=n
+          CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
           EOF
 
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
@@ -1770,7 +1777,7 @@ jobs:
           cd ..
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="KernelSU" ;;
+            "enhance") AK3_BRANCH="next" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

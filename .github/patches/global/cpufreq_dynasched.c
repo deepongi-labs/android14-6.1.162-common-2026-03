@@ -757,7 +757,7 @@ static int dynasched_init(struct cpufreq_policy *policy)
 		dyn_policy->tunables = dynasched_global_tunables;
 		gov_attr_set_get(&dynasched_global_tunables->attr_set,
 				 &dyn_policy->tunables_hook);
-		goto out;
+		goto init_percpu;
 	}
 
 	tunables = kzalloc(sizeof(*tunables), GFP_KERNEL);
@@ -783,6 +783,25 @@ static int dynasched_init(struct cpufreq_policy *policy)
 				   "%s", dynasched_gov.name);
 	if (ret)
 		goto fail;
+
+init_percpu:
+	/*
+	 * Initialize per-CPU dynasched state once at policy attach time.
+	 * dynasched_start() must NOT re-zero this on resume; doing so would
+	 * race with the global update_util hook pointer and trip the
+	 * WARN_ON_ONCE(data->func) check inside cpufreq_add_update_util_hook().
+	 */
+	{
+		unsigned int cpu;
+		for_each_cpu(cpu, policy->cpus) {
+			struct dynasched_cpu *dyn_cpu =
+				&per_cpu(dynasched_cpu, cpu);
+
+			memset(dyn_cpu, 0, sizeof(*dyn_cpu));
+			dyn_cpu->cpu        = cpu;
+			dyn_cpu->dyn_policy = dyn_policy;
+		}
+	}
 
 out:
 	mutex_unlock(&dynasched_global_tunables_lock);
@@ -837,13 +856,13 @@ static int dynasched_start(struct cpufreq_policy *policy)
 	dyn_policy->need_freq_update =
 		cpufreq_driver_test_flags(CPUFREQ_NEED_UPDATE_LIMITS);
 
-	for_each_cpu(cpu, policy->cpus) {
-		struct dynasched_cpu *dyn_cpu = &per_cpu(dynasched_cpu, cpu);
-
-		memset(dyn_cpu, 0, sizeof(*dyn_cpu));
-		dyn_cpu->cpu        = cpu;
-		dyn_cpu->dyn_policy = dyn_policy;
-	}
+	/*
+	 * Per-CPU state is initialized once in dynasched_init() (matches
+	 * schedutil's sugov_init/sugov_start split). Re-initializing per-CPU
+	 * state here on every start() would race with the global update_util
+	 * pointer set by cpufreq_add_update_util_hook() and trigger
+	 * WARN_ON_ONCE(data->func) on suspend/resume cycles.
+	 */
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct dynasched_cpu *dyn_cpu = &per_cpu(dynasched_cpu, cpu);

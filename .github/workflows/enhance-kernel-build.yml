@@ -68,14 +68,14 @@ on:
           - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
-        description: 'Policy for kerneltoast patchset application'
+        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
         required: false
-        default: 'best_effort'
+        default: 'off'
         type: choice
         options:
-          - strict
-          - best_effort
           - 'off'
+          - best_effort
+          - strict
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false

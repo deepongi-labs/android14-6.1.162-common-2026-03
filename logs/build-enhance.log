@@ -1,0 +1,598 @@
+  GEN     Makefile
+  HOSTCC  scripts/basic/fixdep
+  HOSTCC  scripts/kconfig/conf.o
+  HOSTCC  scripts/kconfig/confdata.o
+  HOSTCC  scripts/kconfig/expr.o
+  LEX     scripts/kconfig/lexer.lex.c
+  YACC    scripts/kconfig/parser.tab.[ch]
+  HOSTCC  scripts/kconfig/lexer.lex.o
+  HOSTCC  scripts/kconfig/menu.o
+  HOSTCC  scripts/kconfig/parser.tab.o
+  HOSTCC  scripts/kconfig/preprocess.o
+  HOSTCC  scripts/kconfig/symbol.o
+  HOSTCC  scripts/kconfig/util.o
+  HOSTLD  scripts/kconfig/conf
+#
+# configuration written to .config
+#
+  GEN     Makefile
+.config:7566:warning: override: reassigning to symbol ARM64_VA_BITS
+.config:7567:warning: override: reassigning to symbol ARM64_PA_BITS
+.config:7568:warning: override: reassigning to symbol SCHED_MC
+.config:7570:warning: override: reassigning to symbol ENERGY_MODEL
+.config:7571:warning: override: reassigning to symbol CPU_FREQ
+.config:7572:warning: override: reassigning to symbol CPU_FREQ_GOV_SCHEDUTIL
+.config:7573:warning: override: reassigning to symbol THERMAL
+.config:7574:warning: override: reassigning to symbol CMA
+.config:7575:warning: override: reassigning to symbol KPROBES
+.config:7576:warning: override: reassigning to symbol HAVE_KPROBES
+.config:7578:warning: override: reassigning to symbol TCP_CONG_ADVANCED
+.config:7580:warning: override: reassigning to symbol TCP_CONG_CUBIC
+.config:7589:warning: override: reassigning to symbol DEFAULT_TCP_CONG
+.config:7590:warning: override: reassigning to symbol NET_SCH_FQ
+.config:7591:warning: override: reassigning to symbol IP_SET
+.config:7592:warning: override: reassigning to symbol NET_SCH_CAKE
+.config:7594:warning: override: reassigning to symbol IOSCHED_BFQ
+.config:7595:warning: override: reassigning to symbol BFQ_GROUP_IOSCHED
+.config:7596:warning: override: reassigning to symbol MQ_IOSCHED_DEADLINE
+.config:7597:warning: override: reassigning to symbol MQ_IOSCHED_KYBER
+.config:7600:warning: override: reassigning to symbol PM_DEVFREQ
+.config:7601:warning: override: reassigning to symbol DEVFREQ_GOV_SIMPLE_ONDEMAND
+.config:7602:warning: override: reassigning to symbol DEVFREQ_GOV_PERFORMANCE
+.config:7603:warning: override: reassigning to symbol DEVFREQ_GOV_POWERSAVE
+.config:7604:warning: override: reassigning to symbol DEVFREQ_GOV_USERSPACE
+.config:7607:warning: override: reassigning to symbol KSU
+.config:7608:warning: override: reassigning to symbol KSU_DEBUG
+.config:7609:warning: override: reassigning to symbol TMPFS_XATTR
+.config:7610:warning: override: reassigning to symbol TMPFS_POSIX_ACL
+.config:7611:warning: override: reassigning to symbol LOCALVERSION_AUTO
+.config:7612:warning: override: reassigning to symbol LOCALVERSION
+.config:7614:warning: override: reassigning to symbol LTO_CLANG_THIN
+.config:7614:warning: override: LTO_CLANG_THIN changes choice state
+.config:7615:warning: override: reassigning to symbol LTO_CLANG_FULL
+.config:7616:warning: override: reassigning to symbol HZ_300
+.config:7616:warning: override: HZ_300 changes choice state
+.config:7617:warning: override: reassigning to symbol HZ
+.config:7618:warning: override: reassigning to symbol LRU_GEN
+.config:7619:warning: override: reassigning to symbol LRU_GEN_ENABLED
+.config:7620:warning: override: reassigning to symbol DEBUG_INFO
+.config:7621:warning: override: reassigning to symbol DEBUG_INFO_BTF
+.config:7622:warning: override: reassigning to symbol DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+#
+# configuration written to .config
+#
+::group::Config Validation
+Config validation passed
+::endgroup::
+  SYNC    include/config/auto.conf
+  GEN     Makefile
+  GEN     Makefile
+  HOSTCC  arch/arm64/tools/gen-hyprel
+  WRAP    arch/arm64/include/generated/uapi/asm/kvm_para.h
+  WRAP    arch/arm64/include/generated/uapi/asm/errno.h
+  WRAP    arch/arm64/include/generated/uapi/asm/ioctl.h
+  WRAP    arch/arm64/include/generated/uapi/asm/ioctls.h
+  WRAP    arch/arm64/include/generated/uapi/asm/ipcbuf.h
+  WRAP    arch/arm64/include/generated/uapi/asm/msgbuf.h
+  WRAP    arch/arm64/include/generated/uapi/asm/poll.h
+  WRAP    arch/arm64/include/generated/uapi/asm/resource.h
+  WRAP    arch/arm64/include/generated/uapi/asm/sembuf.h
+  WRAP    arch/arm64/include/generated/uapi/asm/shmbuf.h
+  WRAP    arch/arm64/include/generated/uapi/asm/siginfo.h
+  WRAP    arch/arm64/include/generated/uapi/asm/sockios.h
+  WRAP    arch/arm64/include/generated/uapi/asm/stat.h
+  WRAP    arch/arm64/include/generated/uapi/asm/socket.h
+  WRAP    arch/arm64/include/generated/uapi/asm/termbits.h
+  WRAP    arch/arm64/include/generated/uapi/asm/termios.h
+  WRAP    arch/arm64/include/generated/uapi/asm/swab.h
+  WRAP    arch/arm64/include/generated/uapi/asm/types.h
+  HOSTCC  scripts/dtc/dtc.o
+  HOSTCC  scripts/dtc/flattree.o
+  HOSTCC  scripts/dtc/fstree.o
+  HOSTCC  scripts/dtc/data.o
+  HOSTCC  scripts/dtc/livetree.o
+  HOSTCC  scripts/dtc/srcpos.o
+  HOSTCC  scripts/dtc/checks.o
+  HOSTCC  scripts/dtc/treesource.o
+  HOSTCC  scripts/dtc/util.o
+  YACC    scripts/dtc/dtc-parser.tab.[ch]
+  LEX     scripts/dtc/dtc-lexer.lex.c
+  HOSTCC  scripts/dtc/libfdt/fdt.o
+  HOSTCC  scripts/dtc/libfdt/fdt_ro.o
+  HOSTCC  scripts/dtc/libfdt/fdt_wip.o
+  HOSTCC  scripts/dtc/libfdt/fdt_sw.o
+  HOSTCC  scripts/dtc/libfdt/fdt_rw.o
+  HOSTCC  scripts/dtc/libfdt/fdt_strerror.o
+  HOSTCC  scripts/dtc/libfdt/fdt_empty_tree.o
+  HOSTCC  scripts/dtc/libfdt/fdt_addresses.o
+  UPD     include/config/kernel.release
+  HOSTCC  scripts/dtc/libfdt/fdt_overlay.o
+  HOSTCC  scripts/dtc/fdtoverlay.o
+  HOSTLD  scripts/dtc/fdtoverlay
+  WRAP    arch/arm64/include/generated/asm/early_ioremap.h
+  WRAP    arch/arm64/include/generated/asm/mcs_spinlock.h
+  WRAP    arch/arm64/include/generated/asm/qrwlock.h
+  WRAP    arch/arm64/include/generated/asm/qspinlock.h
+  WRAP    arch/arm64/include/generated/asm/parport.h
+  WRAP    arch/arm64/include/generated/asm/user.h
+  WRAP    arch/arm64/include/generated/asm/bugs.h
+  WRAP    arch/arm64/include/generated/asm/delay.h
+  WRAP    arch/arm64/include/generated/asm/div64.h
+  WRAP    arch/arm64/include/generated/asm/dma.h
+  WRAP    arch/arm64/include/generated/asm/emergency-restart.h
+  WRAP    arch/arm64/include/generated/asm/hw_irq.h
+  WRAP    arch/arm64/include/generated/asm/irq_regs.h
+  WRAP    arch/arm64/include/generated/asm/dma-mapping.h
+  WRAP    arch/arm64/include/generated/asm/kmap_size.h
+  WRAP    arch/arm64/include/generated/asm/kdebug.h
+  WRAP    arch/arm64/include/generated/asm/local.h
+  WRAP    arch/arm64/include/generated/asm/local64.h
+  WRAP    arch/arm64/include/generated/asm/mmiowb.h
+  WRAP    arch/arm64/include/generated/asm/msi.h
+  WRAP    arch/arm64/include/generated/asm/serial.h
+  WRAP    arch/arm64/include/generated/asm/softirq_stack.h
+  WRAP    arch/arm64/include/generated/asm/trace_clock.h
+  WRAP    arch/arm64/include/generated/asm/unaligned.h
+  WRAP    arch/arm64/include/generated/asm/vga.h
+  WRAP    arch/arm64/include/generated/asm/switch_to.h
+  HOSTCC  scripts/dtc/dtc-lexer.lex.o
+  HOSTCC  scripts/dtc/dtc-parser.tab.o
+  HOSTLD  scripts/dtc/dtc
+  UPD     include/generated/uapi/linux/version.h
+  UPD     include/generated/utsrelease.h
+  UPD     include/generated/compile.h
+  HOSTCC  scripts/sorttable
+  HOSTCC  scripts/asn1_compiler
+  HOSTCC  scripts/kallsyms
+  HOSTCC  scripts/genksyms/genksyms.o
+  YACC    scripts/genksyms/parse.tab.[ch]
+  LEX     scripts/genksyms/lex.lex.c
+  HOSTCC  scripts/selinux/mdp/mdp
+  HOSTCC  scripts/selinux/genheaders/genheaders
+  HOSTCC  scripts/sign-file
+  HOSTCC  scripts/unifdef
+  HOSTCC  scripts/genksyms/parse.tab.o
+  HOSTCC  scripts/genksyms/lex.lex.o
+  HOSTLD  scripts/genksyms/genksyms
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-amarula-relic.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-bananapi-m64.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-nanopi-a64.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-oceanic-5205-5inmfd.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hi3660-hikey960.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hi3670-hikey970.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-olinuxino.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-olinuxino-emmc.dtb
+  DTC     arch/arm64/boot/dts/nvidia/tegra234-sim-vdk.dtb
+  DTC     arch/arm64/boot/dts/qcom/apq8016-sbc.dtb
+  DTC     arch/arm64/boot/dts/qcom/apq8094-sony-xperia-kitakami-karin_windy.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hi3798cv200-poplar.dtb
+  DTC     arch/arm64/boot/dts/qcom/apq8096-db820c.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hi6220-hikey.dtb
+  DTC     arch/arm64/boot/dts/qcom/apq8096-ifc6640.dtb
+  DTC     arch/arm64/boot/dts/nvidia/tegra234-p3737-0000+p3701-0000.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-orangepi-win.dtb
+  DTC     arch/arm64/boot/dts/qcom/ipq6018-cp01-c1.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pine64-lts.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hip05-d02.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pine64-plus.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/qcom/ipq8074-hk01.dtb
+  DTC     arch/arm64/boot/dts/qcom/ipq8074-hk10-c1.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/hisilicon/hip06-d03.dtb
+  DTC     arch/arm64/boot/dts/hisilicon/hip07-d05.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pine64.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinebook.dtb
+  DTC     arch/arm64/boot/dts/qcom/ipq8074-hk10-c2.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinephone-1.0.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-alcatel-idol347.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-asus-z00l.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinephone-1.2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-huawei-g7.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinephone-1.1.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinetab.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-longcheer-l8150.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-pinetab-early-adopter.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-longcheer-l8910.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-a3u-eur.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-a5u-eur.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-sopine-baseboard.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-e5.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a64-teres-i.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-e7.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-a100-allwinner-perf1.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-bananapi-m2-plus.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-grandmax.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-bananapi-m2-plus-v1.2.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-emlid-neutis-n5-devboard.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-j5.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-samsung-serranove.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8916-wingtech-wt88047.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-libretech-all-h3-cc.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-libretech-all-h3-it.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-libretech-all-h5-cc.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8992-lg-bullhead-rev-10.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8992-lg-bullhead-rev-101.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-nanopi-neo2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8992-msft-lumia-octagon-talkman.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8992-xiaomi-libra.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-msft-lumia-octagon-cityman.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-huawei-angler-rev-101.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-nanopi-neo-plus2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-sony-xperia-kitakami-ivy.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-nanopi-r1s-h5.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-orangepi-pc2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-sony-xperia-kitakami-karin.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-sony-xperia-kitakami-satsuki.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-orangepi-prime.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-orangepi-zero-plus.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-sony-xperia-kitakami-sumire.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h5-orangepi-zero-plus2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8994-sony-xperia-kitakami-suzuran.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-beelink-gs1.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-3.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-mtp.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-lite2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-sony-xperia-tone-dora.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-one-plus.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-pine-h64.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-sony-xperia-tone-keyaki.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-sony-xperia-tone-kagura.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-xiaomi-gemini.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-xiaomi-natrium.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-tanix-tx6.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-pine-h64-model-b.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8996-xiaomi-scorpio.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/qcom/msm8998-asus-novago-tp370ql.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h6-tanix-tx6-mini.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-fxtec-pro1.dtb
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h616-orangepi-zero2.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/qcom/msm8998-hp-envy-x2.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-lenovo-miix-630.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/allwinner/sun50i-h616-x96-mate.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/qcom/msm8998-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-oneplus-cheeseburger.dtb
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+../arch/arm64/boot/dts/qcom/msm8996.dtsi:2954.36-2962.5: Warning (clocks_property): /soc/clock-controller@6400000: Missing property '#clock-cells' in node /soc/mailbox@9820000 or bad phandle (referred from clocks[2])
+  DTC     arch/arm64/boot/dts/qcom/msm8998-oneplus-dumpling.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-sony-xperia-yoshino-lilac.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-sony-xperia-yoshino-maple.dtb
+  DTC     arch/arm64/boot/dts/qcom/msm8998-sony-xperia-yoshino-poplar.dtb
+  DTC     arch/arm64/boot/dts/qcom/qcs404-evb-1000.dtb
+  DTC     arch/arm64/boot/dts/qcom/qcs404-evb-4000.dtb
+  DTC     arch/arm64/boot/dts/qcom/qrb5165-rb5.dtb
+  DTC     arch/arm64/boot/dts/qcom/sa8155p-adp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sa8295p-adp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-idp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-coachz-r1.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-coachz-r1-lte.dtb
+  HDRINST usr/include/asm-generic/termios.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-coachz-r3.dtb
+  HDRINST usr/include/asm-generic/resource.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-coachz-r3-lte.dtb
+  HDRINST usr/include/asm-generic/mman-common.h
+  HDRINST usr/include/asm-generic/errno-base.h
+  HDRINST usr/include/asm-generic/mman.h
+  HDRINST usr/include/asm-generic/ioctls.h
+  HDRINST usr/include/asm-generic/shmbuf.h
+  HDRINST usr/include/asm-generic/ioctl.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-homestar-r2.dtb
+  HDRINST usr/include/asm-generic/int-l64.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-homestar-r3.dtb
+  HDRINST usr/include/asm-generic/int-ll64.h
+  HDRINST usr/include/asm-generic/statfs.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-homestar-r4.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-kingoftown-r0.dtb
+  HDRINST usr/include/asm-generic/signal-defs.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-kingoftown-r1.dtb
+  HDRINST usr/include/asm-generic/bitsperlong.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r0.dtb
+  HDRINST usr/include/asm-generic/auxvec.h
+  HDRINST usr/include/asm-generic/posix_types.h
+  HDRINST usr/include/asm-generic/sockios.h
+  HDRINST usr/include/asm-generic/fcntl.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r1.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r1-kb.dtb
+  GEN     arch/arm64/include/generated/asm/cpucaps.h
+  HDRINST usr/include/asm-generic/types.h
+  GEN     arch/arm64/include/generated/asm/sysreg-defs.h
+  HDRINST usr/include/asm-generic/sembuf.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r1-lte.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r3.dtb
+  HDRINST usr/include/asm-generic/unistd.h
+  HDRINST usr/include/asm-generic/termbits-common.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r3-kb.dtb
+  HDRINST usr/include/asm-generic/kvm_para.h
+  HDRINST usr/include/asm-generic/errno.h
+  HDRINST usr/include/asm-generic/ucontext.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r3-lte.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r9.dtb
+  HDRINST usr/include/asm-generic/ipcbuf.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r9-kb.dtb
+  HDRINST usr/include/asm-generic/stat.h
+  HDRINST usr/include/asm-generic/hugetlb_encode.h
+  HDRINST usr/include/asm-generic/setup.h
+  HDRINST usr/include/asm-generic/signal.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-r9-lte.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-r4.dtb
+  HDRINST usr/include/asm-generic/poll.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-r9.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-nots-r4.dtb
+  HDRINST usr/include/asm-generic/param.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-nots-r5.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-nots-r9.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-mrbland-rev0-auo.dtb
+  HDRINST usr/include/asm-generic/socket.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-mrbland-rev0-boe.dtb
+  HDRINST usr/include/asm-generic/bpf_perf_event.h
+  HDRINST usr/include/asm-generic/msgbuf.h
+  HDRINST usr/include/asm-generic/siginfo.h
+  HDRINST usr/include/asm-generic/swab.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-mrbland-rev1-auo.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-mrbland-rev1-boe.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pazquel-lte-parade.dtb
+  HDRINST usr/include/asm-generic/termbits.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pazquel-lte-ti.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pazquel-parade.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pazquel-ti.dtb
+  CC      scripts/mod/empty.o
+  HDRINST usr/include/drm/virtgpu_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r1.dtb
+  HOSTCC  scripts/mod/mk_elfconfig
+  HDRINST usr/include/drm/panfrost_drm.h
+  HDRINST usr/include/drm/i915_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r1-lte.dtb
+  CC      scripts/mod/devicetable-offsets.s
+  HDRINST usr/include/drm/exynos_drm.h
+  HDRINST usr/include/drm/etnaviv_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r2.dtb
+  HDRINST usr/include/drm/tegra_drm.h
+  HDRINST usr/include/drm/amdgpu_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r2-lte.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r3.dtb
+  HDRINST usr/include/drm/drm_mode.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-pompom-r3-lte.dtb
+  HDRINST usr/include/drm/omap_drm.h
+  HDRINST usr/include/drm/v3d_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-quackingstick-r0-lte.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-quackingstick-r0.dtb
+  HDRINST usr/include/drm/msm_drm.h
+  HDRINST usr/include/drm/nouveau_drm.h
+  HDRINST usr/include/drm/drm_sarea.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev0-boe.dtb
+  HDRINST usr/include/drm/lima_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev0-inx.dtb
+  HDRINST usr/include/drm/vgem_drm.h
+  HDRINST usr/include/drm/radeon_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev1-boe.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev1-inx.dtb
+  UPD     scripts/mod/devicetable-offsets.h
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev1-inx-rt5682s.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-wormdingler-rev1-boe-rt5682s.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-r1.dtb
+  HDRINST usr/include/drm/armada_drm.h
+  MKELF   scripts/mod/elfconfig.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-crd.dtb
+  DTC     arch/arm64/boot/dts/qcom/sc7180-trogdor-r1-lte.dtb
+  HOSTCC  scripts/mod/modpost.o
+  HDRINST usr/include/drm/i810_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-evoker-r0.dtb
+  HOSTCC  scripts/mod/file2alias.o
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-herobrine-r1.dtb
+  HDRINST usr/include/drm/drm_fourcc.h
+  HDRINST usr/include/drm/vc4_drm.h
+  HOSTCC  scripts/mod/sumversion.o
+  HDRINST usr/include/drm/sis_drm.h
+  HDRINST usr/include/drm/via_drm.h
+  HDRINST usr/include/drm/drm.h
+  HDRINST usr/include/drm/savage_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-villager-r0.dtb
+  HDRINST usr/include/drm/r128_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-villager-r1.dtb
+  HDRINST usr/include/drm/mga_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-herobrine-villager-r1-lte.dtb
+  HDRINST usr/include/drm/qxl_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-idp.dtb
+  HDRINST usr/include/drm/vmwgfx_drm.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-idp2.dtb
+  HDRINST usr/include/linux/rose.h
+  HOSTLD  scripts/mod/modpost
+  HDRINST usr/include/linux/fuse.h
+  DTC     arch/arm64/boot/dts/qcom/sc7280-crd-r3.dtb
+  HDRINST usr/include/linux/veth.h
+  HDRINST usr/include/linux/capability.h
+  HDRINST usr/include/linux/auto_fs4.h
+  DTC     arch/arm64/boot/dts/qcom/sc8280xp-crd.dtb
+  HDRINST usr/include/linux/perf_event.h
+  DTC     arch/arm64/boot/dts/qcom/sc8280xp-lenovo-thinkpad-x13s.dtb
+  HDRINST usr/include/linux/pkt_sched.h
+  DTC     arch/arm64/boot/dts/qcom/sda660-inforce-ifc6560.dtb
+  HDRINST usr/include/linux/rseq.h
+  DTC     arch/arm64/boot/dts/qcom/sdm630-sony-xperia-ganges-kirin.dtb
+  HDRINST usr/include/linux/devlink.h
+  HDRINST usr/include/linux/raid/md_u.h
+  HDRINST usr/include/linux/raid/md_p.h
+  HDRINST usr/include/linux/vtpm_proxy.h
+  CC      kernel/bounds.s
+  DTC     arch/arm64/boot/dts/qcom/sdm630-sony-xperia-nile-discovery.dtb
+  CHKSHA1 ../include/linux/atomic/atomic-arch-fallback.h
+  DTC     arch/arm64/boot/dts/qcom/sdm630-sony-xperia-nile-pioneer.dtb
+  CHKSHA1 ../include/linux/atomic/atomic-instrumented.h
+  HDRINST usr/include/linux/virtio_rng.h
+  UPD     include/generated/timeconst.h
+  DTC     arch/arm64/boot/dts/qcom/sdm630-sony-xperia-nile-voyager.dtb
+  CHKSHA1 ../include/linux/atomic/atomic-long.h
+  DTC     arch/arm64/boot/dts/qcom/sdm636-sony-xperia-ganges-mermaid.dtb
+  HDRINST usr/include/linux/nl80211.h
+  DTC     arch/arm64/boot/dts/qcom/sdm660-xiaomi-lavender.dtb
+  HDRINST usr/include/linux/memfd.h
+  HDRINST usr/include/linux/elf.h
+  DTC     arch/arm64/boot/dts/qcom/sdm632-fairphone-fp3.dtb
+  HDRINST usr/include/linux/if_xdp.h
+  HDRINST usr/include/linux/baycom.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-cheza-r1.dtb
+  HDRINST usr/include/linux/pcitest.h
+  HDRINST usr/include/linux/seg6_iptunnel.h
+  HDRINST usr/include/linux/ppp_defs.h
+  HDRINST usr/include/linux/cifs/cifs_netlink.h
+  HDRINST usr/include/linux/cifs/cifs_mount.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-cheza-r3.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-cheza-r2.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-db845c.dtb
+  HDRINST usr/include/linux/erspan.h
+  HDRINST usr/include/linux/nfs2.h
+  HDRINST usr/include/linux/fd.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-lg-judyln.dtb
+  HDRINST usr/include/linux/gsmmux.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-lg-judyp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-oneplus-enchilada.dtb
+  HDRINST usr/include/linux/bpfilter.h
+  HDRINST usr/include/linux/nfsacl.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-oneplus-fajita.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-sony-xperia-tama-akari.dtb
+  DTC     arch/arm64/boot/dts/qcom/sdm845-sony-xperia-tama-akatsuki.dtb
+  UPD     include/generated/bounds.h
+  HDRINST usr/include/linux/pg.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-sony-xperia-tama-apollo.dtb
+  CC      arch/arm64/kernel/asm-offsets.s
+  DTC     arch/arm64/boot/dts/qcom/sdm845-xiaomi-beryllium.dtb
+  HDRINST usr/include/linux/switchtec_ioctl.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-xiaomi-polaris.dtb
+  HDRINST usr/include/linux/elf-em.h
+  HDRINST usr/include/linux/igmp.h
+  DTC     arch/arm64/boot/dts/qcom/sdm845-shift-axolotl.dtb
+  HDRINST usr/include/linux/acct.h
+  HDRINST usr/include/linux/ivtv.h
+  DTC     arch/arm64/boot/dts/qcom/sdm850-lenovo-yoga-c630.dtb
+  HDRINST usr/include/linux/nilfs2_api.h
+  DTC     arch/arm64/boot/dts/qcom/sdm850-samsung-w737.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm6125-sony-xperia-seine-pdx201.dtb
+  HDRINST usr/include/linux/if_macsec.h
+  DTC     arch/arm64/boot/dts/qcom/sm6350-sony-xperia-lena-pdx213.dtb
+  HDRINST usr/include/linux/if_bridge.h
+  DTC     arch/arm64/boot/dts/qcom/sm7225-fairphone-fp4.dtb
+  HDRINST usr/include/linux/if_addrlabel.h
+  DTC     arch/arm64/boot/dts/qcom/sm8150-hdk.dtb
+  HDRINST usr/include/linux/tipc_config.h
+  DTC     arch/arm64/boot/dts/qcom/sm8150-microsoft-surface-duo.dtb
+  HDRINST usr/include/linux/xilinx-v4l2-controls.h
+  DTC     arch/arm64/boot/dts/qcom/sm8150-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8150-sony-xperia-kumano-bahamut.dtb
+  HDRINST usr/include/linux/tls.h
+  DTC     arch/arm64/boot/dts/qcom/sm8150-sony-xperia-kumano-griffin.dtb
+  HDRINST usr/include/linux/dccp.h
+  HDRINST usr/include/linux/tcp.h
+  DTC     arch/arm64/boot/dts/qcom/sm8250-hdk.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8250-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8250-sony-xperia-edo-pdx203.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8250-sony-xperia-edo-pdx206.dtb
+  HDRINST usr/include/linux/if_alg.h
+  HDRINST usr/include/linux/bt-bmc.h
+  HDRINST usr/include/linux/cec-funcs.h
+  DTC     arch/arm64/boot/dts/qcom/sm8350-hdk.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8350-microsoft-surface-duo2.dtb
+  HDRINST usr/include/linux/msg.h
+  HDRINST usr/include/linux/keyctl.h
+  HDRINST usr/include/linux/if_vlan.h
+  HDRINST usr/include/linux/connector.h
+  DTC     arch/arm64/boot/dts/qcom/sm8350-mtp.dtb
+  DTC     arch/arm64/boot/dts/qcom/sm8350-sony-xperia-sagami-pdx214.dtb
+  HDRINST usr/include/linux/if_ppp.h
+  DTC     arch/arm64/boot/dts/qcom/sm8350-sony-xperia-sagami-pdx215.dtb
+  HDRINST usr/include/linux/sysinfo.h
+  DTC     arch/arm64/boot/dts/qcom/sm8450-hdk.dtb
+  HDRINST usr/include/linux/v4l2-subdev.h
+  HDRINST usr/include/linux/v4l2-controls.h
+  DTC     arch/arm64/boot/dts/qcom/sm8450-qrd.dtb
+  HDRINST usr/include/linux/uuid.h
+  DTC     arch/arm64/boot/dts/qcom/sm8450-sony-xperia-nagara-pdx223.dtb
+  HDRINST usr/include/linux/reboot.h
+  HDRINST usr/include/linux/sound.h
+  HDRINST usr/include/linux/net_dropmon.h
+  HDRINST usr/include/linux/seg6_genl.h
+  HDRINST usr/include/linux/termios.h
+  HDRINST usr/include/linux/netdevice.h
+  HDRINST usr/include/linux/media.h
+  HDRINST usr/include/linux/ipmi.h
+  HDRINST usr/include/linux/resource.h
+  HDRINST usr/include/linux/if_cablemodem.h
+  HDRINST usr/include/linux/mctp.h
+  HDRINST usr/include/linux/nbd-netlink.h
+  HDRINST usr/include/linux/major.h
+  HDRINST usr/include/linux/cciss_defs.h
+  HDRINST usr/include/linux/ip_vs.h
+  HDRINST usr/include/linux/kernel.h
+  HDRINST usr/include/linux/watchdog.h
+  HDRINST usr/include/linux/chio.h
+  HDRINST usr/include/linux/fou.h
+  HDRINST usr/include/linux/sched.h
+  HDRINST usr/include/linux/map_to_14segment.h
+  HDRINST usr/include/linux/acrn.h
+  HDRINST usr/include/linux/arcfb.h
+  HDRINST usr/include/linux/cachefiles.h
+  HDRINST usr/include/linux/vduse.h
+  HDRINST usr/include/linux/wait.h
+  HDRINST usr/include/linux/f2fs.h
+  HDRINST usr/include/linux/kernel-page-flags.h
+  HDRINST usr/include/linux/msdos_fs.h
+  HDRINST usr/include/linux/mman.h
+  HDRINST usr/include/linux/virtio_pci.h
+  HDRINST usr/include/linux/seg6_local.h
+  HDRINST usr/include/linux/atalk.h
+  HDRINST usr/include/linux/mei.h
+  HDRINST usr/include/linux/virtio_gpio.h
+  HDRINST usr/include/linux/i2o-dev.h
+  HDRINST usr/include/linux/xfrm.h
+  HDRINST usr/include/linux/if_tun.h
+  HDRINST usr/include/linux/fanotify.h
+  HDRINST usr/include/linux/mdio.h
+  HDRINST usr/include/linux/fb.h
+  HDRINST usr/include/linux/ipv6.h
+  HDRINST usr/include/linux/ipv6_route.h
+  HDRINST usr/include/linux/videodev2.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6_tables.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_LOG.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_hl.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_opts.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_HL.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_ipv6header.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_frag.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_mh.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_rt.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_NPT.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_REJECT.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_srh.h
+  HDRINST usr/include/linux/rds.h
+  HDRINST usr/include/linux/netfilter_ipv6/ip6t_ah.h
+  HDRINST usr/include/linux/netfilter.h
+  HDRINST usr/include/linux/lirc.h
+  HDRINST usr/include/linux/hidraw.h
+  HDRINST usr/include/linux/unix_diag.h
+  HDRINST usr/include/linux/wmi.h
+  HDRINST usr/include/linux/ioctl.h
+  HDRINST usr/include/linux/omapfb.h
+  HDRINST usr/include/linux/eventpoll.h
+  HDRINST usr/include/linux/virtio_ids.h
+  HDRINST usr/include/linux/random.h
+  HDRINST usr/include/linux/futex.h
+  HDRINST usr/include/linux/ethtool.h
+  HDRINST usr/include/linux/net_tstamp.h
+  HDRINST usr/include/linux/virtio_mmio.h
+  HDRINST usr/include/linux/arm_sdei.h
+  HDRINST usr/include/linux/stm.h
+  HDRINST usr/include/linux/uleds.h
+  HDRINST usr/include/linux/magic.h
+  HDRINST usr/include/linux/netfilter_bridge.h
+  HDRINST usr/include/linux/i2c-dev.h
+  HDRINST usr/include/linux/ptp_clock.h
+  HDRINST usr/include/linux/usbdevice_fs.h
+  HDRINST usr/include/linux/surface_aggregator/dtx.h
+  HDRINST usr/include/linux/surface_aggregator/cdev.h
+  HDRINST usr/include/linux/nitro_enclaves.h

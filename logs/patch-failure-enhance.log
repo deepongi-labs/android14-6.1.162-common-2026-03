@@ -1,0 +1,292 @@
+=== Custom core SuSFS patch ===
+Patch: ../.github/patches/enhance/50_add_susfs_in_gki-android14-6.1.patch
+can't find file to patch at input line 5
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git drivers/input/input.c drivers/input/input.c
+|index 78be582b5766..5b548b1cf418 100644
+|--- drivers/input/input.c
+|+++ drivers/input/input.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+checking file Makefile
+Hunk #1 FAILED at 17.
+1 out of 1 hunk FAILED
+can't find file to patch at input line 46
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/exec.c fs/exec.c
+|index ae8f80895dc6..d0fc034ee947 100644
+|--- fs/exec.c
+|+++ fs/exec.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+3 out of 3 hunks ignored
+can't find file to patch at input line 98
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/namei.c fs/namei.c
+|index 8e9c0b567faa..38b2be587dae 100644
+|--- fs/namei.c
+|+++ fs/namei.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+20 out of 20 hunks ignored
+can't find file to patch at input line 416
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/namespace.c fs/namespace.c
+|index f22f76d9c22f..a008fdadfe30 100644
+|--- fs/namespace.c
+|+++ fs/namespace.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+9 out of 9 hunks ignored
+can't find file to patch at input line 722
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/notify/fdinfo.c fs/notify/fdinfo.c
+|index dd5bc6ffae85..9cf521b124e7 100644
+|--- fs/notify/fdinfo.c
+|+++ fs/notify/fdinfo.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+4 out of 4 hunks ignored
+can't find file to patch at input line 826
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/open.c fs/open.c
+|index 82d10b7a57da..0ec507a012f5 100644
+|--- fs/open.c
+|+++ fs/open.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+5 out of 5 hunks ignored
+can't find file to patch at input line 924
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/proc/base.c fs/proc/base.c
+|index b0ec673a2225..27bc58fc2ede 100644
+|--- fs/proc/base.c
+|+++ fs/proc/base.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+4 out of 4 hunks ignored
+can't find file to patch at input line 980
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/proc/bootconfig.c fs/proc/bootconfig.c
+|index 2e244ada1f97..ca76c06d0bbf 100644
+|--- fs/proc/bootconfig.c
+|+++ fs/proc/bootconfig.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+1 out of 1 hunk ignored
+can't find file to patch at input line 1006
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/proc/fd.c fs/proc/fd.c
+|index 913bef0d2a36..585fc5607c01 100644
+|--- fs/proc/fd.c
+|+++ fs/proc/fd.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 1117
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/proc/task_mmu.c fs/proc/task_mmu.c
+|index d6f37ed840e5..c447f7aff5da 100644
+|--- fs/proc/task_mmu.c
+|+++ fs/proc/task_mmu.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+9 out of 9 hunks ignored
+can't find file to patch at input line 1270
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/proc_namespace.c fs/proc_namespace.c
+|index 846f9455ae22..0184e57eb255 100644
+|--- fs/proc_namespace.c
+|+++ fs/proc_namespace.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+4 out of 4 hunks ignored
+can't find file to patch at input line 1343
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/read_write.c fs/read_write.c
+|index 7a2ff6157eda..72d14c8e9200 100644
+|--- fs/read_write.c
+|+++ fs/read_write.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+1 out of 1 hunk ignored
+can't find file to patch at input line 1366
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/readdir.c fs/readdir.c
+|index 9c53edb60c03..70c4fbcc46b2 100644
+|--- fs/readdir.c
+|+++ fs/readdir.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+21 out of 21 hunks ignored
+can't find file to patch at input line 1628
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/stat.c fs/stat.c
+|index ef50573c72a2..696b65a2318a 100644
+|--- fs/stat.c
+|+++ fs/stat.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+8 out of 8 hunks ignored
+can't find file to patch at input line 1763
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git fs/statfs.c fs/statfs.c
+|index 96d1c3edf289..b2c570aa197a 100644
+|--- fs/statfs.c
+|+++ fs/statfs.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 1829
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git kernel/kallsyms.c kernel/kallsyms.c
+|index 5e98cd80eed8..cc1729da570b 100644
+|--- kernel/kallsyms.c
+|+++ kernel/kallsyms.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 1880
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git kernel/reboot.c kernel/reboot.c
+|index 344ceaf5ed13..c2d1a782d5a5 100644
+|--- kernel/reboot.c
+|+++ kernel/reboot.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 1910
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git kernel/sys.c kernel/sys.c
+|index ba7926d7b59c..efd4a2772b3c 100644
+|--- kernel/sys.c
+|+++ kernel/sys.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+3 out of 3 hunks ignored
+can't find file to patch at input line 1957
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git mm/memory.c mm/memory.c
+|index 78216a14ff5d..7f1f77bd4aac 100644
+|--- mm/memory.c
+|+++ mm/memory.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 1983
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git security/selinux/avc.c security/selinux/avc.c
+|index d93af92498f5..0e31fe21ec72 100644
+|--- security/selinux/avc.c
+|+++ security/selinux/avc.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+2 out of 2 hunks ignored
+can't find file to patch at input line 2026
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git security/selinux/hooks.c security/selinux/hooks.c
+|index ad079e552823..7a2c06835744 100644
+|--- security/selinux/hooks.c
+|+++ security/selinux/hooks.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+3 out of 3 hunks ignored
+can't find file to patch at input line 2097
+Perhaps you used the wrong -p or --strip option?
+The text leading up to this was:
+--------------------------
+|diff --git security/selinux/selinuxfs.c security/selinux/selinuxfs.c
+|index 755325a94a86..514b893abb0b 100644
+|--- security/selinux/selinuxfs.c
+|+++ security/selinux/selinuxfs.c
+--------------------------
+File to patch: 
+Skip this patch? [y] 
+Skipping patch.
+4 out of 4 hunks ignored
+

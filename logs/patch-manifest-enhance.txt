@@ -1,0 +1,8 @@
+Custom core SuSFS patch | ../.github/patches/enhance/50_add_susfs_in_gki-android14-6.1.patch | stale-fallback
+Default core SuSFS patch | ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch | applied-3way
+WK SuSFS fix: base.c include (1) | fs/proc/base.c | applied
+WK SuSFS fix: base.c include (2) | fs/proc/base.c | applied
+WK SuSFS fix: namespace.c prologue | fs/namespace.c | applied
+Namespace SuSFS helpers | fs/namespace.c | already-present
+KernelSU-Next SuSFS integration | /home/deepongi/actions-runner/_work/android14-6.1.162-common-2026-03/android14-6.1.162-common-2026-03/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch | disabled
+dynasched governor | kernel/sched/cpufreq_dynasched.c | applied

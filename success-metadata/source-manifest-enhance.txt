@@ -1,0 +1,14 @@
+variant=enhance
+kernel_ref=android14-6.1-2026-03
+susfs_ref=gki-android14-6.1-dev
+ksu_repo=https://github.com/KernelSU-Next/KernelSU-Next.git
+ksu_ref=dev
+enable_susfs=false
+dry_run=false
+tuning_profile=balanced
+lto_mode=thin
+make_jobs=auto
+runtime_tuner=true
+governor_mode=dynasched
+kerneltoast_patch_policy=best_effort
+patch_repo_sha=657ba9afec3c2237d9f42d64b51421d685e6db94

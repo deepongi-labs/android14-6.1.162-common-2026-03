@@ -1258,16 +1258,20 @@ jobs:
           mkdir -p kernel/drivers
           cp -a "$KSU_STAGE/kernel/." kernel/drivers/kernelsu/
 
-          # KernelSU-Next keeps some public headers outside kernel/ while its
-          # in-tree Kbuild includes drivers/kernelsu. Copy them into both
-          # include roots so quoted includes like "uapi/app_profile.h" resolve.
+          # KernelSU-Next keeps public headers outside kernel/ and links
+          # kernel/include/uapi back to that repo-root uapi directory. Once
+          # kernel/ is moved under drivers/kernelsu, that symlink points at the
+          # wrong tree, so replace it with real copied headers.
           if [ -d "$KSU_STAGE/uapi" ]; then
+            rm -rf kernel/drivers/kernelsu/uapi kernel/drivers/kernelsu/include/uapi
             mkdir -p kernel/drivers/kernelsu/uapi
             cp -a "$KSU_STAGE/uapi/." kernel/drivers/kernelsu/uapi/
-          fi
-          if [ -d "$KSU_STAGE/kernel/include/uapi" ]; then
             mkdir -p kernel/drivers/kernelsu/include/uapi
-            cp -a "$KSU_STAGE/kernel/include/uapi/." kernel/drivers/kernelsu/include/uapi/
+            cp -a "$KSU_STAGE/uapi/." kernel/drivers/kernelsu/include/uapi/
+          elif [ -e "$KSU_STAGE/kernel/include/uapi" ]; then
+            rm -rf kernel/drivers/kernelsu/include/uapi
+            mkdir -p kernel/drivers/kernelsu/include/uapi
+            cp -aL "$KSU_STAGE/kernel/include/uapi/." kernel/drivers/kernelsu/include/uapi/
           fi
           echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
 

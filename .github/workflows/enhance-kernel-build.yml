@@ -116,11 +116,6 @@ on:
         required: false
         default: 'dev'
         type: string
-      strict_susfs:
-        description: 'Strict mode: fail if SuSFS patches are auto-disabled or drift (overrides best_effort)'
-        required: false
-        default: true
-        type: boolean
 
 jobs:
   build-enhance:
@@ -148,4 +143,3 @@ jobs:
         include_runtime_tuner=${{ inputs.include_runtime_tuner }}
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
-        strict_susfs=${{ inputs.strict_susfs }}

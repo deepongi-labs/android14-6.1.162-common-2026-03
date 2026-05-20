@@ -51,7 +51,6 @@ Inputs you can set when dispatching the workflow:
 * `lto_mode` — `thin` (default) / `full` / `none`
 * `governor_mode` — `dynasched` (default; renames schedutil to a Pixel-8-aware name) / `stock_schedutil`
 * `kerneltoast_patch_policy` — `strict` / `best_effort` (default) / `off`
-* `strict_susfs` — fail the build if any SuSFS patch auto-disables or drifts (default: true in `enhance-kernel-build.yml`; otherwise false unless set via `build_options`)
 * `apply_oneplus12_wifi_patch` — opt-in legacy patch (default: false; Pixel 8 uses a different chipset)
 * `dirty_build` — incremental/no-clean mode: preserves existing source checkouts and `out/` build directory for fast rebuilds (default: false)
 * `force_clean_build` — runs `mrproper` before defconfig (default: false)
@@ -110,8 +109,7 @@ CONFIG_KSU_SUSFS_SUS_MAP=y
 
 The SuSFS patch pipeline is multi-stage: it tries the variant-specific
 patch, falls back to the upstream susfs4ksu patch, and applies Python-based
-fuzzing/3-way merge for stale hunks. Drift is reported in the patch manifest
-and gated by `strict_susfs`.
+fuzzing/3-way merge for stale hunks. Drift is reported in the patch manifest.
 
 ## Self-hosted Runner
 

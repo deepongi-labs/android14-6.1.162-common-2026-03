@@ -82,7 +82,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2025-08_r11'
+        default: 'android14-6.1-2026-03_r12'
         type: string
 
   workflow_call:
@@ -297,7 +297,7 @@ jobs:
           echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2025-08_r11}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-03_r12}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT

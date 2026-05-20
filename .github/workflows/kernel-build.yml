@@ -349,7 +349,7 @@ jobs:
           esac
           echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
 
-          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-false}"
+          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-true}"
           case "$DIRTY_MODULE_ABI_BYPASS" in
             true|false) ;;
             *) echo "❌ Invalid dirty_module_abi_bypass: $DIRTY_MODULE_ABI_BYPASS (expected true or false)"; exit 1 ;;

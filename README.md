@@ -58,7 +58,6 @@ Inputs you can set when dispatching the workflow:
   * note: ignored when `dirty_build=true`
 * `dry_run_only` — sync + patch + verify, skip compile (default: false)
 * `include_runtime_tuner` — generate the on-device dynasched tuner script (default: true)
-* `dirty_module_abi_bypass` — force vendor module CRC/version mismatch bypass (`CONFIG_MODULE_FORCE_LOAD=y`, adds `-dirtyabi` artifact suffix)
 
 Example manual dispatch (incremental/dirty compile):
 

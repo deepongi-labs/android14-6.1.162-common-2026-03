@@ -84,7 +84,7 @@ on:
       dirty_module_abi_bypass:
         description: 'Dirty build: force vendor module CRC/version mismatches'
         required: false
-        default: false
+        default: true
         type: boolean
       kernel_ref:
         description: 'Override kernel ref'

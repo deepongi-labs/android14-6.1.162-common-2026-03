@@ -295,23 +295,14 @@ jobs:
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
           # Default to upstream KernelSU-Next 'dev' branch.
-          # Special-case: if SuSFS is enabled and the user explicitly passes
-          # 'stable', remap to the susfs-aware fork branch
-          # 'next-susfs-a14-6.1-dev' so SuSFS hooks line up. 'dev' is passed
-          # through unchanged (KernelSU-Next upstream dev branch).
+          # SuSFS patches are fetched from simonpunk/susfs4ksu gki-android14-6.1-dev
+          # and WildKernels v2.1.0 fixers, so upstream dev branch works directly.
           RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
-          if [ "${ENABLE_SUSFS}" = "true" ] && [ "${RESOLVED_NEXT_REF}" = "stable" ]; then
-            echo "next_ref=next-susfs-a14-6.1-dev" >> $GITHUB_OUTPUT
-          else
-            echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT
-          fi
-
-          TUNING_PROFILE="${TUNING_PROFILE:-balanced}"
+          echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT
+          # SuSFS patches are sourced from:
           case "$TUNING_PROFILE" in
             balanced|performance|battery) ;;
-            *) echo "❌ Invalid tuning_profile: $TUNING_PROFILE"; exit 1 ;;
           esac
-          echo "tuning_profile=$TUNING_PROFILE" >> $GITHUB_OUTPUT
 
           LTO_MODE="${LTO_MODE:-thin}"
           case "$LTO_MODE" in
@@ -323,10 +314,8 @@ jobs:
           MAKE_JOBS_INPUT="${MAKE_JOBS:-auto}"
           if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
-          else
             echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
             exit 1
-          fi
 
           if [ -z "$INCLUDE_RUNTIME_TUNER" ]; then
             INCLUDE_RUNTIME_TUNER="true"
@@ -1028,7 +1017,7 @@ jobs:
           fi
 
           if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.1.0"
             printf '%s\n' \
               'from pathlib import Path' \
               'path = Path("fs/proc/base.c")' \
@@ -1253,7 +1242,7 @@ jobs:
           fi
 
           if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            WK_SUSFS_FIX_DIR="${GITHUB_WORKSPACE}/.github/patches/next/wk_susfs_fix_patches/v2.0.0"
+            WK_SUSFS_FIX_DIR="${GITHUB_WORKSPACE}/.github/patches/next/wk_susfs_fix_patches/v2.1.0"
             echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next (variant=${KSU_VARIANT})..."
 
             try_wk_patch() {
@@ -1272,18 +1261,20 @@ jobs:
               fi
             }
 
-            if grep -q '^int ksu_access_ok' kernel/kernel_compat.c 2>/dev/null; then
-              echo "ℹ️ WK SuSFS fix: kernel_compat is stale; current KernelSU-Next helper is already compatible."
-              printf '%s | %s | stale-compatible\n' "WK SuSFS fix: kernel_compat" "kernel/kernel_compat.c" >> "$PATCH_MANIFEST"
-            else
-              try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_compat.c.patch" "WK SuSFS fix: kernel_compat"
-            fi
-            
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_open.c.patch" "WK SuSFS fix: open"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_fdinfo.c.patch" "WK SuSFS fix: fdinfo"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_task_mmu.c.patch" "WK SuSFS fix: task_mmu"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_core_hook.c.patch" "WK SuSFS fix: core_hook"
+            # Consolidated WildKernels patchset:
+            # https://github.com/WildKernels/kernel_patches/tree/main/next/susfs_fix_patches/v2.1.0
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_Kbuild.patch" "WK SuSFS fix: Kbuild"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_Makefile.patch" "WK SuSFS fix: Makefile"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_init.c.patch" "WK SuSFS fix: init.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_umount.c.patch" "WK SuSFS fix: kernel_umount.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_selinux_hide.c.patch" "WK SuSFS fix: selinux_hide.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_setuid_hook.c.patch" "WK SuSFS fix: setuid_hook.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.h.patch" "WK SuSFS fix: sucompat.h"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_supercall.c.patch" "WK SuSFS fix: supercall.c"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/ksu_toolkit.patch" "WK SuSFS fix: ksu_toolkit"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/multi_manager.patch" "WK SuSFS fix: multi_manager"
+            try_wk_patch "${WK_SUSFS_FIX_DIR}/overwrite_hook_mode.patch" "WK SuSFS fix: overwrite_hook_mode"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

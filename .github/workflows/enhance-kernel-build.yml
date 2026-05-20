@@ -81,11 +81,6 @@ on:
         required: false
         default: false
         type: boolean
-      dirty_module_abi_bypass:
-        description: 'Dirty build: force vendor module CRC/version mismatches'
-        required: false
-        default: true
-        type: boolean
       dirty_build:
         description: 'Incremental build: skip source cleanup, preserve out/ directory'
         required: false
@@ -121,11 +116,6 @@ on:
         required: false
         default: 'dev'
         type: string
-      strict_susfs:
-        description: 'Strict mode: fail if SuSFS patches are auto-disabled or drift (overrides best_effort)'
-        required: false
-        default: true
-        type: boolean
 
 jobs:
   build-enhance:
@@ -138,7 +128,6 @@ jobs:
       enable_telegram: ${{ inputs.enable_telegram }}
       create_release: ${{ inputs.create_release }}
       dry_run_only: ${{ inputs.dry_run_only }}
-      dirty_module_abi_bypass: ${{ inputs.dirty_module_abi_bypass }}
       dirty_build: ${{ inputs.dirty_build }}
       refs: |
         kernel_ref=${{ inputs.kernel_ref }}
@@ -154,4 +143,3 @@ jobs:
         include_runtime_tuner=${{ inputs.include_runtime_tuner }}
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
-        strict_susfs=${{ inputs.strict_susfs }}

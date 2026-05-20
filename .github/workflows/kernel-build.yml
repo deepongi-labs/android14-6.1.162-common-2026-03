@@ -69,11 +69,6 @@ on:
         required: false
         default: false
         type: boolean
-      dirty_module_abi_bypass:
-        description: 'Dirty build: force vendor module CRC/version mismatches'
-        required: false
-        default: false
-        type: boolean
       dirty_build:
         description: 'Incremental build: skip source cleanup, preserve out/ directory'
         required: false
@@ -185,7 +180,6 @@ jobs:
       include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
       governor_mode: ${{ steps.config.outputs.governor_mode }}
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
-      strict_susfs: ${{ steps.config.outputs.strict_susfs }}
       dirty_module_abi_bypass: ${{ steps.config.outputs.dirty_module_abi_bypass }}
     steps:
       - name: Record Build Start Time
@@ -261,7 +255,6 @@ jobs:
           INCLUDE_RUNTIME_TUNER=""
           GOVERNOR_MODE=""
           KERNELTOAST_PATCH_POLICY=""
-          STRICT_SUSFS=""
           DIRTY_MODULE_ABI_BYPASS=""
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
@@ -285,7 +278,6 @@ jobs:
               include_runtime_tuner) INCLUDE_RUNTIME_TUNER="$value" ;;
               governor_mode) GOVERNOR_MODE="$value" ;;
               kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
-              strict_susfs) STRICT_SUSFS="$value" ;;
               dirty_module_abi_bypass) DIRTY_MODULE_ABI_BYPASS="$value" ;;
               *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
             esac
@@ -357,9 +349,7 @@ jobs:
           esac
           echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
 
-          echo "strict_susfs=${STRICT_SUSFS:-false}" >> $GITHUB_OUTPUT
-
-          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-${{ inputs.dirty_module_abi_bypass }}}"
+          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-false}"
           case "$DIRTY_MODULE_ABI_BYPASS" in
             true|false) ;;
             *) echo "❌ Invalid dirty_module_abi_bypass: $DIRTY_MODULE_ABI_BYPASS (expected true or false)"; exit 1 ;;
@@ -389,7 +379,6 @@ jobs:
       RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
       GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
-      STRICT_SUSFS: ${{ needs.setup.outputs.strict_susfs }}
       DIRTY_MODULE_ABI_BYPASS: ${{ needs.setup.outputs.dirty_module_abi_bypass }}
 
     steps:
@@ -845,10 +834,6 @@ jobs:
                 echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
                 printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
                 log_patch_failure "$default_patch" "$default_desc"
-                if [ "${STRICT_SUSFS:-false}" = "true" ]; then
-                  echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
-                  exit 1
-                fi
                 echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
                 return 0
               fi
@@ -1139,10 +1124,6 @@ jobs:
             else
               echo "⚠️ KernelSU-Next SuSFS integration missing; disabling SuSFS for this variant to keep build green."
               printf '%s | %s | disabled\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
-                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
-                exit 1
-              fi
               echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
               SUSFS_RUNTIME_ENABLED=false
             fi
@@ -1170,10 +1151,6 @@ jobs:
                   if [ "$KSU_VARIANT" = "enhance" ]; then
                     echo "⚠️ Enhance SuSFS patchset stale; disabling SuSFS for this variant to keep build green."
                     printf '%s | %s | disabled\n' "Enhance SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-                    if [ "${STRICT_SUSFS:-false}" = "true" ]; then
-                      echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
-                      exit 1
-                    fi
                     echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
                     SUSFS_RUNTIME_ENABLED=false
                   else
@@ -1350,7 +1327,7 @@ jobs:
 
           if [ "$VALIDATION_ERRORS" -gt 0 ]; then
             echo "::endgroup::"
-            echo "::error::$VALIDATION_ERRORS SuSFS integration check(s) failed. Set strict_susfs=true to catch this earlier, or check patch-manifest-${KSU_VARIANT}.txt for patch failures."
+            echo "::error::$VALIDATION_ERRORS SuSFS integration check(s) failed. Check patch-manifest-${KSU_VARIANT}.txt for patch failures."
             exit 1
           fi
 

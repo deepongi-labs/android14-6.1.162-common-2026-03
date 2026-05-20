@@ -1517,9 +1517,20 @@ jobs:
             echo "🔧 Installing dynasched cluster-aware governor..."
             cp "$GITHUB_WORKSPACE/.github/patches/global/cpufreq_dynasched.c" \
                kernel/sched/cpufreq_dynasched.c
-            apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"
-            echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
-            printf 'dynasched governor | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
+
+            if grep -q 'cpufreq_dynasched.c' kernel/sched/build_utility.c 2>/dev/null \
+              && grep -q 'config CPU_FREQ_GOV_DYNASCHED' drivers/cpufreq/Kconfig 2>/dev/null; then
+              echo "ℹ️ dynasched governor integration already present, skipping patch."
+              printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | already-present\n' >> "${PATCH_MANIFEST:-/dev/null}"
+            else
+              apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"
+              printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
+            fi
+
+            if ! grep -q '^CONFIG_CPU_FREQ_GOV_DYNASCHED=y$' arch/arm64/configs/gki_defconfig 2>/dev/null; then
+              echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
+            fi
+            printf 'dynasched governor source | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
           else
             echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
           fi

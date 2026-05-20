@@ -1564,11 +1564,10 @@ jobs:
           fi
           START_TIME=$SECONDS
 
-          if [ "${KSU_VARIANT}" = "tiann" ] || [ "${KSU_VARIANT}" = "enhance" ]; then
-            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
-          else
-            KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi+"'
-          fi
+          # Keep LOCALVERSION empty to preserve stock vermagic for vendor module compat.
+          # Branding goes into BUILD_SALT (does not affect UTS_RELEASE / vermagic).
+          KSU_LOCALVERSION='CONFIG_LOCALVERSION=""'
+          KSU_BUILD_SALT='CONFIG_BUILD_SALT="deepongi"'
 
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
@@ -1629,6 +1628,7 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_LOCALVERSION_AUTO=n
           ${KSU_LOCALVERSION}
+          ${KSU_BUILD_SALT}
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
 

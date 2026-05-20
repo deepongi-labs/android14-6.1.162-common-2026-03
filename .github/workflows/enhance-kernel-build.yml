@@ -119,7 +119,7 @@ on:
       strict_susfs:
         description: 'Strict mode: fail if SuSFS patches are auto-disabled or drift (overrides best_effort)'
         required: false
-        default: false
+        default: true
         type: boolean
 
 jobs:

@@ -1242,6 +1242,58 @@ jobs:
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
           echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
 
+      - name: Validate SuSFS Integration
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          set -e
+          echo "::group::SuSFS Integration Validation"
+
+          VALIDATION_ERRORS=0
+
+          # Check kernel-side SuSFS sources.
+          if [ ! -f kernel/fs/susfs.c ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/fs/susfs.c missing. Core SuSFS patch may have failed silently."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/fs/susfs.c present"
+          fi
+
+          if [ ! -f kernel/include/linux/susfs.h ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/include/linux/susfs.h missing."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/include/linux/susfs.h present"
+          fi
+
+          # Check KernelSU-side SuSFS integration.
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          if ! grep -q 'config KSU_SUSFS' "$KSU_STAGE/kernel/Kconfig" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Makefile" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Kbuild" 2>/dev/null; then
+            echo "::error::ENABLE_SUSFS=true but CONFIG_KSU_SUSFS not found in KernelSU Kconfig/Makefile/Kbuild. Integration patch may have failed."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ KernelSU SuSFS integration present"
+          fi
+
+          # Check patch manifest for silent disables.
+          if [ -f "$PATCH_MANIFEST" ]; then
+            DISABLED_COUNT=$(grep -c '| disabled$' "$PATCH_MANIFEST" 2>/dev/null || echo 0)
+            if [ "$DISABLED_COUNT" -gt 0 ]; then
+              echo "::warning::$DISABLED_COUNT SuSFS patch(es) were auto-disabled. Check patch-manifest-${KSU_VARIANT}.txt for details."
+              grep '| disabled$' "$PATCH_MANIFEST" || true
+            fi
+          fi
+
+          if [ "$VALIDATION_ERRORS" -gt 0 ]; then
+            echo "::endgroup::"
+            echo "::error::$VALIDATION_ERRORS SuSFS integration check(s) failed. Set strict_susfs=true to catch this earlier, or check patch-manifest-${KSU_VARIANT}.txt for patch failures."
+            exit 1
+          fi
+
+          echo "✅ SuSFS integration validation passed"
+          echo "::endgroup::"
+
       - name: Integrate KernelSU into kernel tree
         run: |
           set -e

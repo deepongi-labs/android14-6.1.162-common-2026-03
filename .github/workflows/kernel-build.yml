@@ -74,6 +74,11 @@ on:
         required: false
         default: false
         type: boolean
+      dirty_build:
+        description: 'Incremental build: skip source cleanup, preserve out/ directory'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -111,6 +116,10 @@ on:
         default: false
         type: boolean
       dirty_module_abi_bypass:
+        required: false
+        default: false
+        type: boolean
+      dirty_build:
         required: false
         default: false
         type: boolean
@@ -160,6 +169,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
+      dirty_build: ${{ steps.config.outputs.dirty_build }}
       dry_run: ${{ steps.config.outputs.dry_run }}
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
       create_release: ${{ steps.config.outputs.create_release }}
@@ -284,6 +294,7 @@ jobs:
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
+          echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
           echo "kernel_ref=${KERNEL_REF:-android14-6.1-2025-08_r11}" >> $GITHUB_OUTPUT
@@ -369,6 +380,7 @@ jobs:
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      DIRTY_BUILD: ${{ needs.setup.outputs.dirty_build }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
@@ -503,14 +515,24 @@ jobs:
             fi
 
             if [ -d "${target}/.git" ]; then
+              if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ]; then
+                echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+                echo "::endgroup::"
+                return 0
+              fi
+
               git -C "$target" remote set-url origin "$url"
               # Clean working tree FIRST to avoid checkout conflicts from previously applied patches
-              git -C "$target" reset --hard HEAD
-              git -C "$target" clean -fdx
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard HEAD
+                git -C "$target" clean -fdx
+              fi
               git -C "$target" fetch --depth=1 origin "$ref"
               git -C "$target" checkout FETCH_HEAD
-              git -C "$target" reset --hard FETCH_HEAD
-              git -C "$target" clean -fdx
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard FETCH_HEAD
+                git -C "$target" clean -fdx
+              fi
             else
               rm -rf "$target"
               rm -rf ".git/modules/${target}" 2>/dev/null || true
@@ -596,6 +618,11 @@ jobs:
               git -C "$mirror" fetch --prune origin
             fi
 
+            if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ] && [ -d "$target/.git" ]; then
+              echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+              return 0
+            fi
+
             rm -rf "$target"
             git clone --reference-if-able "$mirror" "$mirror" "$target"
             git -C "$target" fetch --depth=1 origin "$ref"
@@ -604,8 +631,12 @@ jobs:
 
           # Clean any prior KSU artifacts from the kernel tree (legacy KernelSU/ folder,
           # symlinks, and integrated drivers/kernelsu/) plus the workspace-level staging dir.
-          rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
-          rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
+          if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+            rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
+            rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
+          else
+            echo "♻️ DIRTY_BUILD=true: preserving existing KernelSU staging and integrated tree"
+          fi
 
           case "${{ matrix.variant }}" in
             # 'enhance' is built on top of KernelSU-Next plus enhance-specific patches.
@@ -1801,7 +1832,7 @@ jobs:
           echo "Config validation passed"
           echo "::endgroup::"
 
-          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+          if [ "${{ env.FORCE_CLEAN }}" = "true" ] && [ "${{ env.DIRTY_BUILD }}" != "true" ]; then
             make -j$MAKE_JOBS O=out clean
           fi
 

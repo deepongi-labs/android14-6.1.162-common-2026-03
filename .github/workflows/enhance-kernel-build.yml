@@ -86,6 +86,11 @@ on:
         required: false
         default: true
         type: boolean
+      dirty_build:
+        description: 'Incremental build: skip source cleanup, preserve out/ directory'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -134,6 +139,7 @@ jobs:
       create_release: ${{ inputs.create_release }}
       dry_run_only: ${{ inputs.dry_run_only }}
       dirty_module_abi_bypass: ${{ inputs.dirty_module_abi_bypass }}
+      dirty_build: ${{ inputs.dirty_build }}
       refs: |
         kernel_ref=${{ inputs.kernel_ref }}
         susfs_ref=${{ inputs.susfs_ref }}

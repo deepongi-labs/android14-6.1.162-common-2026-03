@@ -60,6 +60,15 @@ Inputs you can set when dispatching the workflow:
 * `include_runtime_tuner` — generate the on-device dynasched tuner script (default: true)
 * `dirty_module_abi_bypass` — force vendor module CRC/version mismatch bypass (`CONFIG_MODULE_FORCE_LOAD=y`, adds `-dirtyabi` artifact suffix)
 
+Example manual dispatch (incremental/dirty compile):
+
+```yaml
+ksu_variant: enhance
+dirty_build: true
+force_clean_build: false
+dry_run_only: false
+```
+
 Source pin overrides:
 
 * `kernel_ref`  default `android14-6.1-2026-06`

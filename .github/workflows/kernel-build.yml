@@ -787,7 +787,7 @@ jobs:
               local temp_log
 
               temp_log="$(mktemp)"
-              patch -p${strip_level} --reverse --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
+              patch -p${strip_level} --forward --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
               if grep -q 'Reversed (or previously applied) patch detected' "$temp_log"; then
                 rm -f "$temp_log"
                 return 0

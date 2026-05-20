@@ -780,61 +780,76 @@ jobs:
             local variant_desc="$3"
             local default_desc="$4"
 
-            if [ -f "$variant_patch" ]; then
-              if patch -p1 --forward --dry-run < "$variant_patch" >/dev/null 2>&1; then
-                echo "📋 Applying CUSTOM patch: $variant_desc"
-                patch -p1 --forward < "$variant_patch"
-                printf '%s | %s | applied\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
-                return 0
-              elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
-                echo "ℹ️ ${variant_desc} already present, skipping."
-                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
-                return 0
-              elif git apply --3way --check "$variant_patch" >/dev/null 2>&1; then
-                echo "📋 Applying CUSTOM patch with 3-way merge: $variant_desc"
-                git apply --3way "$variant_patch"
-                printf '%s | %s | applied-3way\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
-                return 0
+            # Auto-detect patch strip level (-p0 vs -p1)
+            detect_strip_level() {
+              local patch_file="$1"
+              if patch -p1 --dry-run < "$patch_file" >/dev/null 2>&1; then
+                echo "1"
+              elif patch -p0 --dry-run < "$patch_file" >/dev/null 2>&1; then
+                echo "0"
               else
+                echo "-1"
+              fi
+            }
+
+            if [ -f "$variant_patch" ]; then
+              STRIP_LEVEL=$(detect_strip_level "$variant_patch")
+              if [ "$STRIP_LEVEL" = "-1" ]; then
+                if git apply --3way --check "$variant_patch" >/dev/null 2>&1; then
+                  echo "📋 Applying CUSTOM patch with 3-way merge: $variant_desc"
+                  git apply --3way "$variant_patch"
+                  printf '%s | %s | applied-3way\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                  return 0
+                fi
                 echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
                 printf '%s | %s | stale-fallback\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
                 log_patch_failure "$variant_patch" "$variant_desc"
+              elif patch -p${STRIP_LEVEL} --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
+                echo "ℹ️ ${variant_desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              else
+                echo "📋 Applying CUSTOM patch: $variant_desc"
+                patch -p${STRIP_LEVEL} --forward < "$variant_patch"
+                printf '%s | %s | applied-p%s\n' "$variant_desc" "$variant_patch" "$STRIP_LEVEL" >> "$PATCH_MANIFEST"
+                return 0
               fi
             fi
 
-            if patch -p1 --forward --dry-run < "$default_patch" >/dev/null 2>&1; then
-              echo "📋 Applying DEFAULT patch: $default_desc"
-              patch -p1 --forward < "$default_patch"
-              printf '%s | %s | applied\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
-              return 0
-            elif patch -p1 --reverse --dry-run < "$default_patch" >/dev/null 2>&1; then
+            STRIP_LEVEL=$(detect_strip_level "$default_patch")
+            if [ "$STRIP_LEVEL" = "-1" ]; then
+              if git apply --3way --check "$default_patch" >/dev/null 2>&1; then
+                echo "📋 Applying DEFAULT patch with 3-way merge: $default_desc"
+                git apply --3way "$default_patch"
+                printf '%s | %s | applied-3way\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+                return 0
+              fi
+              if [ "$KSU_VARIANT" = "enhance" ]; then
+                echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
+                printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
+                log_patch_failure "$default_patch" "$default_desc"
+                if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                  echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                  exit 1
+                fi
+                echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
+                return 0
+              fi
+              echo "❌ ${default_desc} could not be applied cleanly: $default_patch"
+              printf '%s | %s | failed\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+              log_patch_failure "$default_patch" "$default_desc"
+              echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
+              exit 1
+            elif patch -p${STRIP_LEVEL} --reverse --dry-run < "$default_patch" >/dev/null 2>&1; then
               echo "ℹ️ ${default_desc} already present, skipping."
               printf '%s | %s | already-present\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
               return 0
-            elif git apply --3way --check "$default_patch" >/dev/null 2>&1; then
-              echo "📋 Applying DEFAULT patch with 3-way merge: $default_desc"
-              git apply --3way "$default_patch"
-              printf '%s | %s | applied-3way\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+            else
+              echo "📋 Applying DEFAULT patch: $default_desc"
+              patch -p${STRIP_LEVEL} --forward < "$default_patch"
+              printf '%s | %s | applied-p%s\n' "$default_desc" "$default_patch" "$STRIP_LEVEL" >> "$PATCH_MANIFEST"
               return 0
             fi
-
-            if [ "$KSU_VARIANT" = "enhance" ]; then
-              echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
-              printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
-              log_patch_failure "$default_patch" "$default_desc"
-              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
-                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
-                exit 1
-              fi
-              echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
-              return 0
-            fi
-
-            echo "❌ ${default_desc} could not be applied cleanly: $default_patch"
-            printf '%s | %s | failed\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
-            log_patch_failure "$default_patch" "$default_desc"
-            echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
-            exit 1
           }
 
           ensure_namespace_susfs_prologue() {

@@ -74,10 +74,15 @@ on:
         required: false
         default: false
         type: boolean
+      dirty_build:
+        description: 'Incremental build: skip source cleanup, preserve out/ directory'
+        required: false
+        default: false
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2025-08_r11'
+        default: 'android14-6.1-2026-03_r12'
         type: string
 
   workflow_call:
@@ -111,6 +116,10 @@ on:
         default: false
         type: boolean
       dirty_module_abi_bypass:
+        required: false
+        default: false
+        type: boolean
+      dirty_build:
         required: false
         default: false
         type: boolean
@@ -160,6 +169,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
       force_clean: ${{ steps.config.outputs.force_clean }}
+      dirty_build: ${{ steps.config.outputs.dirty_build }}
       dry_run: ${{ steps.config.outputs.dry_run }}
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
       create_release: ${{ steps.config.outputs.create_release }}
@@ -284,9 +294,10 @@ jobs:
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
+          echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2025-08_r11}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${KERNEL_REF:-android14-6.1-2026-03_r12}" >> $GITHUB_OUTPUT
           echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
@@ -369,6 +380,7 @@ jobs:
     env:
       ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      DIRTY_BUILD: ${{ needs.setup.outputs.dirty_build }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
       KSU_VARIANT: ${{ matrix.variant }}
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
@@ -503,14 +515,24 @@ jobs:
             fi
 
             if [ -d "${target}/.git" ]; then
+              if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ]; then
+                echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+                echo "::endgroup::"
+                return 0
+              fi
+
               git -C "$target" remote set-url origin "$url"
               # Clean working tree FIRST to avoid checkout conflicts from previously applied patches
-              git -C "$target" reset --hard HEAD
-              git -C "$target" clean -fdx
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard HEAD
+                git -C "$target" clean -fdx
+              fi
               git -C "$target" fetch --depth=1 origin "$ref"
               git -C "$target" checkout FETCH_HEAD
-              git -C "$target" reset --hard FETCH_HEAD
-              git -C "$target" clean -fdx
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard FETCH_HEAD
+                git -C "$target" clean -fdx
+              fi
             else
               rm -rf "$target"
               rm -rf ".git/modules/${target}" 2>/dev/null || true
@@ -596,6 +618,11 @@ jobs:
               git -C "$mirror" fetch --prune origin
             fi
 
+            if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ] && [ -d "$target/.git" ]; then
+              echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+              return 0
+            fi
+
             rm -rf "$target"
             git clone --reference-if-able "$mirror" "$mirror" "$target"
             git -C "$target" fetch --depth=1 origin "$ref"
@@ -604,8 +631,12 @@ jobs:
 
           # Clean any prior KSU artifacts from the kernel tree (legacy KernelSU/ folder,
           # symlinks, and integrated drivers/kernelsu/) plus the workspace-level staging dir.
-          rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
-          rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
+          if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+            rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
+            rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
+          else
+            echo "♻️ DIRTY_BUILD=true: preserving existing KernelSU staging and integrated tree"
+          fi
 
           case "${{ matrix.variant }}" in
             # 'enhance' is built on top of KernelSU-Next plus enhance-specific patches.
@@ -749,61 +780,93 @@ jobs:
             local variant_desc="$3"
             local default_desc="$4"
 
-            if [ -f "$variant_patch" ]; then
-              if patch -p1 --forward --dry-run < "$variant_patch" >/dev/null 2>&1; then
-                echo "📋 Applying CUSTOM patch: $variant_desc"
-                patch -p1 --forward < "$variant_patch"
-                printf '%s | %s | applied\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+            # Auto-detect patch strip level (-p0 vs -p1)
+            patch_already_present() {
+              local patch_file="$1"
+              local strip_level="$2"
+              local temp_log
+
+              temp_log="$(mktemp)"
+              patch -p${strip_level} --forward --dry-run < "$patch_file" >"$temp_log" 2>&1 || true
+              if grep -q 'Reversed (or previously applied) patch detected' "$temp_log"; then
+                rm -f "$temp_log"
                 return 0
-              elif patch -p1 --reverse --dry-run < "$variant_patch" >/dev/null 2>&1; then
-                echo "ℹ️ ${variant_desc} already present, skipping."
-                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
-                return 0
-              elif git apply --3way --check "$variant_patch" >/dev/null 2>&1; then
-                echo "📋 Applying CUSTOM patch with 3-way merge: $variant_desc"
-                git apply --3way "$variant_patch"
-                printf '%s | %s | applied-3way\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
-                return 0
+              fi
+              rm -f "$temp_log"
+              return 1
+            }
+
+            detect_strip_level() {
+              local patch_file="$1"
+              if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1 \
+                || patch_already_present "$patch_file" "1"; then
+                echo "1"
+              elif patch -p0 --forward --dry-run < "$patch_file" >/dev/null 2>&1 \
+                || patch_already_present "$patch_file" "0"; then
+                echo "0"
               else
+                echo "-1"
+              fi
+            }
+
+            if [ -f "$variant_patch" ]; then
+              STRIP_LEVEL=$(detect_strip_level "$variant_patch")
+              if [ "$STRIP_LEVEL" = "-1" ]; then
+                if git apply --3way --check "$variant_patch" >/dev/null 2>&1; then
+                  echo "📋 Applying CUSTOM patch with 3-way merge: $variant_desc"
+                  git apply --3way "$variant_patch"
+                  printf '%s | %s | applied-3way\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                  return 0
+                fi
                 echo "⚠️ Custom patch is stale, falling back to default: $variant_patch"
                 printf '%s | %s | stale-fallback\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
                 log_patch_failure "$variant_patch" "$variant_desc"
+              elif patch_already_present "$variant_patch" "$STRIP_LEVEL"; then
+                echo "ℹ️ ${variant_desc} already present, skipping."
+                printf '%s | %s | already-present\n' "$variant_desc" "$variant_patch" >> "$PATCH_MANIFEST"
+                return 0
+              else
+                echo "📋 Applying CUSTOM patch: $variant_desc"
+                patch -p${STRIP_LEVEL} --forward < "$variant_patch"
+                printf '%s | %s | applied-p%s\n' "$variant_desc" "$variant_patch" "$STRIP_LEVEL" >> "$PATCH_MANIFEST"
+                return 0
               fi
             fi
 
-            if patch -p1 --forward --dry-run < "$default_patch" >/dev/null 2>&1; then
-              echo "📋 Applying DEFAULT patch: $default_desc"
-              patch -p1 --forward < "$default_patch"
-              printf '%s | %s | applied\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
-              return 0
-            elif patch -p1 --reverse --dry-run < "$default_patch" >/dev/null 2>&1; then
+            STRIP_LEVEL=$(detect_strip_level "$default_patch")
+            if [ "$STRIP_LEVEL" = "-1" ]; then
+              if git apply --3way --check "$default_patch" >/dev/null 2>&1; then
+                echo "📋 Applying DEFAULT patch with 3-way merge: $default_desc"
+                git apply --3way "$default_patch"
+                printf '%s | %s | applied-3way\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+                return 0
+              fi
+              if [ "$KSU_VARIANT" = "enhance" ]; then
+                echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
+                printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
+                log_patch_failure "$default_patch" "$default_desc"
+                if [ "${STRICT_SUSFS:-false}" = "true" ]; then
+                  echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
+                  exit 1
+                fi
+                echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
+                return 0
+              fi
+              echo "❌ ${default_desc} could not be applied cleanly: $default_patch"
+              printf '%s | %s | failed\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+              log_patch_failure "$default_patch" "$default_desc"
+              echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
+              exit 1
+            elif patch_already_present "$default_patch" "$STRIP_LEVEL"; then
               echo "ℹ️ ${default_desc} already present, skipping."
               printf '%s | %s | already-present\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
               return 0
-            elif git apply --3way --check "$default_patch" >/dev/null 2>&1; then
-              echo "📋 Applying DEFAULT patch with 3-way merge: $default_desc"
-              git apply --3way "$default_patch"
-              printf '%s | %s | applied-3way\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
+            else
+              echo "📋 Applying DEFAULT patch: $default_desc"
+              patch -p${STRIP_LEVEL} --forward < "$default_patch"
+              printf '%s | %s | applied-p%s\n' "$default_desc" "$default_patch" "$STRIP_LEVEL" >> "$PATCH_MANIFEST"
               return 0
             fi
-
-            if [ "$KSU_VARIANT" = "enhance" ]; then
-              echo "⚠️ Default core SuSFS patch stale on enhance; disabling SuSFS for this variant to keep build green."
-              printf '%s | %s | disabled\n' "Enhance core SuSFS patch" "$default_patch" >> "$PATCH_MANIFEST"
-              log_patch_failure "$default_patch" "$default_desc"
-              if [ "${STRICT_SUSFS:-false}" = "true" ]; then
-                echo "::error::strict_susfs=true but SuSFS patch was disabled/failed for ${KSU_VARIANT}. Aborting."
-                exit 1
-              fi
-              echo "ENABLE_SUSFS=false" >> "$GITHUB_ENV"
-              return 0
-            fi
-
-            echo "❌ ${default_desc} could not be applied cleanly: $default_patch"
-            printf '%s | %s | failed\n' "$default_desc" "$default_patch" >> "$PATCH_MANIFEST"
-            log_patch_failure "$default_patch" "$default_desc"
-            echo "📝 Patch failure log: $PATCH_FAILURE_LOG"
-            exit 1
           }
 
           ensure_namespace_susfs_prologue() {
@@ -1242,6 +1305,58 @@ jobs:
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
           echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
 
+      - name: Validate SuSFS Integration
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          set -e
+          echo "::group::SuSFS Integration Validation"
+
+          VALIDATION_ERRORS=0
+
+          # Check kernel-side SuSFS sources.
+          if [ ! -f kernel/fs/susfs.c ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/fs/susfs.c missing. Core SuSFS patch may have failed silently."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/fs/susfs.c present"
+          fi
+
+          if [ ! -f kernel/include/linux/susfs.h ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/include/linux/susfs.h missing."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/include/linux/susfs.h present"
+          fi
+
+          # Check KernelSU-side SuSFS integration.
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          if ! grep -q 'config KSU_SUSFS' "$KSU_STAGE/kernel/Kconfig" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Makefile" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Kbuild" 2>/dev/null; then
+            echo "::error::ENABLE_SUSFS=true but CONFIG_KSU_SUSFS not found in KernelSU Kconfig/Makefile/Kbuild. Integration patch may have failed."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ KernelSU SuSFS integration present"
+          fi
+
+          # Check patch manifest for silent disables.
+          if [ -f "$PATCH_MANIFEST" ]; then
+            DISABLED_COUNT=$(grep -c '| disabled$' "$PATCH_MANIFEST" 2>/dev/null || echo 0)
+            if [ "$DISABLED_COUNT" -gt 0 ]; then
+              echo "::warning::$DISABLED_COUNT SuSFS patch(es) were auto-disabled. Check patch-manifest-${KSU_VARIANT}.txt for details."
+              grep '| disabled$' "$PATCH_MANIFEST" || true
+            fi
+          fi
+
+          if [ "$VALIDATION_ERRORS" -gt 0 ]; then
+            echo "::endgroup::"
+            echo "::error::$VALIDATION_ERRORS SuSFS integration check(s) failed. Set strict_susfs=true to catch this earlier, or check patch-manifest-${KSU_VARIANT}.txt for patch failures."
+            exit 1
+          fi
+
+          echo "✅ SuSFS integration validation passed"
+          echo "::endgroup::"
+
       - name: Integrate KernelSU into kernel tree
         run: |
           set -e
@@ -1402,9 +1517,20 @@ jobs:
             echo "🔧 Installing dynasched cluster-aware governor..."
             cp "$GITHUB_WORKSPACE/.github/patches/global/cpufreq_dynasched.c" \
                kernel/sched/cpufreq_dynasched.c
-            apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"
-            echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
-            printf 'dynasched governor | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
+
+            if grep -q 'cpufreq_dynasched.c' kernel/sched/build_utility.c 2>/dev/null \
+              && grep -q 'config CPU_FREQ_GOV_DYNASCHED' drivers/cpufreq/Kconfig 2>/dev/null; then
+              echo "ℹ️ dynasched governor integration already present, skipping patch."
+              printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | already-present\n' >> "${PATCH_MANIFEST:-/dev/null}"
+            else
+              apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"
+              printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
+            fi
+
+            if ! grep -q '^CONFIG_CPU_FREQ_GOV_DYNASCHED=y$' arch/arm64/configs/gki_defconfig 2>/dev/null; then
+              echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
+            fi
+            printf 'dynasched governor source | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
           else
             echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
           fi
@@ -1749,7 +1875,7 @@ jobs:
           echo "Config validation passed"
           echo "::endgroup::"
 
-          if [ "${{ env.FORCE_CLEAN }}" = "true" ]; then
+          if [ "${{ env.FORCE_CLEAN }}" = "true" ] && [ "${{ env.DIRTY_BUILD }}" != "true" ]; then
             make -j$MAKE_JOBS O=out clean
           fi
 

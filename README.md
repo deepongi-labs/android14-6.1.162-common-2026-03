@@ -51,15 +51,27 @@ Inputs you can set when dispatching the workflow:
 * `lto_mode` — `thin` (default) / `full` / `none`
 * `governor_mode` — `dynasched` (default; renames schedutil to a Pixel-8-aware name) / `stock_schedutil`
 * `kerneltoast_patch_policy` — `strict` / `best_effort` (default) / `off`
-* `strict_susfs` — fail the build if any SuSFS patch auto-disables or drifts (default: false)
+* `strict_susfs` — fail the build if any SuSFS patch auto-disables or drifts (default: true in `enhance-kernel-build.yml`; otherwise false unless set via `build_options`)
 * `apply_oneplus12_wifi_patch` — opt-in legacy patch (default: false; Pixel 8 uses a different chipset)
+* `dirty_build` — incremental/no-clean mode: preserves existing source checkouts and `out/` build directory for fast rebuilds (default: false)
 * `force_clean_build` — runs `mrproper` before defconfig (default: false)
+  * note: ignored when `dirty_build=true`
 * `dry_run_only` — sync + patch + verify, skip compile (default: false)
 * `include_runtime_tuner` — generate the on-device dynasched tuner script (default: true)
+* `dirty_module_abi_bypass` — force vendor module CRC/version mismatch bypass (`CONFIG_MODULE_FORCE_LOAD=y`, adds `-dirtyabi` artifact suffix)
+
+Example manual dispatch (incremental/dirty compile):
+
+```yaml
+ksu_variant: enhance
+dirty_build: true
+force_clean_build: false
+dry_run_only: false
+```
 
 Source pin overrides:
 
-* `kernel_ref`  default `android14-6.1-2026-06`
+* `kernel_ref`  default `android14-6.1-2026-03_r12`
 * `susfs_ref`   default `gki-android14-6.1-dev`
 * `tiann_ref`   default pinned commit (bump deliberately)
 * `kowsu_ref`, `resukisu_ref`, `next_ref` — branches

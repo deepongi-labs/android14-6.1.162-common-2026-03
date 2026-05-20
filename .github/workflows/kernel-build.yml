@@ -783,9 +783,11 @@ jobs:
             # Auto-detect patch strip level (-p0 vs -p1)
             detect_strip_level() {
               local patch_file="$1"
-              if patch -p1 --dry-run < "$patch_file" >/dev/null 2>&1; then
+              if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1 \
+                || patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
                 echo "1"
-              elif patch -p0 --dry-run < "$patch_file" >/dev/null 2>&1; then
+              elif patch -p0 --forward --dry-run < "$patch_file" >/dev/null 2>&1 \
+                || patch -p0 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
                 echo "0"
               else
                 echo "-1"

@@ -467,6 +467,7 @@ jobs:
           command -v ccache >/dev/null
           command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
           test -x "${CLANG_BIN}/clang" || command -v clang >/dev/null
+          command -v pahole >/dev/null || { echo "⚠️ pahole not found, installing dwarves..."; sudo apt-get update -qq && sudo apt-get install -y dwarves; }
           test -w "${SELECTED_CCACHE_DIR}"
 
           echo "✅ Build tools configured"

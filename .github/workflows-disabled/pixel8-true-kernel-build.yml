@@ -92,6 +92,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
+          submodules: recursive
 
       - name: Pre-flight (host tools)
         run: |
@@ -164,6 +165,8 @@ jobs:
 
       - name: Apply SuSFS + workflow patches
         if: inputs.enable_susfs
+        env:
+          SUSFS_SRC: ${{ github.workspace }}/susfs4ksu
         run: |
           bash "${{ github.workspace }}/scripts/apply-susfs-on-akita.sh" \
             "$ROOT_BASE" \

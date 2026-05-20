@@ -4,7 +4,7 @@
 [![Android](https://img.shields.io/badge/android-14%20GKI-green.svg)](https://source.android.com/)
 [![Devices](https://img.shields.io/badge/devices-akita%20%7C%20shiba%20%7C%20husky-orange.svg)](https://store.google.com/category/phones_pixel)
 [![KernelSU](https://img.shields.io/badge/KernelSU-5%20variants-purple.svg)](https://github.com/tiann/KernelSU)
-[![SuSFS](https://img.shields.io/badge/SuSFS-10%20features-red.svg)](https://gitlab.com/simonpunk/susfs4ksu)
+[![SuSFS](https://img.shields.io/badge/SuSFS-v2.x%2010%20features-red.svg)](https://gitlab.com/simonpunk/susfs4ksu)
 
 > Personal build system for custom Android 14 GKI kernels for the Pixel 8 series (Tensor G3).
 

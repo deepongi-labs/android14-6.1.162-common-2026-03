@@ -18,6 +18,26 @@ POLICY="${4:-best_effort}"
 KERNEL_DIR="$ROOT/aosp"
 [ -d "$KERNEL_DIR" ] || { echo "[patch] aosp/ not found"; exit 2; }
 
+# Locate or fetch susfs4ksu so we can copy headers + fs sources into the tree.
+# Priority: $SUSFS_SRC env var → sibling susfs4ksu/ dir → clone from upstream.
+SUSFS_BRANCH="${SUSFS_BRANCH:-gki-android14-6.1-dev}"
+if [ -z "${SUSFS_SRC:-}" ]; then
+  if [ -d "$ROOT/susfs4ksu/kernel_patches" ]; then
+    SUSFS_SRC="$ROOT/susfs4ksu"
+  elif [ -d "$(dirname "$0")/../susfs4ksu/kernel_patches" ]; then
+    SUSFS_SRC="$(realpath "$(dirname "$0")/../susfs4ksu")"
+  else
+    echo "[patch] susfs4ksu not found locally; cloning branch $SUSFS_BRANCH"
+    git clone --depth=1 -b "$SUSFS_BRANCH" \
+      https://gitlab.com/simonpunk/susfs4ksu.git "$ROOT/susfs4ksu-fetch"
+    SUSFS_SRC="$ROOT/susfs4ksu-fetch"
+  fi
+fi
+echo "[patch] susfs4ksu source: $SUSFS_SRC"
+cp -v "$SUSFS_SRC/kernel_patches/fs/susfs.c"                  "$KERNEL_DIR/fs/"
+cp -v "$SUSFS_SRC/kernel_patches/include/linux/susfs.h"       "$KERNEL_DIR/include/linux/"
+cp -v "$SUSFS_SRC/kernel_patches/include/linux/susfs_def.h"   "$KERNEL_DIR/include/linux/"
+
 mkdir -p "$ROOT/logs"
 manifest="$ROOT/logs/patch-manifest-$VARIANT.txt"
 failure_log="$ROOT/logs/patch-failure-$VARIANT.log"

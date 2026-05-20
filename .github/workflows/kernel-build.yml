@@ -299,7 +299,6 @@ jobs:
           # and WildKernels v2.1.0 fixers, so upstream dev branch works directly.
           RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
           echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT
-          # SuSFS patches are sourced from:
           case "$TUNING_PROFILE" in
             balanced|performance|battery) ;;
           esac
@@ -314,8 +313,10 @@ jobs:
           MAKE_JOBS_INPUT="${MAKE_JOBS:-auto}"
           if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
+          else
             echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
             exit 1
+          fi
 
           if [ -z "$INCLUDE_RUNTIME_TUNER" ]; then
             INCLUDE_RUNTIME_TUNER="true"

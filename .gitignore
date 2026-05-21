@@ -4,3 +4,16 @@
 *.tar.gz
 *.zip
 files/
+
+# Local dev artifacts
+.kiro/specs/
+.vscode/
+your/
+bootloop_commits.txt
+
+# Build artifacts
+kernel/kernel/sched/cpufreq_dynasched.c
+.copilot-specs-cache/
+
+# AutoClaw KDream data
+.autoclaw/

@@ -50,17 +50,17 @@ on:
           - full
           - none
       make_jobs:
-        description: 'Override make parallel jobs (auto or integer)'
+        description: 'Parallel make jobs (auto or integer)'
         required: false
         default: 'auto'
         type: string
       include_runtime_tuner:
-        description: 'Generate on-device runtime tuner script'
+        description: 'Include Pixel 8 runtime tuner script'
         required: false
         default: true
         type: boolean
       governor_mode:
-        description: 'CPU governor strategy'
+        description: 'CPU governor mode'
         required: false
         default: 'dynasched'
         type: choice
@@ -84,7 +84,7 @@ on:
       dirty_build:
         description: 'Incremental build: skip source cleanup, preserve out/ directory'
         required: false
-        default: false
+        default: true
         type: boolean
       kernel_ref:
         description: 'Override kernel ref'
@@ -116,6 +116,11 @@ on:
         required: false
         default: 'dev'
         type: string
+      stock_boot_img_url:
+        description: 'URL to the stock akita boot.img to repack with the new kernel (https://). Leave empty to skip repack.'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build-enhance:
@@ -143,3 +148,4 @@ jobs:
         include_runtime_tuner=${{ inputs.include_runtime_tuner }}
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
+        stock_boot_img_url=${{ inputs.stock_boot_img_url }}

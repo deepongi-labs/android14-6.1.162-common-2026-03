@@ -1,3 +1,5 @@
+#ifndef _CPUFREQ_DYNASCHED_H
+#define _CPUFREQ_DYNASCHED_H
 // SPDX-License-Identifier: GPL-2.0
 /*
  * dynasched - Cluster-aware CPUFreq governor for Tensor G3 (Pixel 8 series).
@@ -924,3 +926,5 @@ struct cpufreq_governor *cpufreq_default_governor(void)
 #endif
 
 cpufreq_governor_init(dynasched_gov);
+
+#endif // _CPUFREQ_DYNASCHED_H

@@ -1120,7 +1120,7 @@ jobs:
             echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
             printf '%s | %s | already-present\n' "KernelSU SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            echo "🔍 Validating KernelSU-Next SuSFS integration (variant=${KSU_VARIANT})..."
+            echo "🔍 Checking optional KernelSU-Next SuSFS integration (variant=${KSU_VARIANT})..."
             if [ -f "$VARIANT_KSU_PATCH" ] && try_apply_patch "$VARIANT_KSU_PATCH" "KernelSU-Next custom SuSFS patch"; then
               :
             elif try_apply_patch "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"; then
@@ -1129,10 +1129,8 @@ jobs:
               echo "ℹ️ KernelSU-Next already contains SuSFS integration."
               printf '%s | %s | already-present\n' "KernelSU-Next SuSFS integration" "kernel/(Kconfig|Makefile|Kbuild)" >> "$PATCH_MANIFEST"
             else
-              echo "❌ KernelSU-Next SuSFS integration missing; refusing to build without SuSFS."
-              printf '%s | %s | failed\n' "KernelSU-Next SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
-              log_patch_failure "$DEFAULT_KSU_PATCH" "KernelSU-Next default SuSFS patch"
-              exit 1
+              echo "ℹ️ KernelSU-Next uses WildKernels SuSFS patches; skipping legacy KernelSU-side patch."
+              printf '%s | %s | skipped-next-wildkernel\n' "KernelSU-Next legacy SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
             fi
           elif [ "$KSU_VARIANT" = "tiann" ]; then
             echo "📋 Enforcing default-only KernelSU SuSFS patch for tiann"

@@ -1,0 +1,80 @@
+name: Build True Pixel 8 (akita) Kernel via Bazel
+
+concurrency:
+  group: pixel8-akita-bazel-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'Kernel branch/ref to build'
+        required: false
+        default: 'android14-6.1'
+        type: string
+      build_target:
+        description: 'Kleaf/Bazel build target'
+        required: false
+        default: '//common:kernel_aarch64_dist'
+        type: string
+      use_lto:
+        description: 'Enable LTO in bazel flags'
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches:
+      - feat/true-pixel8-akita-bazel
+
+jobs:
+  build-akita-bazel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y \
+            git curl build-essential bc bison flex libssl-dev libelf-dev ccache
+
+      - name: Sync kernel source
+        run: |
+          set -e
+          rm -rf kernel
+          git clone --depth=1 --branch "${{ inputs.kernel_ref }}" \
+            https://android.googlesource.com/kernel/common kernel
+
+      - name: Build akita kernel with Bazel/Kleaf
+        working-directory: kernel
+        run: |
+          set -e
+          BAZEL_FLAGS=""
+          if [ "${{ inputs.use_lto }}" = "true" ]; then
+            BAZEL_FLAGS="${BAZEL_FLAGS} --lto=thin"
+          else
+            BAZEL_FLAGS="${BAZEL_FLAGS} --lto=none"
+          fi
+
+          tools/bazel run ${BAZEL_FLAGS} "${{ inputs.build_target }}"
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          mkdir -p out-artifacts
+          cp -r kernel/out/*/dist/* out-artifacts/ 2>/dev/null || true
+          test -n "$(find out-artifacts -type f -print -quit)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel8-akita-bazel-dist
+          path: out-artifacts/

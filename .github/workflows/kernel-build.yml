@@ -672,8 +672,12 @@ jobs:
             KSU_VERSION=$((KSU_COUNT + 30000))
           fi
 
+          KSU_COMMIT_SHORT=$(git log -1 --format='%h')
+          KSU_VERSION_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev-${KSU_COMMIT_SHORT}")
+
           echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KSU_COMMIT_SHORT=$(git log -1 --format='%h')" >> $GITHUB_ENV
+          echo "KSU_VERSION_TAG=$KSU_VERSION_TAG" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHORT=$KSU_COMMIT_SHORT" >> $GITHUB_ENV
           echo "KSU_COMMIT_DATE=$(git log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
           echo "KSU_COMMIT_MSG=$(git log -1 --format='%s')" >> $GITHUB_ENV
 
@@ -1366,6 +1370,24 @@ jobs:
             cp -aL "$KSU_STAGE/kernel/include/uapi/." "$KSU_STAGE/kernel/include/uapi.real/"
             rm -rf "$KSU_STAGE/kernel/include/uapi"
             mv "$KSU_STAGE/kernel/include/uapi.real" "$KSU_STAGE/kernel/include/uapi"
+          fi
+
+          # KernelSU-Next Kbuild can miss git metadata when built from a linked
+          # source under the kernel tree. Force sane fallback values from the
+          # staged repo so Manager never sees KSU_VERSION=1 / tag=v0.0.1.
+          if [ -f kernel/drivers/kernelsu/Kbuild ]; then
+            python - "$KSU_VERSION" "$KSU_VERSION_TAG" <<'PY'
+from pathlib import Path
+import sys
+
+version, tag = sys.argv[1], sys.argv[2]
+kbuild = Path("kernel/drivers/kernelsu/Kbuild")
+text = kbuild.read_text()
+text = text.replace("KSU_VERSION_FALLBACK := 1", f"KSU_VERSION_FALLBACK := {version}")
+text = text.replace("KSU_VERSION_TAG_FALLBACK := v0.0.1", f"KSU_VERSION_TAG_FALLBACK := {tag}")
+kbuild.write_text(text)
+PY
+            echo "✅ KernelSU-Next Kbuild fallback metadata: version=${KSU_VERSION}, tag=${KSU_VERSION_TAG}"
           fi
           echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
 

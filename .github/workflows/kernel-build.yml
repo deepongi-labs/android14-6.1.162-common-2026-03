@@ -1910,6 +1910,22 @@ jobs:
               echo "::error::CONFIG_KSU_SUSFS=y not set after olddefconfig!"
               CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
             fi
+            for susfs_config in \
+              CONFIG_KSU_SUSFS_SUS_PATH \
+              CONFIG_KSU_SUSFS_SUS_MOUNT \
+              CONFIG_KSU_SUSFS_SUS_KSTAT \
+              CONFIG_KSU_SUSFS_TRY_UMOUNT \
+              CONFIG_KSU_SUSFS_SPOOF_UNAME \
+              CONFIG_KSU_SUSFS_ENABLE_LOG \
+              CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+              CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+              CONFIG_KSU_SUSFS_SUS_MAP; do
+              if ! grep -q "^${susfs_config}=y" out/.config; then
+                echo "::error::${susfs_config}=y not set after olddefconfig!"
+                CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+              fi
+            done
           fi
           if [ "$CONFIG_ERRORS" -gt 0 ]; then
             echo "::endgroup::"

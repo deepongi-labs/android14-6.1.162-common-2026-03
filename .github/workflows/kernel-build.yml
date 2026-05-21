@@ -340,7 +340,7 @@ jobs:
           esac
           echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
 
-          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-strict}"
+          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-best_effort}"
           case "$KERNELTOAST_PATCH_POLICY" in
             strict|best_effort|off) ;;
             *) echo "❌ Invalid kerneltoast_patch_policy: $KERNELTOAST_PATCH_POLICY"; exit 1 ;;

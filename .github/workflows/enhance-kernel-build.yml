@@ -70,7 +70,7 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
         required: false
-        default: 'strict'
+        default: 'best_effort'
         type: choice
         options:
           - strict

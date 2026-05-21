@@ -1297,14 +1297,23 @@ jobs:
             echo "✅ KernelSU SuSFS integration present"
           fi
 
-          if ! grep -Rqs 'CMD_SUSFS_SHOW_ENABLED_FEATURES' "$KSU_STAGE/kernel"; then
-            echo "::error::ENABLE_SUSFS=true but CMD_SUSFS_SHOW_ENABLED_FEATURES handler is missing from KernelSU. Brene cannot load enabled features."
-            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
-          elif ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
+          for required_cmd in \
+            CMD_SUSFS_SHOW_ENABLED_FEATURES \
+            CMD_SUSFS_SHOW_VERSION \
+            CMD_SUSFS_SHOW_VARIANT; do
+            if ! grep -Rqs "$required_cmd" "$KSU_STAGE/kernel"; then
+              echo "::error::ENABLE_SUSFS=true but $required_cmd handler is missing from KernelSU supercall path. Brene cannot query SuSFS."
+              VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+            fi
+          done
+
+          if ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
             echo "::error::ENABLE_SUSFS=true but susfs_get_enabled_features bridge is missing from KernelSU. Brene cannot load enabled features."
             VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          elif ! grep -Rqs 'susfs_get_susfs_version' "$KSU_STAGE/kernel" && ! grep -Rqs 'susfs_get_version' "$KSU_STAGE/kernel"; then
+            echo "::warning::SuSFS version command exists but no obvious version helper name was found; continuing because patch may inline the version copy."
           else
-            echo "✅ KernelSU SuSFS enabled-features bridge present"
+            echo "✅ KernelSU SuSFS Brene query bridge present"
           fi
 
           # Check patch manifest for silent disables.
@@ -1855,6 +1864,7 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y

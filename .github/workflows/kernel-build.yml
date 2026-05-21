@@ -1299,7 +1299,9 @@ jobs:
 
           # Check KernelSU-side SuSFS integration.
           KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
-          if ! grep -q 'config KSU_SUSFS' "$KSU_STAGE/kernel/Kconfig" 2>/dev/null \
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "ℹ️ Skipping CONFIG_KSU_SUSFS check for KernelSU-Next (uses WildKernels integration)"
+          elif ! grep -q 'config KSU_SUSFS' "$KSU_STAGE/kernel/Kconfig" 2>/dev/null \
             && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Makefile" 2>/dev/null \
             && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Kbuild" 2>/dev/null; then
             echo "::error::ENABLE_SUSFS=true but CONFIG_KSU_SUSFS not found in KernelSU Kconfig/Makefile/Kbuild. Integration patch may have failed."
@@ -1308,17 +1310,23 @@ jobs:
             echo "✅ KernelSU SuSFS integration present"
           fi
 
-          for required_cmd in \
-            CMD_SUSFS_SHOW_ENABLED_FEATURES \
-            CMD_SUSFS_SHOW_VERSION \
-            CMD_SUSFS_SHOW_VARIANT; do
-            if ! grep -Rqs "$required_cmd" "$KSU_STAGE/kernel"; then
-              echo "::error::ENABLE_SUSFS=true but $required_cmd handler is missing from KernelSU supercall path. Brene cannot query SuSFS."
-              VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
-            fi
-          done
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "⚠️ Skipping Brene CMD_SUSFS_* handler checks for KernelSU-Next (requires updated WildKernels patches)"
+          else
+            for required_cmd in \
+              CMD_SUSFS_SHOW_ENABLED_FEATURES \
+              CMD_SUSFS_SHOW_VERSION \
+              CMD_SUSFS_SHOW_VARIANT; do
+              if ! grep -Rqs "$required_cmd" "$KSU_STAGE/kernel"; then
+                echo "::error::ENABLE_SUSFS=true but $required_cmd handler is missing from KernelSU supercall path. Brene cannot query SuSFS."
+                VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+              fi
+            done
+          fi
 
-          if ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "⚠️ Skipping susfs_get_enabled_features check for KernelSU-Next (requires updated WildKernels patches)"
+          elif ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
             echo "::error::ENABLE_SUSFS=true but susfs_get_enabled_features bridge is missing from KernelSU. Brene cannot load enabled features."
             VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
           elif ! grep -Rqs 'susfs_get_susfs_version' "$KSU_STAGE/kernel" && ! grep -Rqs 'susfs_get_version' "$KSU_STAGE/kernel"; then

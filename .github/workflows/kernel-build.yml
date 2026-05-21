@@ -1342,27 +1342,30 @@ jobs:
             exit 1
           fi
 
-          # Place patched KernelSU sources directly inside the kernel tree at
-          # drivers/kernelsu/. We avoid a top-level KernelSU/ folder inside the
-          # kernel tree entirely; the staging dir lives at $GITHUB_WORKSPACE/.ksu-src.
+          # Place patched KernelSU sources at drivers/kernelsu/. Use a symlink
+          # into the staged repo so KernelSU-Next Kbuild can discover .git and
+          # derive KSU_GIT_VERSION/KSU_VERSION_TAG instead of fallback values.
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers
-          cp -a "$KSU_STAGE/kernel/." kernel/drivers/kernelsu/
+          ln -s ../../.ksu-src/kernel kernel/drivers/kernelsu
 
           # KernelSU-Next keeps public headers outside kernel/ and links
           # kernel/include/uapi back to that repo-root uapi directory. Once
-          # kernel/ is moved under drivers/kernelsu, that symlink points at the
-          # wrong tree, so replace it with real copied headers.
+          # kernel/ is linked under drivers/kernelsu, that symlink may point at
+          # the wrong tree from the kernel build path, so replace it with copied
+          # headers in the staged source before building.
           if [ -d "$KSU_STAGE/uapi" ]; then
-            rm -rf kernel/drivers/kernelsu/uapi kernel/drivers/kernelsu/include/uapi
-            mkdir -p kernel/drivers/kernelsu/uapi
-            cp -a "$KSU_STAGE/uapi/." kernel/drivers/kernelsu/uapi/
-            mkdir -p kernel/drivers/kernelsu/include/uapi
-            cp -a "$KSU_STAGE/uapi/." kernel/drivers/kernelsu/include/uapi/
+            rm -rf "$KSU_STAGE/kernel/uapi" "$KSU_STAGE/kernel/include/uapi"
+            mkdir -p "$KSU_STAGE/kernel/uapi"
+            cp -a "$KSU_STAGE/uapi/." "$KSU_STAGE/kernel/uapi/"
+            mkdir -p "$KSU_STAGE/kernel/include/uapi"
+            cp -a "$KSU_STAGE/uapi/." "$KSU_STAGE/kernel/include/uapi/"
           elif [ -e "$KSU_STAGE/kernel/include/uapi" ]; then
-            rm -rf kernel/drivers/kernelsu/include/uapi
-            mkdir -p kernel/drivers/kernelsu/include/uapi
-            cp -aL "$KSU_STAGE/kernel/include/uapi/." kernel/drivers/kernelsu/include/uapi/
+            rm -rf "$KSU_STAGE/kernel/include/uapi.real"
+            mkdir -p "$KSU_STAGE/kernel/include/uapi.real"
+            cp -aL "$KSU_STAGE/kernel/include/uapi/." "$KSU_STAGE/kernel/include/uapi.real/"
+            rm -rf "$KSU_STAGE/kernel/include/uapi"
+            mv "$KSU_STAGE/kernel/include/uapi.real" "$KSU_STAGE/kernel/include/uapi"
           fi
           echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
 

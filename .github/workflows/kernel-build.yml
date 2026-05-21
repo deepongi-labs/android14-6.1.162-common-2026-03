@@ -58,12 +58,12 @@ on:
       kerneltoast_patch_policy:
         description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
         required: false
-        default: 'off'
+        default: 'strict'
         type: choice
         options:
-          - 'off'
-          - best_effort
           - strict
+          - best_effort
+          - 'off'
       dry_run_only:
         description: 'Validate source sync and patch application only'
         required: false
@@ -337,7 +337,7 @@ jobs:
           esac
           echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
 
-          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-off}"
+          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-strict}"
           case "$KERNELTOAST_PATCH_POLICY" in
             strict|best_effort|off) ;;
             *) echo "❌ Invalid kerneltoast_patch_policy: $KERNELTOAST_PATCH_POLICY"; exit 1 ;;

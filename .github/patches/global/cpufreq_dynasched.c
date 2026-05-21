@@ -805,7 +805,6 @@ init_percpu:
 		}
 	}
 
-out:
 	mutex_unlock(&dynasched_global_tunables_lock);
 	return 0;
 

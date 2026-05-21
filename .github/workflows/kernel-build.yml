@@ -1510,10 +1510,9 @@ jobs:
             echo "🔧 Installing dynasched cluster-aware governor..."
             cp "$GITHUB_WORKSPACE/.github/patches/global/cpufreq_dynasched.c" \
                kernel/sched/cpufreq_dynasched.c
-
-            if grep -q 'cpufreq_dynasched.c' kernel/sched/build_utility.c 2>/dev/null \
-              && grep -q 'config CPU_FREQ_GOV_DYNASCHED' drivers/cpufreq/Kconfig 2>/dev/null; then
-              echo "ℹ️ dynasched governor integration already present, skipping patch."
+            # Check if patch is already applied using reverse dry-run (most reliable for dirty builds)
+            if patch -p1 --reverse --dry-run < "$GITHUB_WORKSPACE/.github/patches/global/add_dynasched_governor.patch" >/dev/null 2>&1; then
+              echo "ℹ️ dynasched governor patch already applied, skipping."
               printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | already-present\n' >> "${PATCH_MANIFEST:-/dev/null}"
             else
               apply_repo_patch_or_fail ".github/patches/global/add_dynasched_governor.patch" "dynasched governor"

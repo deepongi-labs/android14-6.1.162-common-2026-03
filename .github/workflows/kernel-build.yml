@@ -2030,9 +2030,20 @@ jobs:
             KSUD="${REPACK_DIR}/ksud"
           fi
 
-          # Check for local stock boot.img first (self-hosted runner optimization)
-          LOCAL_BOOT_IMG="${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img"
-          if [ -f "$LOCAL_BOOT_IMG" ]; then
+          # Check for local stock boot.img first (self-hosted runner optimization).
+          # actions/checkout runs under _work/, while the persistent repo lives
+          # under /mnt/Android/gki-kernel-builder, so check both locations.
+          LOCAL_BOOT_IMG=""
+          for candidate in \
+            "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img" \
+            "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp1a.260505.005.a1.img"; do
+            if [ -f "$candidate" ]; then
+              LOCAL_BOOT_IMG="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$LOCAL_BOOT_IMG" ]; then
             echo "✅ Using local stock boot.img: $LOCAL_BOOT_IMG"
             cp "$LOCAL_BOOT_IMG" "${REPACK_DIR}/stock_boot.img"
           elif [ -n "${STOCK_BOOT_IMG_URL}" ] || [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then

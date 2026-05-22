@@ -1005,6 +1005,31 @@ jobs:
               find . -name '*.rej' -exec echo "  {}" \; -exec cat {} \;
               exit 1
             fi
+
+            # Current SuSFS v1.5.12 source exposes
+            # susfs_set_sdcard_android_data_decrypted_key_false, while the
+            # android14-6.1 core patch still references the older inverse
+            # susfs_is_sdcard_android_data_not_decrypted key. Rewrite the
+            # callsites to test the exported decrypted key inversely.
+            python3 - <<'PY'
+from pathlib import Path
+
+for path in (Path("fs/exec.c"), Path("fs/namespace.c")):
+    text = path.read_text()
+    text = text.replace(
+        "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;",
+        "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;",
+    )
+    text = text.replace(
+        "extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;",
+        "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;",
+    )
+    text = text.replace(
+        "static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)",
+        "!static_branch_unlikely(&susfs_set_sdcard_android_data_decrypted_key_false)",
+    )
+    path.write_text(text)
+PY
             
             printf '%s | %s | applied-partial+fix\n' "Default core SuSFS patch" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then

@@ -1981,7 +1981,6 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
@@ -1989,6 +1988,11 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           EOF
+            if grep -q 'config KSU_SUSFS_TRY_UMOUNT' drivers/kernelsu/Kconfig 2>/dev/null; then
+              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> out/.config
+            else
+              echo "ℹ️ CONFIG_KSU_SUSFS_TRY_UMOUNT not exposed by this KernelSU tree; skipping"
+            fi
           fi
 
           # Re-enable BTF: Android 14 bpfloader requires /sys/kernel/btf/vmlinux
@@ -2031,7 +2035,6 @@ jobs:
               CONFIG_KSU_SUSFS_SUS_PATH \
               CONFIG_KSU_SUSFS_SUS_MOUNT \
               CONFIG_KSU_SUSFS_SUS_KSTAT \
-              CONFIG_KSU_SUSFS_TRY_UMOUNT \
               CONFIG_KSU_SUSFS_SPOOF_UNAME \
               CONFIG_KSU_SUSFS_ENABLE_LOG \
               CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
@@ -2043,6 +2046,14 @@ jobs:
                 CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
               fi
             done
+            if grep -q 'config KSU_SUSFS_TRY_UMOUNT' drivers/kernelsu/Kconfig 2>/dev/null; then
+              if ! grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y' out/.config; then
+                echo "::error::CONFIG_KSU_SUSFS_TRY_UMOUNT=y not set after olddefconfig!"
+                CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+              fi
+            else
+              echo "ℹ️ CONFIG_KSU_SUSFS_TRY_UMOUNT validation skipped: symbol unavailable"
+            fi
           fi
           if [ "$CONFIG_ERRORS" -gt 0 ]; then
             echo "::endgroup::"

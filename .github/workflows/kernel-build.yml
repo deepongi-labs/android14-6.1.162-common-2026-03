@@ -914,6 +914,16 @@ jobs:
             git add kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c
           }
 
+          # Reset kernel and KernelSU trees to clean state before SuSFS patching
+          echo "🧹 Resetting kernel tree for clean SuSFS patch application..."
+          cd "${GITHUB_WORKSPACE}/kernel"
+          git reset --hard HEAD
+          git clean -fdx
+          cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          git reset --hard HEAD
+          git clean -fdx
+          cd "${GITHUB_WORKSPACE}"
+
           # Copy SuSFS source files per upstream instructions
           echo "📋 Copying SuSFS source files..."
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/

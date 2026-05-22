@@ -2128,7 +2128,7 @@ jobs:
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Repack akita boot.img (ksud)
-        if: env.DRY_RUN_ONLY != 'true' && (env.STOCK_BOOT_IMG_URL != '' || env.STOCK_BOOT_GDRIVE_ID != '')
+        if: env.DRY_RUN_ONLY != 'true'
         run: |
           set -e
           echo "::group::Repack akita boot.img via ksud"
@@ -2160,13 +2160,24 @@ jobs:
             KSUD="${REPACK_DIR}/ksud"
           fi
 
-          echo "📥 Downloading stock boot.img..."
-          if [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
-            python3 -m pip install --user --quiet gdown
-            export PATH="${HOME}/.local/bin:${PATH}"
-            gdown --id "${STOCK_BOOT_GDRIVE_ID}" -O "${REPACK_DIR}/stock_boot.img"
+          # Check for local stock boot.img first (self-hosted runner optimization)
+          LOCAL_BOOT_IMG="${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img"
+          if [ -f "$LOCAL_BOOT_IMG" ]; then
+            echo "✅ Using local stock boot.img: $LOCAL_BOOT_IMG"
+            cp "$LOCAL_BOOT_IMG" "${REPACK_DIR}/stock_boot.img"
+          elif [ -n "${STOCK_BOOT_IMG_URL}" ] || [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
+            echo "📥 Downloading stock boot.img..."
+            if [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
+              python3 -m pip install --user --quiet gdown
+              export PATH="${HOME}/.local/bin:${PATH}"
+              gdown --id "${STOCK_BOOT_GDRIVE_ID}" -O "${REPACK_DIR}/stock_boot.img"
+            else
+              curl -fsSL "${STOCK_BOOT_IMG_URL}" -o "${REPACK_DIR}/stock_boot.img"
+            fi
           else
-            curl -fsSL "${STOCK_BOOT_IMG_URL}" -o "${REPACK_DIR}/stock_boot.img"
+            echo "⚠️ No stock boot.img available (no local file, URL, or GDrive ID). Skipping repack."
+            echo "::endgroup::"
+            exit 0
           fi
 
           echo "🔧 Patching boot.img with ksud boot-patch..."

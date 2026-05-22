@@ -17,3 +17,4 @@ kernel/kernel/sched/cpufreq_dynasched.c
 
 # AutoClaw KDream data
 .autoclaw/
+boot-images/

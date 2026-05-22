@@ -2078,6 +2078,20 @@ jobs:
           path.write_text(text)
           PY
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
+          rustup target add aarch64-unknown-linux-musl
+          KSUINIT_LINKER="${ARM64_TOOLCHAIN}gcc"
+          if [ ! -x "$KSUINIT_LINKER" ]; then
+            KSUINIT_LINKER="$(command -v aarch64-linux-gnu-gcc || true)"
+          fi
+          if [ -z "$KSUINIT_LINKER" ]; then
+            echo "❌ aarch64 linker not found; cannot build ksuinit"
+            exit 1
+          fi
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$KSUINIT_LINKER" \
+            cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksuinit --target aarch64-unknown-linux-musl
+          mkdir -p "${TIANN_KSUD_STAGE}/userspace/ksud/bin/aarch64"
+          cp "${TIANN_KSUD_STAGE}/target/aarch64-unknown-linux-musl/release/ksuinit" \
+            "${TIANN_KSUD_STAGE}/userspace/ksud/bin/aarch64/ksuinit"
           cargo fix --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --bin "ksud" -p ksud --allow-dirty || true
           echo "🦀 Building tiann ksud from ${TIANN_KSUD_STAGE}..."
           cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksud

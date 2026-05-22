@@ -476,7 +476,7 @@ jobs:
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
           echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
-          echo "CCACHE_COMPRESS=false" >> $GITHUB_ENV
+          echo "CCACHE_NOCOMPRESS=true" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=45G" >> $GITHUB_ENV
           echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
           echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV

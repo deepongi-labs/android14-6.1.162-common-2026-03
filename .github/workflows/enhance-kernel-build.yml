@@ -99,7 +99,7 @@ on:
       tiann_ref:
         description: 'Override tiann KernelSU ref'
         required: false
-        default: '0544f475962fd7f27d27ae24a7ab3ee2a8d7538a'
+        default: 'v3.2.4'
         type: string
       kowsu_ref:
         description: 'Override kowsu KernelSU ref'

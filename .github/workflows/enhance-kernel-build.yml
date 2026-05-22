@@ -86,6 +86,11 @@ on:
         required: false
         default: true
         type: boolean
+      dirty_module_abi_bypass:
+        description: 'Allow loading the built-in KernelSU kernel without requiring android14-6.1_kernelsu.ko'
+        required: false
+        default: true
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -153,5 +158,6 @@ jobs:
         include_runtime_tuner=${{ inputs.include_runtime_tuner }}
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
+        dirty_module_abi_bypass=${{ inputs.dirty_module_abi_bypass }}
         stock_boot_img_url=${{ inputs.stock_boot_img_url }}
         stock_boot_gdrive_id=${{ inputs.stock_boot_gdrive_id }}

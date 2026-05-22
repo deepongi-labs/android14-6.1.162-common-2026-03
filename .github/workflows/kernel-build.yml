@@ -877,77 +877,6 @@ jobs:
             fi
           }
 
-          ensure_namespace_susfs_prologue() {
-            if grep -q 'susfs_is_current_ksu_domain' fs/namespace.c 2>/dev/null; then
-              echo "ℹ️ Namespace SuSFS prologue already present, skipping."
-              printf '%s | %s | already-present\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
-              return 0
-            fi
-
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'include_old = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n\n#include "pnode.h"\n#include "internal.h"\n"""' \
-              'include_new = """#include <linux/fs_context.h>\n#include <linux/shmem_fs.h>\n#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n#include <trace/hooks/blk.h>\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
-              'ida_old = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n"""' \
-              'ida_new = """static u64 event;\nstatic DEFINE_IDA(mnt_id_ida);\nstatic DEFINE_IDA(mnt_group_ida);\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nstatic struct ida susfs_mnt_id_ida __maybe_unused = IDA_INIT(susfs_mnt_id_ida);\nstatic struct ida susfs_mnt_group_ida __maybe_unused = IDA_INIT(susfs_mnt_group_ida);\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"""' \
-              'if include_old not in text or ida_old not in text: raise SystemExit("namespace.c layout drifted; could not inject SuSFS prologue")' \
-              'path.write_text(text.replace(include_old, include_new, 1).replace(ida_old, ida_new, 1))' \
-              | python -
-
-            echo "📋 Applied namespace SuSFS prologue fix"
-            printf '%s | %s | applied\n' "Namespace SuSFS prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
-          }
-
-          ensure_namespace_susfs_helpers() {
-            if grep -q '^int susfs_get_non_sus_mnt_id_from_mnt' fs/namespace.c 2>/dev/null &&
-               grep -q '^struct vfsmount \*susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/namespace.c 2>/dev/null; then
-              echo "ℹ️ Namespace SuSFS helper definitions already present, skipping."
-              printf '%s | %s | already-present\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
-              return 0
-            fi
-
-            printf '%s\n' \
-              '' \
-              '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
-              '/* Retrieve the nearest non-SuSFS mount ID from a mount. */' \
-              'int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt)' \
-              '{' \
-              ' struct mount *mnt = orig_mnt;' \
-              ' int mnt_id;' \
-              '' \
-              ' lock_mount_hash();' \
-              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
-              ' mnt_id = mnt->mnt_id;' \
-              ' unlock_mount_hash();' \
-              ' return mnt_id;' \
-              '}' \
-              '' \
-              '/* Retrieve the nearest non-SuSFS vfsmount and take references on it. */' \
-              'struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt)' \
-              '{' \
-              ' struct mount *mnt = real_mount(vfsmnt);' \
-              '' \
-              ' lock_mount_hash();' \
-              ' for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' \
-              ' mntget(&mnt->mnt);' \
-              ' if (!mnt->mnt.mnt_root || IS_ERR(mnt->mnt.mnt_root)) {' \
-              '   mntput(&mnt->mnt);' \
-              '   unlock_mount_hash();' \
-              '   return vfsmnt;' \
-              ' }' \
-              ' dget(mnt->mnt.mnt_root);' \
-              ' unlock_mount_hash();' \
-              ' return &mnt->mnt;' \
-              '}' \
-              '#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT' \
-              >> fs/namespace.c
-
-            echo "📋 Applied namespace SuSFS helper fix"
-            printf '%s | %s | applied\n' "Namespace SuSFS helpers" "fs/namespace.c" >> "$PATCH_MANIFEST"
-          }
-
           ensure_namespace_trace_hook_include() {
             if grep -q '^#include <trace/hooks/blk.h>$' fs/namespace.c 2>/dev/null; then
               printf '%s | %s | already-present\n' "Namespace trace hook include" "fs/namespace.c" >> "$PATCH_MANIFEST"
@@ -985,44 +914,11 @@ jobs:
             git add kernel/Kbuild kernel/feature/kernel_umount.c kernel/policy/app_profile.c
           }
 
+          # Copy SuSFS source files per upstream instructions
+          echo "📋 Copying SuSFS source files..."
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("kernel/fs/susfs.c")
-          text = path.read_text()
-
-          if "#include <linux/jump_label.h>" not in text:
-              text = text.replace(
-                  "#include <linux/fsnotify_backend.h>\n",
-                  "#include <linux/fsnotify_backend.h>\n#include <linux/jump_label.h>\n",
-                  1,
-              )
-
-          static_keys = """DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);
-          DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);
-          DEFINE_STATIC_KEY_TRUE(susfs_set_uname_key_true);
-          DEFINE_STATIC_KEY_TRUE(susfs_set_fake_cmdline_or_bootconfig_key_true);
-          DEFINE_STATIC_KEY_TRUE(susfs_avc_log_spoofing_key_true);
-          DEFINE_STATIC_KEY_FALSE(susfs_set_sdcard_android_data_decrypted_key_false);
-
-          """
-
-          if "DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false)" not in text:
-              marker = "extern bool susfs_is_current_ksu_domain(void);\n\n"
-              if marker in text:
-                  text = text.replace(marker, static_keys + marker, 1)
-              else:
-                  include_marker = "#include \"mount.h\"\n"
-                  if include_marker not in text:
-                      raise SystemExit("susfs.c layout drifted; could not inject static branch keys")
-                  text = text.replace(include_marker, include_marker + "\n" + static_keys, 1)
-
-          path.write_text(text)
-          PY
 
           cd kernel
 
@@ -1089,11 +985,6 @@ jobs:
               | python -
             printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
           fi
-
-          if [ "$KSU_VARIANT" = "resukisu" ] || [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
-            ensure_namespace_susfs_prologue
-          fi
-          ensure_namespace_susfs_helpers
 
           # Always attempt the KernelSU-side SuSFS integration patch.
           # Some upstream variants drift over time; the helper will skip cleanly

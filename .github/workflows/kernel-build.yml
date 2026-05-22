@@ -2025,52 +2025,56 @@ jobs:
             git clone --depth=1 --branch "${{ needs.setup.outputs.tiann_ref }}" "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}" \
               || git clone --depth=1 "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}"
           fi
-          python3 - <<'PY' "${TIANN_KSUD_STAGE}/userspace/ksud/src/boot_patch.rs"
+          python3 - "${TIANN_KSUD_STAGE}/userspace/ksud/src/boot_patch.rs" <<'PY'
           from pathlib import Path
           import sys
 
           path = Path(sys.argv[1])
           text = path.read_text()
-          text = text.replace(
-              '''        let kmod_file = workdir.join("kernelsu.ko");
-        if let Some(kmod) = kmod {
-            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;
-        } else if !no_install {
-            // If kmod is not specified, extract from assets
-            println!("- KMI: {kmi}");
-            let name = format!("{kmi}_kernelsu.ko");
-            assets::copy_assets_to_file(&name, kmod_file)
-                .with_context(|| format!("Failed to copy {name}"))?;
-        }
-''',
-              '''        let install_kmod = kmod.is_some();
-        let kmod_file = workdir.join("kernelsu.ko");
-        if let Some(kmod) = kmod {
-            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;
-        }
-''')
-          text = text.replace(
-              '''            println!("- Adding KernelSU LKM");
-''',
-              '''            println!("- Adding KernelSU init for built-in KSU kernel");
-''')
-          text = text.replace(
-              '''            do_cpio_cmd(
-                &magiskboot,
-                workdir,
-                ramdisk,
-                "add 0755 kernelsu.ko kernelsu.ko",
-            )?;
-''',
-              '''            if install_kmod {
-                do_cpio_cmd(
-                    &magiskboot,
-                    workdir,
-                    ramdisk,
-                    "add 0755 kernelsu.ko kernelsu.ko",
-                )?;
-            }
-''')
+          old_kmod = "\n".join([
+              '        let kmod_file = workdir.join("kernelsu.ko");',
+              '        if let Some(kmod) = kmod {',
+              '            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;',
+              '        } else if !no_install {',
+              '            // If kmod is not specified, extract from assets',
+              '            println!("- KMI: {kmi}");',
+              '            let name = format!("{kmi}_kernelsu.ko");',
+              '            assets::copy_assets_to_file(&name, kmod_file)',
+              '                .with_context(|| format!("Failed to copy {name}"))?;',
+              '        }',
+              '',
+          ])
+          new_kmod = "\n".join([
+              '        let install_kmod = kmod.is_some();',
+              '        let kmod_file = workdir.join("kernelsu.ko");',
+              '        if let Some(kmod) = kmod {',
+              '            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;',
+              '        }',
+              '',
+          ])
+          old_add = "\n".join([
+              '            do_cpio_cmd(',
+              '                &magiskboot,',
+              '                workdir,',
+              '                ramdisk,',
+              '                "add 0755 kernelsu.ko kernelsu.ko",',
+              '            )?;',
+              '',
+          ])
+          new_add = "\n".join([
+              '            if install_kmod {',
+              '                do_cpio_cmd(',
+              '                    &magiskboot,',
+              '                    workdir,',
+              '                    ramdisk,',
+              '                    "add 0755 kernelsu.ko kernelsu.ko",',
+              '                )?;',
+              '            }',
+              '',
+          ])
+          text = text.replace(old_kmod, new_kmod)
+          text = text.replace('            println!("- Adding KernelSU LKM");', '            println!("- Adding KernelSU init for built-in KSU kernel");')
+          text = text.replace(old_add, new_add)
           path.write_text(text)
           PY
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }

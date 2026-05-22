@@ -1188,6 +1188,18 @@ jobs:
             fi
           fi
 
+          if [ "$KSU_VARIANT" = "enhance" ]; then
+            KOWX_REPAIR="/mnt/Android/KOWX712/kowx_susfs_patch.fixed.py"
+            if [ -f "$KOWX_REPAIR" ]; then
+              echo "🔧 Applying local KowSU full SuSFS repair script..."
+              python3 "$KOWX_REPAIR"
+              printf '%s | %s | applied\n' "KowSU full SuSFS repair" "$KOWX_REPAIR" >> "$PATCH_MANIFEST"
+            else
+              echo "❌ Required KowSU repair script missing: $KOWX_REPAIR"
+              exit 1
+            fi
+          fi
+
           # Ensure selinux_hide compatibility symbols exist for all variants.
           # Older KernelSU trees keep them in feature/selinux_hide.c; current Tiann
           # trees do not ship that feature file, so provide disabled symbols in
@@ -1402,7 +1414,7 @@ jobs:
             echo "✅ KernelSU SuSFS integration present"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             echo "⚠️ Skipping optional Brene CMD_SUSFS_* handler checks for ${KSU_VARIANT}"
           else
             for required_cmd in \
@@ -1416,7 +1428,7 @@ jobs:
             done
           fi
 
-          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+          if [ "$KSU_VARIANT" = "next" ]; then
             echo "⚠️ Skipping optional susfs_get_enabled_features check for ${KSU_VARIANT}"
           elif ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
             echo "::error::ENABLE_SUSFS=true but susfs_get_enabled_features bridge is missing from KernelSU. Brene cannot load enabled features."

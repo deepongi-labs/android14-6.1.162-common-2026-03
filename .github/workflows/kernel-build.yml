@@ -2025,6 +2025,54 @@ jobs:
             git clone --depth=1 --branch "${{ needs.setup.outputs.tiann_ref }}" "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}" \
               || git clone --depth=1 "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}"
           fi
+          python3 - <<'PY' "${TIANN_KSUD_STAGE}/userspace/ksud/src/boot_patch.rs"
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          text = text.replace(
+              '''        let kmod_file = workdir.join("kernelsu.ko");
+        if let Some(kmod) = kmod {
+            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;
+        } else if !no_install {
+            // If kmod is not specified, extract from assets
+            println!("- KMI: {kmi}");
+            let name = format!("{kmi}_kernelsu.ko");
+            assets::copy_assets_to_file(&name, kmod_file)
+                .with_context(|| format!("Failed to copy {name}"))?;
+        }
+''',
+              '''        let install_kmod = kmod.is_some();
+        let kmod_file = workdir.join("kernelsu.ko");
+        if let Some(kmod) = kmod {
+            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;
+        }
+''')
+          text = text.replace(
+              '''            println!("- Adding KernelSU LKM");
+''',
+              '''            println!("- Adding KernelSU init for built-in KSU kernel");
+''')
+          text = text.replace(
+              '''            do_cpio_cmd(
+                &magiskboot,
+                workdir,
+                ramdisk,
+                "add 0755 kernelsu.ko kernelsu.ko",
+            )?;
+''',
+              '''            if install_kmod {
+                do_cpio_cmd(
+                    &magiskboot,
+                    workdir,
+                    ramdisk,
+                    "add 0755 kernelsu.ko kernelsu.ko",
+                )?;
+            }
+''')
+          path.write_text(text)
+          PY
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
           echo "🦀 Building tiann ksud from ${TIANN_KSUD_STAGE}..."
           cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksud
@@ -2066,8 +2114,7 @@ jobs:
           "$KSUD" boot-patch \
             -b "${REPACK_DIR}/stock_boot.img" \
             -k "${GITHUB_WORKSPACE}/kernel/out/arch/arm64/boot/Image" \
-            -o "${REPACK_DIR}" \
-            --no-install
+            -o "${REPACK_DIR}"
 
           # ksud outputs patched file as kernelsu_patched_boot.img or similar
           PATCHED_IMG=$(find "${REPACK_DIR}" -name '*patched*boot*' -o -name 'new-boot.img' | head -1)

@@ -1881,17 +1881,17 @@ jobs:
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
             HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
             CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
-            O=out olddefconfig
+            O=out syncconfig
 
-          # Validate critical configs survived olddefconfig
+          # Validate critical configs survived Kconfig sync
           echo "::group::Config Validation"
           CONFIG_ERRORS=0
           if ! grep -q '^CONFIG_KSU=y' out/.config; then
-            echo "::error::CONFIG_KSU=y not set after olddefconfig!"
+            echo "::error::CONFIG_KSU=y not set after Kconfig sync!"
             CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
           fi
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ] && ! grep -q '^CONFIG_KSU_SUSFS=y' out/.config; then
-            echo "::error::CONFIG_KSU_SUSFS=y not set after olddefconfig!"
+            echo "::error::CONFIG_KSU_SUSFS=y not set after Kconfig sync!"
             CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
           fi
           if [ "$CONFIG_ERRORS" -gt 0 ]; then
@@ -1903,7 +1903,7 @@ jobs:
             exit 1
           fi
           if ! grep -q '^CONFIG_LRU_GEN=y' out/.config; then
-            echo "::warning::CONFIG_LRU_GEN=y (MGLRU) was requested but not set after olddefconfig. Kernel tree may lack MGLRU support."
+            echo "::warning::CONFIG_LRU_GEN=y (MGLRU) was requested but not set after Kconfig sync. Kernel tree may lack MGLRU support."
           fi
           echo "Config validation passed"
           echo "::endgroup::"

@@ -1796,6 +1796,8 @@ jobs:
             printf '%s\n' 'CONFIG_KSU_SUSFS=y' | add_gki_defconfig_once
           fi
 
+          rm -f out/.config
+
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
             READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \

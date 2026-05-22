@@ -987,52 +987,6 @@ jobs:
               "Default core SuSFS patch"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
-            WK_SUSFS_FIX_DIR="../.github/patches/next/wk_susfs_fix_patches/v2.1.0"
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/proc/base.c")' \
-              'text = path.read_text()' \
-              'include = "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif\n"' \
-              'if "#include <linux/susfs_def.h>" not in text:' \
-              '    marker = "#include <linux/dma-buf.h>\n"' \
-              '    if marker not in text: raise SystemExit("fs/proc/base.c layout drifted; could not inject SuSFS map include")' \
-              '    path.write_text(text.replace(marker, marker + include, 1))' \
-              | python -
-            printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (1)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/proc/base.c")' \
-              'text = path.read_text()' \
-              'decl_marker = "\tunsigned int flags;\n"' \
-              'decl_insert = "\tunsigned int flags;\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\tstruct vm_area_struct *vma;\n#endif\n"' \
-              'block_marker = "\t\tif (write && copy_from_user(page, buf, this_len)) {\n"' \
-              'block_insert = """#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\t\tvma = find_vma(mm, addr);\n\t\tif (vma && vma->vm_file) {\n\t\t\tstruct inode *inode = file_inode(vma->vm_file);\n\t\t\tif (unlikely(inode->i_mapping->flags & BIT_SUS_MAPS) && susfs_is_current_proc_umounted()) {\n\t\t\t\tif (write) {\n\t\t\t\t\tcopied = -EFAULT;\n\t\t\t\t} else {\n\t\t\t\t\tcopied = -EIO;\n\t\t\t\t}\n\t\t\t\t*ppos = addr;\n\t\t\t\tmmput(mm);\n\t\t\t\tgoto free;\n\t\t\t}\n\t\t}\n#endif\n\n"""' \
-              'if "susfs_is_current_proc_umounted()" not in text:' \
-              '    if decl_marker not in text or block_marker not in text: raise SystemExit("fs/proc/base.c layout drifted; could not inject SuSFS map guard")' \
-              '    text = text.replace(decl_marker, decl_insert, 1).replace(block_marker, block_insert + block_marker, 1)' \
-              '    path.write_text(text)' \
-              | python -
-            printf '%s | %s | applied\n' "WK SuSFS fix: base.c include (2)" "fs/proc/base.c" >> "$PATCH_MANIFEST"
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'path = Path("fs/namespace.c")' \
-              'text = path.read_text()' \
-              'include = "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif\n"' \
-              'prologue = """#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern bool susfs_is_boot_completed_triggered __read_mostly;\n\nstatic DEFINE_IDA(susfs_ksu_mnt_group_ida);\nstatic atomic64_t susfs_ksu_mounts = ATOMIC64_INIT(0);\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n#endif\n\n"""' \
-              'if "#include <linux/susfs_def.h>" not in text:' \
-              '    marker = "#include <linux/shmem_fs.h>\n"' \
-              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS include")' \
-              '    text = text.replace(marker, marker + include, 1)' \
-              'if "susfs_ksu_mounts" not in text and "susfs_is_current_ksu_domain" not in text:' \
-              '    marker = "#include \"internal.h\"\n\n"' \
-              '    if marker not in text: raise SystemExit("fs/namespace.c layout drifted; could not inject SuSFS prologue")' \
-              '    text = text.replace(marker, marker + prologue, 1)' \
-              'path.write_text(text)' \
-              | python -
-            printf '%s | %s | applied\n' "WK SuSFS fix: namespace.c prologue" "fs/namespace.c" >> "$PATCH_MANIFEST"
-          fi
-
           # Always attempt the KernelSU-side SuSFS integration patch.
           # Some upstream variants drift over time; the helper will skip cleanly
           # when the integration is already present.
@@ -1183,42 +1137,6 @@ jobs:
               '        target.write_text(text.replace("susfs_run_sus_path_loop();", "(void)0; /* symbol not available in this variant */"))' \
               | python -
             printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu/enhance)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
-          fi
-
-          if [ "$KSU_VARIANT" = "next" ]; then
-            WK_SUSFS_FIX_DIR="${GITHUB_WORKSPACE}/.github/patches/next/wk_susfs_fix_patches/v2.1.0"
-            echo "🚀 Applying WildKernels SuSFS fixes for KernelSU-Next (variant=${KSU_VARIANT})..."
-
-            try_wk_patch() {
-              local patch_file="$1"
-              local desc="$2"
-              if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
-                patch -p1 --forward < "$patch_file"
-                printf '%s | %s | applied\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
-              elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
-                echo "ℹ️ ${desc} already present, skipping."
-                printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
-              else
-                echo "⚠️ ${desc} could not be applied cleanly. Upstream may have merged it or layout drifted. Skipping..."
-                printf '%s | %s | skipped-stale\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
-                log_patch_failure "$patch_file" "$desc" || true
-              fi
-            }
-
-            # Consolidated WildKernels patchset:
-            # https://github.com/WildKernels/kernel_patches/tree/main/next/susfs_fix_patches/v2.1.0
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_Kbuild.patch" "WK SuSFS fix: Kbuild"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_Makefile.patch" "WK SuSFS fix: Makefile"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_init.c.patch" "WK SuSFS fix: init.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_kernel_umount.c.patch" "WK SuSFS fix: kernel_umount.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_selinux_hide.c.patch" "WK SuSFS fix: selinux_hide.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_setuid_hook.c.patch" "WK SuSFS fix: setuid_hook.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.c.patch" "WK SuSFS fix: sucompat.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_sucompat.h.patch" "WK SuSFS fix: sucompat.h"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/fix_supercall.c.patch" "WK SuSFS fix: supercall.c"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/ksu_toolkit.patch" "WK SuSFS fix: ksu_toolkit"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/multi_manager.patch" "WK SuSFS fix: multi_manager"
-            try_wk_patch "${WK_SUSFS_FIX_DIR}/overwrite_hook_mode.patch" "WK SuSFS fix: overwrite_hook_mode"
           fi
 
           echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"

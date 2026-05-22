@@ -11,10 +11,9 @@ carrying selected compatibility and UX improvements used across other variants.
 
 ## KernelSU Version Compatibility
 
-**Required KernelSU Version:** `v3.2.4` (release tag)
+**Required KernelSU Version:** `da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a` (`da8e0ab1`, `kernel: refine symbol_resolver`)
 
-The SuSFS patches are designed to work with KernelSU release tags, not arbitrary commits.
-Using non-release commits may cause patch application failures due to structural changes.
+The synced SuSFS KernelSU patch matches this KernelSU commit exactly. Using older release tags or newer arbitrary commits may cause patch application failures due to KernelSU structural changes.
 
 ## Patch Source
 
@@ -31,12 +30,7 @@ android14-6.1 GKI kernels.
 
 ## Known Limitations
 
-When using KernelSU v3.2.4, some patch hunks may fail due to minor code differences:
-- `kernel/core/init.c`: 4 out of 8 hunks may fail
-- `kernel/feature/selinux_hide.c`: File doesn't exist in v3.2.4 (can be ignored)
-- `kernel/policy/allowlist.c`: 1 hunk may fail
-- `kernel/policy/app_profile.c`: 1 hunk may fail
-- `fs/namespace.c`: 1 hunk may fail
-
-These failures are minor and do not prevent successful kernel builds. The workflow includes
-fallback mechanisms to handle patch failures gracefully.
+With KernelSU `da8e0ab1`, the KernelSU-side SuSFS patch applies cleanly.
+The core kernel patch may still produce the known `fs/namespace.c` hunk reject; the workflow
+applies `.github/patches/common/namespace_fix_for_tiann.patch` automatically and verifies
+that no other rejects remain.

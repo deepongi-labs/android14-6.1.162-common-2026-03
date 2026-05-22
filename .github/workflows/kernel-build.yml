@@ -1333,11 +1333,12 @@ jobs:
           fi
 
           # Place patched KernelSU sources at drivers/kernelsu/. Use a symlink
-          # into the staged repo so KernelSU-Next Kbuild can discover .git and
-          # derive KSU_GIT_VERSION/KSU_VERSION_TAG instead of fallback values.
+          # into the staged repo so Kbuild can read the variant-specific Kconfig
+          # and KernelSU-Next can discover .git metadata.
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers
-          ln -s ../../.ksu-src/kernel kernel/drivers/kernelsu
+          ln -s "$KSU_STAGE/kernel" kernel/drivers/kernelsu
+          test -f kernel/drivers/kernelsu/Kconfig
 
           # KernelSU-Next keeps public headers outside kernel/ and links
           # kernel/include/uapi back to that repo-root uapi directory. Once

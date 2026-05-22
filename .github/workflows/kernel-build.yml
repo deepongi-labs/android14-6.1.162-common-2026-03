@@ -1562,6 +1562,7 @@ jobs:
           if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
             echo "⚠️  Applying dirty vendor module ABI bypass"
             apply_repo_patch_or_fail ".github/patches/global/dirty_allow_vendor_module_crcs.patch" "dirty vendor module CRC bypass"
+            apply_repo_patch_or_fail ".github/patches/global/dirty_allow_vendor_module_vermagic.patch" "dirty vendor module vermagic bypass"
           fi
 
           # 5. Fix libbpf compilation error

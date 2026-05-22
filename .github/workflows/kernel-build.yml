@@ -929,12 +929,17 @@ jobs:
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
+          
+          # Copy patches into target directories per pershoot instructions
+          echo "📋 Copying SuSFS patches to target directories..."
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch kernel/
+          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}/"
 
           cd kernel
 
           # Apply core SuSFS patch.
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
-          DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+          DEFAULT_SUSFS_PATCH="./50_add_susfs_in_gki-android14-6.1.patch"
 
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
@@ -1002,7 +1007,7 @@ jobs:
           cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
 
           VARIANT_KSU_PATCH="${GITHUB_WORKSPACE}/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
-          DEFAULT_KSU_PATCH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          DEFAULT_KSU_PATCH="./10_enable_susfs_for_ksu.patch"
           SUSFS_RUNTIME_ENABLED=true
 
           ksu_susfs_integrated() {

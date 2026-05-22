@@ -2014,21 +2014,19 @@ jobs:
 
           REPACK_DIR="$(mktemp -d)"
 
-          # Get ksud binary (x86_64 Linux) from KernelSU-Next releases
-          KSUD=""
-          if command -v ksud >/dev/null 2>&1; then
-            KSUD="ksud"
-          else
-            echo "📥 Downloading ksud from KernelSU-Next releases..."
-            KSUD_URL="https://github.com/KernelSU-Next/KernelSU-Next/releases/latest/download/ksud-x86_64-unknown-linux-gnu"
-            curl -fsSL "$KSUD_URL" -o "${REPACK_DIR}/ksud" || {
-              # Fallback: try rifsxd fork
-              KSUD_URL="https://github.com/rifsxd/KernelSU-Next/releases/latest/download/ksud-x86_64-unknown-linux-gnu"
-              curl -fsSL "$KSUD_URL" -o "${REPACK_DIR}/ksud"
-            }
-            chmod +x "${REPACK_DIR}/ksud"
-            KSUD="${REPACK_DIR}/ksud"
+          # Build/use ksud from the same tiann KernelSU source used for the kernel.
+          # tiann releases ship ksuinit/apk/modules, not a host ksud binary, so
+          # build the host tool from KSU_STAGE after Image is ready.
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/kernel/KernelSU}"
+          if [ ! -f "${KSU_STAGE}/Cargo.toml" ]; then
+            echo "❌ tiann KernelSU Cargo.toml not found at ${KSU_STAGE}; cannot build ksud"
+            exit 1
           fi
+          command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
+          echo "🦀 Building tiann ksud from ${KSU_STAGE}..."
+          cargo build --manifest-path "${KSU_STAGE}/Cargo.toml" --release -p ksud
+          KSUD="${KSU_STAGE}/target/release/ksud"
+          test -x "$KSUD"
 
           # Check for local stock boot.img first (self-hosted runner optimization).
           # actions/checkout runs under _work/, while the persistent repo lives

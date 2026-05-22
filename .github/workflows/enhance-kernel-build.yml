@@ -94,7 +94,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: '85a3b1c62eafe7162de570b1b5629a6bb654010d'
+        default: '60e7f13a8bfe269c4c6e378476fcfbd6036aa90c'
         type: string
       susfs_ref:
         description: 'Override SuSFS ref'

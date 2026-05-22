@@ -182,6 +182,7 @@ jobs:
       kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
       dirty_module_abi_bypass: ${{ steps.config.outputs.dirty_module_abi_bypass }}
       stock_boot_img_url: ${{ steps.config.outputs.stock_boot_img_url }}
+      stock_boot_gdrive_id: ${{ steps.config.outputs.stock_boot_gdrive_id }}
     steps:
       - name: Record Build Start Time
         id: timestamp
@@ -258,6 +259,7 @@ jobs:
           KERNELTOAST_PATCH_POLICY=""
           DIRTY_MODULE_ABI_BYPASS=""
           STOCK_BOOT_IMG_URL=""
+          STOCK_BOOT_GDRIVE_ID=""
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
           __BUILD_OPTIONS_EOF__
@@ -282,6 +284,7 @@ jobs:
               kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
               dirty_module_abi_bypass) DIRTY_MODULE_ABI_BYPASS="$value" ;;
               stock_boot_img_url) STOCK_BOOT_IMG_URL="$value" ;;
+              stock_boot_gdrive_id) STOCK_BOOT_GDRIVE_ID="$value" ;;
               *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
             esac
           done <<< "$BUILD_OPTIONS_INPUT"
@@ -361,7 +364,20 @@ jobs:
               *) echo "❌ stock_boot_img_url must start with https://"; exit 1 ;;
             esac
           fi
+          if [ -n "$STOCK_BOOT_GDRIVE_ID" ]; then
+            case "$STOCK_BOOT_GDRIVE_ID" in
+              https://drive.google.com/file/d/*)
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID#*file/d/}"
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID%%/*}"
+                ;;
+              https://drive.google.com/open?id=*)
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID#*id=}"
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID%%&*}"
+                ;;
+            esac
+          fi
           echo "stock_boot_img_url=$STOCK_BOOT_IMG_URL" >> $GITHUB_OUTPUT
+          echo "stock_boot_gdrive_id=$STOCK_BOOT_GDRIVE_ID" >> $GITHUB_OUTPUT
 
   build:
     needs: setup
@@ -388,6 +404,7 @@ jobs:
       KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
       DIRTY_MODULE_ABI_BYPASS: ${{ needs.setup.outputs.dirty_module_abi_bypass }}
       STOCK_BOOT_IMG_URL: ${{ needs.setup.outputs.stock_boot_img_url }}
+      STOCK_BOOT_GDRIVE_ID: ${{ needs.setup.outputs.stock_boot_gdrive_id }}
 
     steps:
       - name: Pre-Clean Build Artifacts
@@ -2109,7 +2126,7 @@ jobs:
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Repack akita boot.img (ksud)
-        if: env.DRY_RUN_ONLY != 'true' && env.STOCK_BOOT_IMG_URL != ''
+        if: env.DRY_RUN_ONLY != 'true' && (env.STOCK_BOOT_IMG_URL != '' || env.STOCK_BOOT_GDRIVE_ID != '')
         run: |
           set -e
           echo "::group::Repack akita boot.img via ksud"
@@ -2142,7 +2159,13 @@ jobs:
           fi
 
           echo "📥 Downloading stock boot.img..."
-          curl -fsSL "${STOCK_BOOT_IMG_URL}" -o "${REPACK_DIR}/stock_boot.img"
+          if [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
+            python3 -m pip install --user --quiet gdown
+            export PATH="${HOME}/.local/bin:${PATH}"
+            gdown --id "${STOCK_BOOT_GDRIVE_ID}" -O "${REPACK_DIR}/stock_boot.img"
+          else
+            curl -fsSL "${STOCK_BOOT_IMG_URL}" -o "${REPACK_DIR}/stock_boot.img"
+          fi
 
           echo "🔧 Patching boot.img with ksud boot-patch..."
           "$KSUD" boot-patch \

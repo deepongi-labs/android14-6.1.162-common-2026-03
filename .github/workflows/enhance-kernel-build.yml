@@ -121,6 +121,11 @@ on:
         required: false
         default: ''
         type: string
+      stock_boot_gdrive_id:
+        description: 'Google Drive file ID for stock akita boot.img to repack. Leave empty to skip.'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build-enhance:
@@ -149,3 +154,4 @@ jobs:
         governor_mode=${{ inputs.governor_mode }}
         kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
         stock_boot_img_url=${{ inputs.stock_boot_img_url }}
+        stock_boot_gdrive_id=${{ inputs.stock_boot_gdrive_id }}

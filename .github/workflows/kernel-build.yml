@@ -662,6 +662,19 @@ jobs:
             "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}" ;;
           esac
 
+          # For tiann/enhance, use official setup.sh script
+          if [ "${{ matrix.variant }}" = "tiann" ] || [ "${{ matrix.variant }}" = "enhance" ]; then
+            echo "::group::Setup Tiann KernelSU via official script"
+            cd kernel
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KSU_BRANCH"
+            cd ..
+            KSU_STAGE="${GITHUB_WORKSPACE}/kernel/KernelSU"
+            echo "Tiann KernelSU setup complete via official script"
+            echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+            echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+            echo "KSU_STAGE=$KSU_STAGE" >> $GITHUB_ENV
+            echo "::endgroup::"
+          else
           # Clone the KSU source tree to a workspace-local staging dir OUTSIDE the
           # kernel tree. The kernel/ subdirectory will later be copied directly into
           # kernel/drivers/kernelsu/ by the "Integrate KernelSU into kernel tree" step,
@@ -683,8 +696,8 @@ jobs:
 
           echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
           echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
-          echo "KSU_STAGE=$KSU_STAGE" >> $GITHUB_ENV
           echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
+          fi
 
       - name: Get KSU Version Info & Commit
         run: |

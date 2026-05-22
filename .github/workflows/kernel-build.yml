@@ -993,10 +993,11 @@ jobs:
 
             # Apply namespace fix for failed hunk #1
             if [ -f fs/namespace.c.rej ]; then
-              echo "📋 Applying namespace.c fix for tiann/enhance via Python patcher..."
+              echo "📋 Applying namespace.c fix for tiann/enhance..."
+              patch -p1 < ../.github/patches/common/namespace_fix_for_tiann.patch
               ../scripts/susfs_namespace_patcher.py fs/namespace.c --no-backup || true
               rm -f fs/namespace.c.rej
-              printf '%s | %s | applied\n' "Namespace fix for tiann" "../scripts/susfs_namespace_patcher.py" >> "$PATCH_MANIFEST"
+              printf '%s | %s | applied\n' "Namespace fix for tiann" "../.github/patches/common/namespace_fix_for_tiann.patch + ../scripts/susfs_namespace_patcher.py" >> "$PATCH_MANIFEST"
             fi
 
             # Verify no other rejects remain

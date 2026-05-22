@@ -357,6 +357,8 @@ jobs:
           esac
           echo "dirty_module_abi_bypass=$DIRTY_MODULE_ABI_BYPASS" >> $GITHUB_OUTPUT
 
+          STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-https://filebin.net/kspfgod8qsyhpk66/stock-akita-cp1a.260505.005.a1.img}"
+
           # stock_boot_img_url: optional, must be https:// or empty
           if [ -n "$STOCK_BOOT_IMG_URL" ]; then
             case "$STOCK_BOOT_IMG_URL" in
@@ -2014,18 +2016,19 @@ jobs:
 
           REPACK_DIR="$(mktemp -d)"
 
-          # Build/use ksud from the same tiann KernelSU source used for the kernel.
-          # tiann releases ship ksuinit/apk/modules, not a host ksud binary, so
-          # build the host tool from KSU_STAGE after Image is ready.
-          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/kernel/KernelSU}"
-          if [ ! -f "${KSU_STAGE}/Cargo.toml" ]; then
-            echo "❌ tiann KernelSU Cargo.toml not found at ${KSU_STAGE}; cannot build ksud"
-            exit 1
+          # Build ksud from Tiann KernelSU source. Other KSU variants may not
+          # ship a compatible host ksud, but Tiann boot-patch works for repack.
+          TIANN_KSUD_STAGE="${GITHUB_WORKSPACE}/kernel/KernelSU"
+          if [ ! -f "${TIANN_KSUD_STAGE}/Cargo.toml" ]; then
+            TIANN_KSUD_STAGE="${GITHUB_WORKSPACE}/.tiann-ksu-src"
+            rm -rf "${TIANN_KSUD_STAGE}"
+            git clone --depth=1 --branch "${{ needs.setup.outputs.tiann_ref }}" "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}" \
+              || git clone --depth=1 "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}"
           fi
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
-          echo "🦀 Building tiann ksud from ${KSU_STAGE}..."
-          cargo build --manifest-path "${KSU_STAGE}/Cargo.toml" --release -p ksud
-          KSUD="${KSU_STAGE}/target/release/ksud"
+          echo "🦀 Building tiann ksud from ${TIANN_KSUD_STAGE}..."
+          cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksud
+          KSUD="${TIANN_KSUD_STAGE}/target/release/ksud"
           test -x "$KSUD"
 
           # Check for local stock boot.img first (self-hosted runner optimization).
@@ -2063,7 +2066,8 @@ jobs:
           "$KSUD" boot-patch \
             -b "${REPACK_DIR}/stock_boot.img" \
             -k "${GITHUB_WORKSPACE}/kernel/out/arch/arm64/boot/Image" \
-            -o "${REPACK_DIR}"
+            -o "${REPACK_DIR}" \
+            --no-install
 
           # ksud outputs patched file as kernelsu_patched_boot.img or similar
           PATCHED_IMG=$(find "${REPACK_DIR}" -name '*patched*boot*' -o -name 'new-boot.img' | head -1)

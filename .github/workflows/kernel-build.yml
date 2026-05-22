@@ -2078,6 +2078,7 @@ jobs:
           path.write_text(text)
           PY
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
+          cargo fix --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --bin "ksud" -p ksud --allow-dirty || true
           echo "🦀 Building tiann ksud from ${TIANN_KSUD_STAGE}..."
           cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksud
           KSUD="${TIANN_KSUD_STAGE}/target/release/ksud"

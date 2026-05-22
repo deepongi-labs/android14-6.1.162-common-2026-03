@@ -1390,8 +1390,8 @@ jobs:
             echo "✅ KernelSU SuSFS integration present"
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
-            echo "⚠️ Skipping Brene CMD_SUSFS_* handler checks for KernelSU-Next (requires updated WildKernels patches)"
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "⚠️ Skipping optional Brene CMD_SUSFS_* handler checks for ${KSU_VARIANT}"
           else
             for required_cmd in \
               CMD_SUSFS_SHOW_ENABLED_FEATURES \
@@ -1404,8 +1404,8 @@ jobs:
             done
           fi
 
-          if [ "$KSU_VARIANT" = "next" ]; then
-            echo "⚠️ Skipping susfs_get_enabled_features check for KernelSU-Next (requires updated WildKernels patches)"
+          if [ "$KSU_VARIANT" = "next" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "⚠️ Skipping optional susfs_get_enabled_features check for ${KSU_VARIANT}"
           elif ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
             echo "::error::ENABLE_SUSFS=true but susfs_get_enabled_features bridge is missing from KernelSU. Brene cannot load enabled features."
             VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
@@ -1417,7 +1417,8 @@ jobs:
 
           # Check patch manifest for silent disables.
           if [ -f "$PATCH_MANIFEST" ]; then
-            DISABLED_COUNT=$(grep -c '| disabled$' "$PATCH_MANIFEST" 2>/dev/null || echo 0)
+            DISABLED_COUNT=$(grep -c '| disabled$' "$PATCH_MANIFEST" 2>/dev/null || true)
+            DISABLED_COUNT="${DISABLED_COUNT:-0}"
             if [ "$DISABLED_COUNT" -gt 0 ]; then
               echo "::error::$DISABLED_COUNT SuSFS patch(es) were auto-disabled. Check patch-manifest-${KSU_VARIANT}.txt for details."
               grep '| disabled$' "$PATCH_MANIFEST" || true

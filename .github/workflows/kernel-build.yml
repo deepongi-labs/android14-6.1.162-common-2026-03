@@ -2078,6 +2078,7 @@ jobs:
           path.write_text(text)
           PY
           command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
+          rustup default stable
           rustup target add aarch64-unknown-linux-musl
           KSUINIT_LINKER="${ARM64_TOOLCHAIN}gcc"
           if [ ! -x "$KSUINIT_LINKER" ]; then

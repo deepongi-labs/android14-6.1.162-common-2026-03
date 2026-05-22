@@ -5,4 +5,4 @@
 [submodule "susfs4ksu"]
 	path = susfs4ksu
 	url = https://gitlab.com/pershoot/susfs4ksu.git
-	branch = aosp-android14-6.1-dev
+	branch = gki-android14-6.1-dev

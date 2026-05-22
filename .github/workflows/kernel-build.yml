@@ -449,6 +449,22 @@ jobs:
           echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
           echo "TOOLCHAIN_ID=${TOOLCHAIN_ID}" >> $GITHUB_ENV
 
+          RUNNER_THREADS="$(nproc)"
+          BUILD_JOBS="$RUNNER_THREADS"
+          BUILD_LOAD="$((RUNNER_THREADS + 1))"
+          BUILD_TMPDIR="/mnt/ccache/kernel-tmp"
+          if ! mkdir -p "$BUILD_TMPDIR" 2>/dev/null; then
+            BUILD_TMPDIR="/mnt/Android/kernel-tmp"
+            mkdir -p "$BUILD_TMPDIR"
+          fi
+          echo "RUNNER_THREADS=${RUNNER_THREADS}" >> $GITHUB_ENV
+          echo "BUILD_JOBS=${BUILD_JOBS}" >> $GITHUB_ENV
+          echo "BUILD_LOAD=${BUILD_LOAD}" >> $GITHUB_ENV
+          echo "TMPDIR=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "TEMP=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "TMP=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "MAKEFLAGS=-j${BUILD_JOBS} -l${BUILD_LOAD}" >> $GITHUB_ENV
+
           if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
             SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
           else
@@ -460,8 +476,8 @@ jobs:
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
           echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
-          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
-          echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=false" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=45G" >> $GITHUB_ENV
           echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
           echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV
           echo "CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro" >> $GITHUB_ENV
@@ -472,13 +488,12 @@ jobs:
           ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
           ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
           ccache --set-config=compiler_check=mtime >/dev/null 2>&1 || true
-          ccache --set-config=compression=true >/dev/null 2>&1 || true
-          ccache --set-config=compression_level=6 >/dev/null 2>&1 || true
+          ccache --set-config=compression=false >/dev/null 2>&1 || true
           ccache --set-config=hard_link=true >/dev/null 2>&1 || true
           ccache --set-config=file_clone=true >/dev/null 2>&1 || true
           ccache --set-config=sloppiness=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro >/dev/null 2>&1 || true
           ccache --set-config=temporary_dir="${SELECTED_CCACHE_DIR}/tmp" >/dev/null 2>&1 || true
-          ccache -M 50G >/dev/null 2>&1 || true
+          ccache -M 45G >/dev/null 2>&1 || true
 
           command -v git >/dev/null
           command -v curl >/dev/null
@@ -489,8 +504,9 @@ jobs:
           test -x "${CLANG_BIN}/clang" || command -v clang >/dev/null
           command -v pahole >/dev/null || { echo "⚠️ pahole not found, installing dwarves..."; sudo apt-get update -qq && sudo apt-get install -y dwarves; }
           test -w "${SELECTED_CCACHE_DIR}"
+          test -w "${BUILD_TMPDIR}"
 
-          echo "✅ Build tools configured"
+          echo "✅ Build tools configured: jobs=${BUILD_JOBS}, load=${BUILD_LOAD}, tmp=${BUILD_TMPDIR}, ccache=${SELECTED_CCACHE_DIR}"
           echo "::endgroup::"
 
       - name: Cache ccache
@@ -1719,10 +1735,14 @@ jobs:
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
           if [ "${MAKE_JOBS_OVERRIDE}" = "auto" ]; then
-            MAKE_JOBS=$(nproc)
+            MAKE_JOBS="${BUILD_JOBS:-$(nproc)}"
           else
             MAKE_JOBS="${MAKE_JOBS_OVERRIDE}"
           fi
+          export TMPDIR="${TMPDIR:-/mnt/ccache/kernel-tmp}"
+          export TEMP="$TMPDIR"
+          export TMP="$TMPDIR"
+          export MAKEFLAGS="-j${MAKE_JOBS} -l${BUILD_LOAD:-$((MAKE_JOBS + 1))}"
           START_TIME=$SECONDS
 
           # Keep LOCALVERSION empty to preserve stock vermagic for vendor module compat.

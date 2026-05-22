@@ -654,8 +654,8 @@ jobs:
           fi
 
           case "${{ matrix.variant }}" in
-            # 'enhance' uses KowSU with Pixel 8 optimizations and enhance-specific patches.
-            "enhance") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}" ;;
+            # 'enhance' uses Tiann KernelSU with Pixel 8 optimizations.
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}" ;;
@@ -1030,8 +1030,8 @@ jobs:
           VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
           DEFAULT_SUSFS_PATCH="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
 
-          if [ "$KSU_VARIANT" = "tiann" ]; then
-            echo "📋 Enforcing default-only core SuSFS patch for tiann"
+          if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
             apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
@@ -1100,11 +1100,7 @@ jobs:
           # when the integration is already present.
           cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
 
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            VARIANT_KSU_PATCH="${GITHUB_WORKSPACE}/.github/patches/kowsu/10_enable_susfs_for_ksu.patch"
-          else
-            VARIANT_KSU_PATCH="${GITHUB_WORKSPACE}/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
-          fi
+          VARIANT_KSU_PATCH="${GITHUB_WORKSPACE}/.github/patches/${KSU_VARIANT}/10_enable_susfs_for_ksu.patch"
           DEFAULT_KSU_PATCH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
           SUSFS_RUNTIME_ENABLED=true
 
@@ -1148,8 +1144,8 @@ jobs:
               echo "ℹ️ KernelSU-Next uses WildKernels SuSFS patches; skipping legacy KernelSU-side patch."
               printf '%s | %s | skipped-next-wildkernel\n' "KernelSU-Next legacy SuSFS integration" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
             fi
-          elif [ "$KSU_VARIANT" = "tiann" ]; then
-            echo "📋 Enforcing default-only KernelSU SuSFS patch for tiann"
+          elif [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
+            echo "📋 Enforcing default-only KernelSU SuSFS patch for ${KSU_VARIANT}"
             if ! try_apply_patch "$DEFAULT_KSU_PATCH" "Default KernelSU SuSFS patch"; then
               if ksu_susfs_integrated; then
                 echo "ℹ️ KernelSU SuSFS integration appears present; skipping patch application."
@@ -1185,18 +1181,6 @@ jobs:
                 printf '%s | %s | failed\n' "Default KernelSU SuSFS patch" "$DEFAULT_KSU_PATCH" >> "$PATCH_MANIFEST"
                 exit 1
               fi
-            fi
-          fi
-
-          if [ "$KSU_VARIANT" = "enhance" ]; then
-            KOWX_REPAIR="/mnt/Android/KOWX712/kowx_susfs_patch.fixed.py"
-            if [ -f "$KOWX_REPAIR" ]; then
-              echo "🔧 Applying local KowSU full SuSFS repair script..."
-              python3 "$KOWX_REPAIR"
-              printf '%s | %s | applied\n' "KowSU full SuSFS repair" "$KOWX_REPAIR" >> "$PATCH_MANIFEST"
-            else
-              echo "❌ Required KowSU repair script missing: $KOWX_REPAIR"
-              exit 1
             fi
           fi
 
@@ -2105,7 +2089,7 @@ jobs:
           fi
 
           case "${{ matrix.variant }}" in
-            "enhance") AK3_BRANCH="KowSU" ;;
+            "enhance") AK3_BRANCH="KernelSU" ;;
             "tiann") AK3_BRANCH="KernelSU" ;;
             "kowsu") AK3_BRANCH="KowSU" ;;
             "resukisu") AK3_BRANCH="resukisu" ;;

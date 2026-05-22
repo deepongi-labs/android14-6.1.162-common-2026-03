@@ -1007,26 +1007,6 @@ jobs:
               exit 1
             fi
 
-            # Current SuSFS v1.5.12 source exposes
-            # susfs_set_sdcard_android_data_decrypted_key_false, while the
-            # android14-6.1 core patch still references the older inverse
-            # susfs_is_sdcard_android_data_not_decrypted key. Rewrite the
-            # callsites to test the exported decrypted key inversely.
-            printf '%s\n' \
-              'from pathlib import Path' \
-              'for path in (Path("fs/exec.c"), Path("fs/namespace.c")):' \
-              '    text = path.read_text()' \
-              '    good = "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;"' \
-              '    text = text.replace("extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;", "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;")' \
-              '    text = text.replace("extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;", "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;")' \
-              '    text = text.replace("static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)", "!static_branch_unlikely(&susfs_set_sdcard_android_data_decrypted_key_false)")' \
-              '    if "susfs_set_sdcard_android_data_decrypted_key_false" in text and good not in text:' \
-              '        marker = "extern bool susfs_is_current_ksu_domain(void);\n"' \
-              '        if marker in text:' \
-              '            text = text.replace(marker, marker + good + "\n", 1)' \
-              '    path.write_text(text)' \
-              | python3 -
-
             printf '%s | %s | applied-partial+fix\n' "Default core SuSFS patch" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"

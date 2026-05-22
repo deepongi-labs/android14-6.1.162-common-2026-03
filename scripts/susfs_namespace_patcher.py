@@ -6,10 +6,10 @@ Fixes:
     extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;
 
 to:
-    extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;
+    extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;
 
 Why:
-    fs/namespace.c uses static_branch_unlikely(&susfs_set_sdcard_android_data_decrypted_key_false),
+    fs/namespace.c uses static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted),
     which requires a jump-label static key, not a bool.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 BAD_LINE = "extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;"
-GOOD_LINE = "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;"
+GOOD_LINE = "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;"
 
 
 def patch_text(text: str) -> tuple[str, bool, str]:

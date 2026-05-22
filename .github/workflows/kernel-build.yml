@@ -943,7 +943,26 @@ jobs:
 
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
-            apply_patch_or_fail "$DEFAULT_SUSFS_PATCH" "Default core SuSFS patch"
+            # Apply with partial success allowed (namespace.c hunk #1 will fail)
+            echo "📋 Applying core SuSFS patch (partial OK for namespace.c)..."
+            patch -p1 < "$DEFAULT_SUSFS_PATCH" || true
+            
+            # Apply namespace fix for failed hunk #1
+            if [ -f fs/namespace.c.rej ]; then
+              echo "📋 Applying namespace.c fix for tiann/enhance..."
+              patch -p1 < ../.github/patches/common/namespace_fix_for_tiann.patch
+              rm -f fs/namespace.c.rej
+              printf '%s | %s | applied\n' "Namespace fix for tiann" "../.github/patches/common/namespace_fix_for_tiann.patch" >> "$PATCH_MANIFEST"
+            fi
+            
+            # Verify no other rejects remain
+            if find . -name '*.rej' -print -quit | grep -q .; then
+              echo "❌ Unexpected patch rejects found after namespace fix:"
+              find . -name '*.rej' -exec echo "  {}" \; -exec cat {} \;
+              exit 1
+            fi
+            
+            printf '%s | %s | applied-partial+fix\n' "Default core SuSFS patch" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"
           else

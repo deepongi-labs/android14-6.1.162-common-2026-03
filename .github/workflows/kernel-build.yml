@@ -1127,11 +1127,6 @@ jobs:
               echo "ℹ️ ${desc} already present, skipping."
               printf '%s | %s | already-present\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
               return 0
-            elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
-              echo "📋 Applying patch with 3-way merge: $desc"
-              git apply --3way "$patch_file"
-              printf '%s | %s | applied-3way\n' "$desc" "$patch_file" >> "$PATCH_MANIFEST"
-              return 0
             fi
 
             return 1

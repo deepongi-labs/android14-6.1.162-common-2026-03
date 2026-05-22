@@ -4,5 +4,5 @@
 	branch = android14-6.1-lts
 [submodule "susfs4ksu"]
 	path = susfs4ksu
-	url = https://gitlab.com/pershoot/susfs4ksu.git
+	url = https://gitlab.com/simonpunk/susfs4ksu.git
 	branch = gki-android14-6.1-dev

@@ -143,7 +143,7 @@ env:
   CCACHE_DIR: /mnt/ccache/.ccache
   SOURCE_MIRROR_DIR: /mnt/Android/source-mirrors
   KERNEL_REPO_URL: https://android.googlesource.com/kernel/common
-  SUSFS_REPO_URL: https://gitlab.com/pershoot/susfs4ksu
+  SUSFS_REPO_URL: https://gitlab.com/simonpunk/susfs4ksu
   TIANN_REPO_URL: https://github.com/tiann/KernelSU.git
   KOWSU_REPO_URL: https://github.com/KOWX712/KernelSU.git
   RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
@@ -301,7 +301,7 @@ jobs:
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
           # Default to upstream KernelSU-Next 'dev' branch.
-          # SuSFS patches are fetched from pershoot/susfs4ksu gki-android14-6.1-dev
+          # SuSFS patches are fetched from simonpunk/susfs4ksu gki-android14-6.1-dev
           # and WildKernels v2.1.0 fixers, so upstream dev branch works directly.
           RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
           echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT

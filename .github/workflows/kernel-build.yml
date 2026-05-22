@@ -973,7 +973,7 @@ jobs:
           cp susfs4ksu/kernel_patches/fs/susfs.c kernel/fs/
           cp susfs4ksu/kernel_patches/include/linux/susfs.h kernel/include/linux/
           cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
-          
+
           # Copy patches into target directories per pershoot instructions
           echo "📋 Copying SuSFS patches to target directories..."
           cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch kernel/
@@ -990,7 +990,7 @@ jobs:
             # Apply with partial success allowed (namespace.c hunk #1 will fail)
             echo "📋 Applying core SuSFS patch (partial OK for namespace.c)..."
             patch -p1 < "$DEFAULT_SUSFS_PATCH" || true
-            
+
             # Apply namespace fix for failed hunk #1
             if [ -f fs/namespace.c.rej ]; then
               echo "📋 Applying namespace.c fix for tiann/enhance..."
@@ -998,7 +998,7 @@ jobs:
               rm -f fs/namespace.c.rej
               printf '%s | %s | applied\n' "Namespace fix for tiann" "../.github/patches/common/namespace_fix_for_tiann.patch" >> "$PATCH_MANIFEST"
             fi
-            
+
             # Verify no other rejects remain
             if find . -name '*.rej' -print -quit | grep -q .; then
               echo "❌ Unexpected patch rejects found after namespace fix:"
@@ -1011,26 +1011,16 @@ jobs:
             # android14-6.1 core patch still references the older inverse
             # susfs_is_sdcard_android_data_not_decrypted key. Rewrite the
             # callsites to test the exported decrypted key inversely.
-            python3 - <<'PY'
-from pathlib import Path
+            printf '%s\n' \
+              'from pathlib import Path' \
+              'for path in (Path("fs/exec.c"), Path("fs/namespace.c")):' \
+              '    text = path.read_text()' \
+              '    text = text.replace("extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;", "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;")' \
+              '    text = text.replace("extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;", "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;")' \
+              '    text = text.replace("static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)", "!static_branch_unlikely(&susfs_set_sdcard_android_data_decrypted_key_false)")' \
+              '    path.write_text(text)' \
+              | python3 -
 
-for path in (Path("fs/exec.c"), Path("fs/namespace.c")):
-    text = path.read_text()
-    text = text.replace(
-        "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;",
-        "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;",
-    )
-    text = text.replace(
-        "extern bool susfs_is_sdcard_android_data_decrypted __read_mostly;",
-        "extern struct static_key_false susfs_set_sdcard_android_data_decrypted_key_false;",
-    )
-    text = text.replace(
-        "static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)",
-        "!static_branch_unlikely(&susfs_set_sdcard_android_data_decrypted_key_false)",
-    )
-    path.write_text(text)
-PY
-            
             printf '%s | %s | applied-partial+fix\n' "Default core SuSFS patch" "$DEFAULT_SUSFS_PATCH" >> "$PATCH_MANIFEST"
           elif [ "$KSU_VARIANT" = "kowsu" ]; then
             apply_patch_or_fail "$VARIANT_SUSFS_PATCH" "Custom core SuSFS patch"

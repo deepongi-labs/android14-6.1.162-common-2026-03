@@ -1585,6 +1585,26 @@ jobs:
             if ! grep -q '^CONFIG_CPU_FREQ_GOV_DYNASCHED=y$' arch/arm64/configs/gki_defconfig 2>/dev/null; then
               echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
             fi
+            python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('drivers/cpufreq/Kconfig')
+          text = path.read_text()
+          if 'CPU_FREQ_DEFAULT_GOV_DYNASCHED' not in text:
+              text = text.replace(
+                  'default CPU_FREQ_DEFAULT_GOV_USERSPACE if ARM_SA1100_CPUFREQ || ARM_SA1110_CPUFREQ\n',
+                  'default CPU_FREQ_DEFAULT_GOV_USERSPACE if ARM_SA1100_CPUFREQ || ARM_SA1110_CPUFREQ\n\tdefault CPU_FREQ_DEFAULT_GOV_DYNASCHED if CPU_FREQ_GOV_DYNASCHED && ARM64\n',
+                  1,
+              )
+              text = text.replace(
+                  'endchoice\n\nconfig CPU_FREQ_GOV_PERFORMANCE',
+                  'config CPU_FREQ_DEFAULT_GOV_DYNASCHED\n\tbool "dynasched"\n\tdepends on SMP\n\tselect CPU_FREQ_GOV_DYNASCHED\n\tselect CPU_FREQ_GOV_PERFORMANCE\n\thelp\n\t  Use the dynasched Tensor G3 cluster-aware CPUFreq governor by default.\n\nendchoice\n\nconfig CPU_FREQ_GOV_PERFORMANCE',
+                  1,
+              )
+          path.write_text(text)
+          PY
+            sed -i '/^CONFIG_CPU_FREQ_DEFAULT_GOV_/d' arch/arm64/configs/gki_defconfig
+            echo "CONFIG_CPU_FREQ_DEFAULT_GOV_DYNASCHED=y" >> arch/arm64/configs/gki_defconfig
             printf 'dynasched governor source | kernel/sched/cpufreq_dynasched.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
           else
             echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
@@ -1777,7 +1797,6 @@ jobs:
           CONFIG_SCHED_CORE=y
           CONFIG_ENERGY_MODEL=y
           CONFIG_CPU_FREQ=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
           CONFIG_THERMAL=y
           CONFIG_CMA=y
           CONFIG_KPROBES=y

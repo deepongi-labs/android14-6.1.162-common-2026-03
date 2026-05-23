@@ -2023,7 +2023,7 @@ jobs:
           echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Repack akita boot.img (ksud)
-        if: env.DRY_RUN_ONLY != 'true'
+        if: env.DRY_RUN_ONLY != 'true' && matrix.variant != 'enhance'
         run: |
           set -e
           echo "::group::Repack akita boot.img via ksud"

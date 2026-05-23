@@ -40,7 +40,7 @@ pip3 install --break-system-packages requests || {
 echo ""
 echo "Building runner Docker image..."
 cd "${SCRIPT_DIR}"
-if docker build -t actions-runner-kernel:latest .; then
+if docker build --network=host -t actions-runner-kernel:latest .; then
     echo "✅ Docker image built successfully"
     RUNNER_IMAGE="actions-runner-kernel:latest"
 else

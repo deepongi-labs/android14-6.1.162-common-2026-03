@@ -2135,21 +2135,10 @@ jobs:
           fi
 
           echo "🔧 Patching boot.img with ksud boot-patch..."
-          KSU_MODULE_ARG=""
-          if [ "${KSU_VARIANT}" = "enhance" ]; then
-            KSU_MODULE_PATH="$(find "${GITHUB_WORKSPACE}/kernel/out" -path '*drivers/kernelsu/kernelsu.ko' -o -name 'kernelsu.ko' | head -1)"
-            if [ -z "$KSU_MODULE_PATH" ] || [ ! -f "$KSU_MODULE_PATH" ]; then
-              echo "❌ enhance LKM build did not produce kernelsu.ko"
-              find "${GITHUB_WORKSPACE}/kernel/out" -name '*.ko' | sed -n '1,80p'
-              exit 1
-            fi
-            echo "✅ Using KernelSU module: $KSU_MODULE_PATH"
-            KSU_MODULE_ARG="--module $KSU_MODULE_PATH"
-          fi
           "$KSUD" boot-patch \
             -b "${REPACK_DIR}/stock_boot.img" \
             -k "${GITHUB_WORKSPACE}/kernel/out/arch/arm64/boot/Image" \
-            $KSU_MODULE_ARG \
+            --no-install \
             -o "${REPACK_DIR}"
 
           # ksud outputs patched file as kernelsu_patched_boot.img or similar

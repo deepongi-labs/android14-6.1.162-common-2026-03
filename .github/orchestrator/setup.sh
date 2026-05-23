@@ -40,11 +40,29 @@ pip3 install --break-system-packages requests || {
 echo ""
 echo "Building runner Docker image..."
 cd "${SCRIPT_DIR}"
-docker build -t actions-runner-kernel:latest . || {
-    echo "❌ Failed to build Docker image"
-    exit 1
-}
-echo "✅ Docker image built successfully"
+if docker build -t actions-runner-kernel:latest .; then
+    echo "✅ Docker image built successfully"
+    RUNNER_IMAGE="actions-runner-kernel:latest"
+else
+    echo "⚠️  Docker build failed (common in WSL2 due to networking issues)"
+    echo ""
+    echo "Fallback options:"
+    echo "1. Use official GitHub Actions runner image (recommended)"
+    echo "2. Try Docker build fixes:"
+    echo "   - Restart Docker: sudo systemctl restart docker"
+    echo "   - Restart WSL2: wsl --shutdown (in Windows PowerShell)"
+    echo "   - Build with host network: docker build --network=host -t actions-runner-kernel:latest ."
+    echo ""
+    read -p "Use official runner image? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "✅ Will use official runner image: ghcr.io/actions/actions-runner:latest"
+        RUNNER_IMAGE="ghcr.io/actions/actions-runner:latest"
+    else
+        echo "❌ Setup aborted. Please fix Docker build and retry."
+        exit 1
+    fi
+fi
 
 # Create configuration file
 echo ""

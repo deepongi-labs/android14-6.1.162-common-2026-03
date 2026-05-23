@@ -1648,6 +1648,19 @@ jobs:
           fi
           printf 'KLapse livedisplay | drivers/video/klapse+include/linux/klapse.h | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
 
+          echo "🎨 Applying Pixel 8 display color backend hook..."
+          if patch -p1 --forward --dry-run < "$GITHUB_WORKSPACE/.github/patches/global/klapse_backlight_hook.patch" >/dev/null 2>&1; then
+            patch -p1 --forward < "$GITHUB_WORKSPACE/.github/patches/global/klapse_backlight_hook.patch"
+            echo "✅ KLapse backlight hook applied"
+            printf 'KLapse backlight hook | drivers/video/backlight/backlight.c | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
+          elif patch -p1 --reverse --dry-run < "$GITHUB_WORKSPACE/.github/patches/global/klapse_backlight_hook.patch" >/dev/null 2>&1; then
+            echo "ℹ️ KLapse backlight hook already present, skipping."
+            printf 'KLapse backlight hook | drivers/video/backlight/backlight.c | already-present\n' >> "${PATCH_MANIFEST:-/dev/null}"
+          else
+            echo "⚠️ KLapse backlight hook could not be applied cleanly, display color management may not work"
+            printf 'KLapse backlight hook | drivers/video/backlight/backlight.c | failed-non-fatal\n' >> "${PATCH_MANIFEST:-/dev/null}"
+          fi
+
       - name: Verify Patched Tree
         run: |
           set -e

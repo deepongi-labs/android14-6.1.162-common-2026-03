@@ -81,13 +81,14 @@ on:
         default: '85a3b1c62eafe7162de570b1b5629a6bb654010d'
         type: string
       android_version:
-        description: 'Android version target (android14-6.1 or android17-6.18)'
+        description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'
         required: false
-        default: 'android14'
+        default: 'android16'
         type: choice
         options:
           - android14
           - android17
+          - android16
       kernel_ref_android17:
         description: 'Override kernel ref for Android 17 (android17-6.18 branch)'
         required: false
@@ -134,7 +135,7 @@ on:
         type: boolean
       android_version:
         required: false
-        default: 'android14'
+        default: 'android16'
         type: string
       kernel_ref_android17:
         required: false
@@ -172,7 +173,9 @@ env:
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
+  ANDROID16_KERNEL_REF: android14-6.1-lts
   ANDROID17_KERNEL_REF: android17-6.18-2026-06
+  ANDROID16_STOCK_BOOT_URL: ""
   ANDROID17_STOCK_BOOT_URL: ""
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
@@ -184,7 +187,7 @@ env:
 
 jobs:
   setup:
-    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
@@ -327,15 +330,19 @@ jobs:
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
 
-          ANDROID_VERSION="${ANDROID_VERSION:-android14}"
+          ANDROID_VERSION="${ANDROID_VERSION:-android16}"
           case "$ANDROID_VERSION" in
-            android14|android17) ;;
-            *) echo "❌ Invalid android_version: $ANDROID_VERSION (expected android14 or android17)"; exit 1 ;;
+            android14|android16|android17) ;;
+            *) echo "❌ Invalid android_version: $ANDROID_VERSION (expected android14, android16, or android17)"; exit 1 ;;
           esac
 
           if [ "$ANDROID_VERSION" = "android17" ]; then
             RESOLVED_KERNEL_REF="${KERNEL_REF:-${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}}"
             RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android17-6.18-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          elif [ "$ANDROID_VERSION" = "android16" ]; then
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-${ANDROID16_KERNEL_REF}}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
             RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
           else
             RESOLVED_KERNEL_REF="${KERNEL_REF:-85a3b1c62eafe7162de570b1b5629a6bb654010d}"
@@ -438,7 +445,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
     timeout-minutes: 120
     concurrency:
       group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
@@ -1036,6 +1043,8 @@ jobs:
           # Select SuSFS patch based on Android version
           if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
             SUSFS_PATCH_NAME="50_add_susfs_in_gki-android17-6.18.patch"
+          elif [ "${{ needs.setup.outputs.android_version }}" = "android16" ]; then
+            SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
           else
             SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
           fi
@@ -2215,6 +2224,15 @@ jobs:
                 break
               fi
             done
+          elif [ "${{ needs.setup.outputs.android_version }}" = "android16" ]; then
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp21.260508.005.img" \
+              "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp21.260508.005.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
           else
             for candidate in \
               "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img" \
@@ -2766,7 +2784,7 @@ jobs:
 
   create_release:
     needs: [setup, build]
-    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
     if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
@@ -2824,7 +2842,7 @@ jobs:
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
     if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Send Telegram Notification

@@ -32,7 +32,7 @@ echo "✅ Python 3 found: $(python3 --version)"
 # Install Python dependencies
 echo ""
 echo "Installing Python dependencies..."
-pip3 install requests || {
+pip3 install --break-system-packages requests || {
     echo "⚠️  Failed to install Python dependencies. Continuing anyway..."
 }
 

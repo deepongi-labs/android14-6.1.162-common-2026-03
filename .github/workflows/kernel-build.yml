@@ -149,6 +149,7 @@ env:
   RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
+  KLAPSE_REPO_URL: https://github.com/tanish2k09/KLapse-Livedisplay
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
   WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
@@ -1609,6 +1610,43 @@ jobs:
           else
             echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
           fi
+
+          echo "🔧 Installing KLapse livedisplay support..."
+          KLAPSE_SRC="${RUNNER_TEMP:-/tmp}/klapse-src"
+          rm -rf "$KLAPSE_SRC"
+          git clone --depth=1 "$KLAPSE_REPO_URL" "$KLAPSE_SRC"
+          mkdir -p drivers/video/klapse include/linux
+          cp -a "$KLAPSE_SRC/drivers/video/klapse/." drivers/video/klapse/
+          cp "$KLAPSE_SRC/include/linux/klapse.h" include/linux/klapse.h
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('drivers/video/klapse/klapse.c')
+          text = source.read_text()
+          text = text.replace('static void pulse(unsigned long data);', 'static void pulse(struct timer_list *t);')
+          text = text.replace('static void set_rgb_flow(unsigned long data);', 'static void set_rgb_flow(struct timer_list *t);')
+          text = text.replace('static DEFINE_TIMER(pulse_timer, pulse, 0, 0);', 'static DEFINE_TIMER(pulse_timer, pulse);')
+          text = text.replace('static DEFINE_TIMER(flow_timer, set_rgb_flow, 0, 0);', 'static DEFINE_TIMER(flow_timer, set_rgb_flow);')
+          text = text.replace('static void pulse(unsigned long data)', 'static void pulse(struct timer_list *t)')
+          text = text.replace('static void set_rgb_flow(unsigned long data)', 'static void set_rgb_flow(struct timer_list *t)')
+          text = text.replace('set_rgb_flow(0);', 'set_rgb_flow(NULL);')
+          marker = '#include <linux/klapse.h>\n'
+          fallback = marker + '\n#if !KLAPSE_MDSS\ncol_type_t kcal_red = MAX_SCALE;\ncol_type_t kcal_green = MAX_SCALE;\ncol_type_t kcal_blue = MAX_SCALE;\n#endif\n'
+          text = text.replace(marker, fallback, 1)
+          text = text.replace('void set_rgb_slider(bl_type_t bl_lvl)\n{', 'void set_rgb_slider(bl_type_t bl_lvl)\n{', 1)
+          text = text.replace('MODULE_VERSION("5.0");', 'EXPORT_SYMBOL_GPL(set_rgb_slider);\nMODULE_VERSION("5.0");', 1)
+          source.write_text(text)
+          PY
+          if ! grep -q 'source "drivers/video/klapse/Kconfig"' drivers/video/Kconfig; then
+            printf '\nsource "drivers/video/klapse/Kconfig"\n' >> drivers/video/Kconfig
+          fi
+          if ! grep -q 'obj-$(CONFIG_KLAPSE).*klapse' drivers/video/Makefile; then
+            printf '\nobj-$(CONFIG_KLAPSE) += klapse/\n' >> drivers/video/Makefile
+          fi
+          if ! grep -q '^CONFIG_KLAPSE=y$' arch/arm64/configs/gki_defconfig 2>/dev/null; then
+            echo 'CONFIG_KLAPSE=y' >> arch/arm64/configs/gki_defconfig
+          fi
+          printf 'KLapse livedisplay | drivers/video/klapse+include/linux/klapse.h | applied\n' >> "${PATCH_MANIFEST:-/dev/null}"
 
       - name: Verify Patched Tree
         run: |

@@ -118,6 +118,7 @@ class RunnerOrchestrator:
             cmd = [
                 'docker', 'run', '-d',
                 '--name', runner_name,
+                '--network', 'host',  # Use host network to avoid WSL2 veth issues
                 '--restart', 'unless-stopped',
                 '-e', f'RUNNER_NAME={runner_name}',
                 '-e', f'RUNNER_TOKEN={token}',

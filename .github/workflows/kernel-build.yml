@@ -80,6 +80,19 @@ on:
         required: false
         default: '85a3b1c62eafe7162de570b1b5629a6bb654010d'
         type: string
+      android_version:
+        description: 'Android version target (android14-6.1 or android17-6.18)'
+        required: false
+        default: 'android14'
+        type: choice
+        options:
+          - android14
+          - android17
+      kernel_ref_android17:
+        description: 'Override kernel ref for Android 17 (android17-6.18 branch)'
+        required: false
+        default: ''
+        type: string
 
   workflow_call:
     inputs:
@@ -119,6 +132,14 @@ on:
         required: false
         default: false
         type: boolean
+      android_version:
+        required: false
+        default: 'android14'
+        type: string
+      kernel_ref_android17:
+        required: false
+        default: ''
+        type: string
       refs:
         required: false
         default: ''
@@ -151,6 +172,8 @@ env:
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
+  ANDROID17_KERNEL_REF: android17-6.18-2026-06
+  ANDROID17_STOCK_BOOT_URL: https://filebin.net/placeholder/stock-akita-android17-beta.img
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
   WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
@@ -161,7 +184,7 @@ env:
 
 jobs:
   setup:
-    runs-on: orchestrated-runner-1779537701-0
+    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
@@ -171,6 +194,8 @@ jobs:
       build_start_time: ${{ steps.timestamp.outputs.start_time }}
       create_release: ${{ steps.config.outputs.create_release }}
       kernel_ref: ${{ steps.config.outputs.kernel_ref }}
+      android_version: ${{ steps.config.outputs.android_version }}
+      kernel_ref_android17: ${{ steps.config.outputs.kernel_ref_android17 }}
       susfs_ref: ${{ steps.config.outputs.susfs_ref }}
       tiann_ref: ${{ steps.config.outputs.tiann_ref }}
       kowsu_ref: ${{ steps.config.outputs.kowsu_ref }}
@@ -221,6 +246,8 @@ jobs:
           # trimmed. Blank lines and `#`-prefixed lines are ignored. Unknown
           # keys are a hard error.
           KERNEL_REF=""
+          KERNEL_REF_ANDROID17="${{ inputs.kernel_ref_android17 }}"
+          ANDROID_VERSION="${{ inputs.android_version }}"
           SUSFS_REF=""
           TIANN_REF=""
           KOWSU_REF=""
@@ -244,6 +271,8 @@ jobs:
             value="${value%"${value##*[![:space:]]}"}"
             case "$key" in
               kernel_ref) KERNEL_REF="$value" ;;
+              kernel_ref_android17) KERNEL_REF_ANDROID17="$value" ;;
+              android_version) ANDROID_VERSION="$value" ;;
               susfs_ref) SUSFS_REF="$value" ;;
               tiann_ref) TIANN_REF="$value" ;;
               kowsu_ref) KOWSU_REF="$value" ;;
@@ -297,8 +326,27 @@ jobs:
           echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
-          echo "kernel_ref=${KERNEL_REF:-85a3b1c62eafe7162de570b1b5629a6bb654010d}" >> $GITHUB_OUTPUT
-          echo "susfs_ref=${SUSFS_REF:-gki-android14-6.1-dev}" >> $GITHUB_OUTPUT
+
+          ANDROID_VERSION="${ANDROID_VERSION:-android14}"
+          case "$ANDROID_VERSION" in
+            android14|android17) ;;
+            *) echo "❌ Invalid android_version: $ANDROID_VERSION (expected android14 or android17)"; exit 1 ;;
+          esac
+
+          if [ "$ANDROID_VERSION" = "android17" ]; then
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android17-6.18-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          else
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-85a3b1c62eafe7162de570b1b5629a6bb654010d}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          fi
+
+          echo "android_version=${ANDROID_VERSION}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${RESOLVED_KERNEL_REF}" >> $GITHUB_OUTPUT
+          echo "kernel_ref_android17=${RESOLVED_KERNEL_REF_ANDROID17}" >> $GITHUB_OUTPUT
+          echo "susfs_ref=${RESOLVED_SUSFS_REF}" >> $GITHUB_OUTPUT
           echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
           echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
           echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
@@ -359,7 +407,12 @@ jobs:
           esac
           echo "dirty_module_abi_bypass=$DIRTY_MODULE_ABI_BYPASS" >> $GITHUB_OUTPUT
 
-          STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-https://filebin.net/kspfgod8qsyhpk66/stock-akita-cp1a.260505.005.a1.img}"
+          # Select stock boot image based on Android version
+          if [ "$ANDROID_VERSION" = "android17" ]; then
+            STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-${{ env.ANDROID17_STOCK_BOOT_URL }}}"
+          else
+            STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-https://filebin.net/kspfgod8qsyhpk66/stock-akita-cp1a.260505.005.a1.img}"
+          fi
 
           # stock_boot_img_url: optional, must be https:// or empty
           if [ -n "$STOCK_BOOT_IMG_URL" ]; then
@@ -385,7 +438,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: orchestrated-runner-1779537701-0
+    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
     timeout-minutes: 120
     concurrency:
       group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
@@ -980,14 +1033,30 @@ jobs:
 
           # Copy patches into target directories per pershoot instructions
           echo "📋 Copying SuSFS patches to target directories..."
-          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch kernel/
+          # Select SuSFS patch based on Android version
+          if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+            SUSFS_PATCH_NAME="50_add_susfs_in_gki-android17-6.18.patch"
+          else
+            SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
+          fi
+          cp susfs4ksu/kernel_patches/${SUSFS_PATCH_NAME} kernel/ || {
+            echo "⚠️ SuSFS patch ${SUSFS_PATCH_NAME} not found in susfs4ksu/kernel_patches/"
+            echo "   Android ${{ needs.setup.outputs.android_version }} may not have SuSFS support yet."
+            if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+              echo "   Falling back to android14-6.1 patch (may fail to apply)..."
+              SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
+              cp susfs4ksu/kernel_patches/${SUSFS_PATCH_NAME} kernel/
+            else
+              exit 1
+            fi
+          }
           cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}/"
 
           cd kernel
 
           # Apply core SuSFS patch.
-          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/50_add_susfs_in_gki-android14-6.1.patch"
-          DEFAULT_SUSFS_PATCH="./50_add_susfs_in_gki-android14-6.1.patch"
+          VARIANT_SUSFS_PATCH="../.github/patches/${KSU_VARIANT}/${SUSFS_PATCH_NAME}"
+          DEFAULT_SUSFS_PATCH="./${SUSFS_PATCH_NAME}"
 
           if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "enhance" ]; then
             echo "📋 Enforcing default-only core SuSFS patch for ${KSU_VARIANT}"
@@ -1514,6 +1583,13 @@ jobs:
 
           # 1. CLIDR uninitialized fix (use local copy, not a remote SHA-pinned URL)
           apply_repo_patch_or_fail ".github/patches/fix-clidr-uninitialized.patch" "CLIDR initialization fix"
+
+          # 1b. Display and power enhancements
+          echo "🎨 Applying display and power enhancement patches..."
+          apply_repo_patch_or_fail ".github/patches/global/klapse_backlight_hook_safe.patch" "KLapse safe backlight hook"
+          apply_repo_patch_or_fail ".github/patches/global/klapse_hbm_hook.patch" "KLapse HBM support"
+          apply_repo_patch_or_fail ".github/patches/global/fast_charge_usb.patch" "Fast USB charging"
+          echo "✅ Display and power enhancements applied"
 
           # 2. (Optional) Wi-Fi patch from OnePlus 12 (Qualcomm SM8650 tree)
           # Tensor G3 (Pixel 8, akita) uses Broadcom BCM4389 Wi-Fi, NOT QCA.
@@ -2678,7 +2754,7 @@ jobs:
 
   create_release:
     needs: [setup, build]
-    runs-on: orchestrated-runner-1779537701-0
+    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
     if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
@@ -2736,7 +2812,7 @@ jobs:
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: orchestrated-runner-1779537701-0
+    runs-on: [self-hosted, linux, x64, pixel8-orchestrated]
     if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Send Telegram Notification

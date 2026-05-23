@@ -173,7 +173,7 @@ env:
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
   ANDROID17_KERNEL_REF: android17-6.18-2026-06
-  ANDROID17_STOCK_BOOT_URL: https://filebin.net/placeholder/stock-akita-android17-beta.img
+  ANDROID17_STOCK_BOOT_URL: ""
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
   WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
@@ -2205,14 +2205,26 @@ jobs:
           # actions/checkout runs under _work/, while the persistent repo lives
           # under /mnt/Android/gki-kernel-builder, so check both locations.
           LOCAL_BOOT_IMG=""
-          for candidate in \
-            "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img" \
-            "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp1a.260505.005.a1.img"; do
-            if [ -f "$candidate" ]; then
-              LOCAL_BOOT_IMG="$candidate"
-              break
-            fi
-          done
+          # Select stock boot image paths based on Android version
+          if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp31.260508.005.img" \
+              "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp31.260508.005.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
+          else
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img" \
+              "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp1a.260505.005.a1.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
+          fi
 
           if [ -n "$LOCAL_BOOT_IMG" ]; then
             echo "✅ Using local stock boot.img: $LOCAL_BOOT_IMG"

@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - enhance
           - tiann
           - kowsu
           - resukisu
@@ -149,6 +150,7 @@ env:
   RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
+  ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
   CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
   WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
@@ -159,7 +161,7 @@ env:
 
 jobs:
   setup:
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
+    runs-on: orchestrated-runner-1779537701-0
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       enable_susfs: ${{ steps.config.outputs.enable_susfs }}
@@ -383,7 +385,7 @@ jobs:
 
   build:
     needs: setup
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
+    runs-on: orchestrated-runner-1779537701-0
     timeout-minutes: 120
     concurrency:
       group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
@@ -673,7 +675,7 @@ jobs:
 
           case "${{ matrix.variant }}" in
             # 'enhance' uses Tiann KernelSU with Pixel 8 optimizations.
-            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ env.ENHANCE_KSU_REF }}" ;;
             "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
             "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}" ;;
             "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}" ;;
@@ -2676,7 +2678,7 @@ jobs:
 
   create_release:
     needs: [setup, build]
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
+    runs-on: orchestrated-runner-1779537701-0
     if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Checkout
@@ -2734,7 +2736,7 @@ jobs:
 
   notify:
     needs: [setup, create_release, build]
-    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "linux", "x64", "pixel8-wsl"]') || 'ubuntu-latest' }}
+    runs-on: orchestrated-runner-1779537701-0
     if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
     steps:
       - name: Send Telegram Notification

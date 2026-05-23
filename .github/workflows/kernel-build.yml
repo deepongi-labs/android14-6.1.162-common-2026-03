@@ -1818,11 +1818,7 @@ jobs:
           CONFIG_KSU_LSM_SECURITY_HOOKS=y
           EOF
 
-          if [ "${KSU_VARIANT}" = "enhance" ]; then
-            printf '%s\n' 'CONFIG_KSU=m' | add_gki_defconfig_once
-          else
-            printf '%s\n' 'CONFIG_KSU=y' | add_gki_defconfig_once
-          fi
+          printf '%s\n' 'CONFIG_KSU=y' | add_gki_defconfig_once
 
           if [ "${{ env.ENABLE_SUSFS }}" = "true" ]; then
             printf '%s\n' 'CONFIG_KSU_SUSFS=y' | add_gki_defconfig_once
@@ -1918,12 +1914,7 @@ jobs:
           # Validate critical configs survived Kconfig sync
           echo "::group::Config Validation"
           CONFIG_ERRORS=0
-          if [ "${KSU_VARIANT}" = "enhance" ]; then
-            if ! grep -q '^CONFIG_KSU=m' out/.config; then
-              echo "::error::CONFIG_KSU=m not set after Kconfig sync for enhance LKM build!"
-              CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
-            fi
-          elif ! grep -q '^CONFIG_KSU=y' out/.config; then
+          if ! grep -q '^CONFIG_KSU=y' out/.config; then
             echo "::error::CONFIG_KSU=y not set after Kconfig sync!"
             CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
           fi

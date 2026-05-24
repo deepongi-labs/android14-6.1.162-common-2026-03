@@ -115,8 +115,6 @@ apply_repo_patch_or_fail ".github/patches/fix-clidr-uninitialized.patch" "CLIDR 
 
 # 1b. Display and power enhancements
 echo "🎨 Applying display and power enhancement patches..."
-apply_repo_patch_or_fail ".github/patches/global/klapse_backlight_hook_safe.patch" "KLapse safe backlight hook"
-apply_repo_patch_or_fail ".github/patches/global/klapse_hbm_hook.patch" "KLapse HBM support"
 apply_repo_patch_or_fail ".github/patches/global/fast_charge_usb.patch" "Fast USB charging"
 echo "✅ Display and power enhancements applied"
 

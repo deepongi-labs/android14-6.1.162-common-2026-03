@@ -206,17 +206,17 @@ cp susfs4ksu/kernel_patches/include/linux/susfs_def.h kernel/include/linux/
 # Copy patches into target directories per pershoot instructions
 echo "📋 Copying SuSFS patches to target directories..."
 # Select SuSFS patch based on Android version
-if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+if [ "${ANDROID_VERSION}" = "android17" ]; then
   SUSFS_PATCH_NAME="50_add_susfs_in_gki-android17-6.18.patch"
-elif [ "${{ needs.setup.outputs.android_version }}" = "android16" ]; then
+elif [ "${ANDROID_VERSION}" = "android16" ]; then
   SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
 else
   SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
 fi
 cp susfs4ksu/kernel_patches/${SUSFS_PATCH_NAME} kernel/ || {
   echo "⚠️ SuSFS patch ${SUSFS_PATCH_NAME} not found in susfs4ksu/kernel_patches/"
-  echo "   Android ${{ needs.setup.outputs.android_version }} may not have SuSFS support yet."
-  if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+  echo "   Android ${ANDROID_VERSION} may not have SuSFS support yet."
+  if [ "${ANDROID_VERSION}" = "android17" ]; then
     echo "   Falling back to android14-6.1 patch (may fail to apply)..."
     SUSFS_PATCH_NAME="50_add_susfs_in_gki-android14-6.1.patch"
     cp susfs4ksu/kernel_patches/${SUSFS_PATCH_NAME} kernel/

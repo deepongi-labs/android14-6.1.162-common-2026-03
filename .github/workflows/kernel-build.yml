@@ -463,6 +463,7 @@ jobs:
       FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
       DIRTY_BUILD: ${{ needs.setup.outputs.dirty_build }}
       DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
+      ANDROID_VERSION: ${{ needs.setup.outputs.android_version }}
       KSU_VARIANT: ${{ matrix.variant }}
       TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
       LTO_MODE: ${{ needs.setup.outputs.lto_mode }}

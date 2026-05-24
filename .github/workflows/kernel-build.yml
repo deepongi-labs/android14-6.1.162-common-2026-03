@@ -78,7 +78,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: '85a3b1c62eafe7162de570b1b5629a6bb654010d'
+        default: 'android14-6.1-2026-03_r12'
         type: string
       android_version:
         description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'

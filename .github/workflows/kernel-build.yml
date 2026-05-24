@@ -78,7 +78,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'bump/upstream-kernel-6.1.173-2026-06-v2'
+        default: 'main'
         type: string
       android_version:
         description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'
@@ -349,7 +349,7 @@ jobs:
             RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
             RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
           else
-            RESOLVED_KERNEL_REF="${KERNEL_REF:-85a3b1c62eafe7162de570b1b5629a6bb654010d}"
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-main}"
             RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
             RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
           fi

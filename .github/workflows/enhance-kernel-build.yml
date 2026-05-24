@@ -94,7 +94,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'bump/upstream-kernel-6.1.173-2026-06-v2'
+        default: 'main'
         type: string
       susfs_ref:
         description: 'Override SuSFS ref'

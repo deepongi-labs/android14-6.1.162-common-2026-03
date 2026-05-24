@@ -13,7 +13,7 @@ on:
       kernel_ref:
         description: 'Kernel branch/ref to build'
         required: false
-        default: 'bump/upstream-kernel-6.1.173-2026-06-v2'
+        default: 'main'
         type: string
       build_target:
         description: 'Kleaf/Bazel build target'

@@ -173,7 +173,7 @@ env:
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
-  ANDROID16_KERNEL_REF: main
+  ANDROID16_KERNEL_REF: android-mainline
   ANDROID17_KERNEL_REF: android17-6.18-2026-06
   ANDROID16_STOCK_BOOT_URL: ""
   ANDROID17_STOCK_BOOT_URL: ""

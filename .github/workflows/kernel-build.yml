@@ -165,7 +165,7 @@ env:
   ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
   CCACHE_DIR: /mnt/ccache/.ccache
   SOURCE_MIRROR_DIR: /mnt/Android/source-mirrors
-  KERNEL_REPO_URL: https://android.googlesource.com/kernel/common
+  KERNEL_REPO_URL: https://github.com/deepongi-labs/android14-6.1.162-common-2026-03
   SUSFS_REPO_URL: https://gitlab.com/simonpunk/susfs4ksu
   TIANN_REPO_URL: https://github.com/tiann/KernelSU.git
   KOWSU_REPO_URL: https://github.com/KOWX712/KernelSU.git
@@ -173,7 +173,7 @@ env:
   NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
   ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
-  ANDROID16_KERNEL_REF: android14-6.1-lts
+  ANDROID16_KERNEL_REF: main
   ANDROID17_KERNEL_REF: android17-6.18-2026-06
   ANDROID16_STOCK_BOOT_URL: ""
   ANDROID17_STOCK_BOOT_URL: ""

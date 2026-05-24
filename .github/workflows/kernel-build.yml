@@ -326,7 +326,11 @@ jobs:
           ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
           echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
           echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
-          echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.force_clean_build }}" = "true" ]; then
+            echo "dirty_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
+          fi
           echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
           echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
 

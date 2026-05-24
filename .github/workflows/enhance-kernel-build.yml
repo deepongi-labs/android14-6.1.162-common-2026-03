@@ -84,7 +84,7 @@ on:
       dirty_build:
         description: 'Incremental build: skip source cleanup, preserve out/ directory'
         required: false
-        default: true
+        default: false
         type: boolean
       dirty_module_abi_bypass:
         description: 'Allow loading the built-in KernelSU kernel without requiring android14-6.1_kernelsu.ko'

@@ -838,7 +838,9 @@ jobs:
 
       - name: Setup SuSFS
         if: env.ENABLE_SUSFS == 'true'
-        run: bash .github/scripts/setup-susfs.sh
+        run: |
+          export ANDROID_VERSION="${{ needs.setup.outputs.android_version }}"
+          bash .github/scripts/setup-susfs.sh
       - name: Inject SuSFS Kconfig for KernelSU-Next
         if: env.ENABLE_SUSFS == 'true' && env.KSU_VARIANT == 'next'
         run: |

@@ -1047,7 +1047,6 @@ jobs:
           fi
 
       - name: Apply Remote Patches & Source Fixes
-        run: |
         run: bash .github/scripts/apply-remote-patches.sh
       - name: Verify Patched Tree
         run: |
@@ -1154,7 +1153,6 @@ jobs:
 
       - name: Build Kernel
         if: env.DRY_RUN_ONLY != 'true'
-        run: |
         run: |
           export KSU_VARIANT="${{ matrix.variant }}"
           bash .github/scripts/build-kernel.sh
@@ -1391,7 +1389,6 @@ jobs:
 
       - name: Generate Pixel 8 Runtime Tuner Script
         if: env.DRY_RUN_ONLY != 'true'
-        run: |
         run: |
           export KSU_VARIANT="${{ matrix.variant }}"
           bash .github/scripts/generate-runtime-tuner.sh

@@ -23,7 +23,7 @@ echo "Labels: ${RUNNER_LABELS}"
 echo "Work Directory: ${RUNNER_WORKDIR}"
 echo "=========================================="
 
-cd /home/runner/actions-runner
+cd /home/deepongi/actions-runner
 
 # Configure the runner
 echo "Configuring runner..."

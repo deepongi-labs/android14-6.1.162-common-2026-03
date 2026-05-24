@@ -6,7 +6,7 @@ set -euo pipefail
 
 USER_NAME="${SUDO_USER:-$USER}"
 USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
-SRC="${USER_HOME}/ccache-mirror"
+SRC="/mnt/Windows/ccache-mirror"
 DST="/mnt/ccache"
 FSTAB_LINE="${SRC} ${DST} none bind,nofail 0 0"
 FSTAB_TAG="# kernel-build ccache bind-mount"

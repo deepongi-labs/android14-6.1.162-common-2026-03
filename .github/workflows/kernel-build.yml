@@ -78,7 +78,7 @@ on:
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-2026-03_r12'
+        default: 'bump/upstream-kernel-6.1.173-2026-06-v2'
         type: string
       android_version:
         description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'

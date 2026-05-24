@@ -13,7 +13,7 @@ on:
       kernel_ref:
         description: 'Kernel branch/ref to build'
         required: false
-        default: 'android14-6.1-2026-03_r12'
+        default: 'bump/upstream-kernel-6.1.173-2026-06-v2'
         type: string
       build_target:
         description: 'Kleaf/Bazel build target'

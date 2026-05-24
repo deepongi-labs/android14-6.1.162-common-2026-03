@@ -751,7 +751,7 @@ jobs:
           if [ "${{ matrix.variant }}" = "tiann" ] || [ "${{ matrix.variant }}" = "enhance" ]; then
             echo "::group::Setup Tiann KernelSU via official script"
             cd kernel
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KSU_BRANCH"
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${KSU_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BRANCH"
             cd ..
             KSU_STAGE="${GITHUB_WORKSPACE}/kernel/KernelSU"
             echo "Tiann KernelSU setup complete via official script"

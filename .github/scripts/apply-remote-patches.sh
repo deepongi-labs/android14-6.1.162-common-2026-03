@@ -10,9 +10,9 @@ apply_patch_or_fail() {
   local patch_file="$1"
   local description="$2"
 
-  if patch -p1 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
-    patch -p1 --forward < "$patch_file"
-  elif patch -p1 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
+  if patch -p1 --fuzz=0 --forward --dry-run < "$patch_file" >/dev/null 2>&1; then
+    patch -p1 --fuzz=0 --forward < "$patch_file"
+  elif patch -p1 --fuzz=0 --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
     echo "ℹ️ ${description} already present, skipping."
   elif git apply --3way --check "$patch_file" >/dev/null 2>&1; then
     echo "📋 Applying patch with 3-way merge: $description"
@@ -71,11 +71,11 @@ apply_remote_patch_with_policy() {
     exit 1
   fi
 
-  if patch -p1 --forward --dry-run < "$destination" >/dev/null 2>&1; then
-    patch -p1 --forward < "$destination"
+  if patch -p1 --fuzz=0 --forward --dry-run < "$destination" >/dev/null 2>&1; then
+    patch -p1 --fuzz=0 --forward < "$destination"
     echo "✅ Applied ${description}"
     printf '%s | %s | applied\n' "$description" "$url" >> "${PATCH_MANIFEST:-/dev/null}"
-  elif patch -p1 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
+  elif patch -p1 --fuzz=0 --reverse --dry-run < "$destination" >/dev/null 2>&1; then
     echo "ℹ️ ${description} already present, skipping."
     printf '%s | %s | already-present\n' "$description" "$url" >> "${PATCH_MANIFEST:-/dev/null}"
   elif git apply --3way --check "$destination" >/dev/null 2>&1; then
@@ -174,7 +174,7 @@ if [ "${GOVERNOR_MODE}" = "dynasched" ]; then
   cp "$GITHUB_WORKSPACE/.github/patches/global/cpufreq_dynasched.c" \
      kernel/sched/cpufreq_dynasched.c
   # Check if patch is already applied using reverse dry-run (most reliable for dirty builds)
-  if patch -p1 --reverse --dry-run < "$GITHUB_WORKSPACE/.github/patches/global/add_dynasched_governor.patch" >/dev/null 2>&1; then
+  if patch -p1 --fuzz=0 --reverse --dry-run < "$GITHUB_WORKSPACE/.github/patches/global/add_dynasched_governor.patch" >/dev/null 2>&1; then
     echo "ℹ️ dynasched governor patch already applied, skipping."
     printf 'dynasched governor | kernel/sched/build_utility.c+drivers/cpufreq/Kconfig | already-present\n' >> "${PATCH_MANIFEST:-/dev/null}"
   else

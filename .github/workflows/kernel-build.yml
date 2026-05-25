@@ -140,7 +140,7 @@ on:
         default: ''
         type: string
       stock_boot_img_url:
-        description: 'HTTPS stock akita boot.img URL for repack; empty uses default/skip behavior'
+        description: 'HTTPS stock Pixel 8 series boot.img URL for repack; empty uses default/skip behavior'
         required: false
         default: ''
         type: string
@@ -286,6 +286,8 @@ env:
   ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
   ANDROID16_KERNEL_REF: android14-6.1-lts
   ANDROID17_KERNEL_REF: android17-6.18-2026-06
+  UPSTREAM_LTS_PATCH_LEVEL: '173'
+  UPSTREAM_LTS_PATCH_URL: https://cdn.kernel.org/pub/linux/kernel/v6.x/patch-6.1.173.xz
   ANDROID16_STOCK_BOOT_URL: ""
   ANDROID17_STOCK_BOOT_URL: ""
   PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
@@ -678,6 +680,7 @@ jobs:
           command -v git >/dev/null
           command -v curl >/dev/null
           command -v patch >/dev/null
+          command -v xz >/dev/null || { echo "⚠️ xz not found, installing xz-utils..."; sudo apt-get update -qq && sudo apt-get install -y xz-utils; }
           command -v make >/dev/null
           command -v ccache >/dev/null
           command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
@@ -1237,6 +1240,8 @@ jobs:
           {
             echo "variant=${KSU_VARIANT}"
             echo "kernel_ref=${{ needs.setup.outputs.kernel_ref }}"
+            echo "upstream_lts_patch=6.1.${UPSTREAM_LTS_PATCH_LEVEL}"
+            echo "upstream_lts_patch_url=${UPSTREAM_LTS_PATCH_URL}"
             echo "susfs_ref=${{ needs.setup.outputs.susfs_ref }}"
             echo "ksu_repo=${KSU_REPO}"
             echo "ksu_ref=${KSU_BRANCH}"
@@ -1296,19 +1301,17 @@ jobs:
 
           git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
 
-          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
-            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
-            echo "::group::anykernel.sh (device-related lines)"
-            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
-            echo "::endgroup::"
-            exit 1
-          fi
+          bash .github/scripts/prepare-anykernel3.sh AnyKernel3
+
+          echo "::group::AnyKernel3 Pixel 8 series metadata"
+          grep -Ein 'kernel\.string|device\.name|do\.devicecheck|supported\.versions|supported\.patchlevels|block=|is_slot_device|HEADER_VER|RAMDISK_SIZE|Android 16|Pixel 8' AnyKernel3/anykernel.sh || true
+          echo "::endgroup::"
 
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
 
           cd AnyKernel3 && rm -rf .git .github
-          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}-r${{ env.KSU_VERSION }}.zip"
+          ZIP_NAME="AK3-Pixel8Series-${{ needs.setup.outputs.android_version }}-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}-r${{ env.KSU_VERSION }}.zip"
           zip -r9 "../$ZIP_NAME" .
           cd ..
 

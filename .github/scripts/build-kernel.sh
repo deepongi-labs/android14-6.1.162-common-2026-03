@@ -213,6 +213,16 @@ make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
   CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
   O=out syncconfig
 
+if grep -q '^CONFIG_SECURITY_SELINUX=y$' out/.config; then
+  # KernelSU includes SELinux objsec.h directly; it needs generated flask.h.
+  make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+    CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
+    READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+    HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
+    CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+    O=out security/selinux/
+fi
+
 # Validate critical configs survived Kconfig sync
 echo "::group::Config Validation"
 CONFIG_ERRORS=0
@@ -238,7 +248,7 @@ fi
 echo "Config validation passed"
 echo "::endgroup::"
 
-if [ "${FORCE_CLEAN}" = "true" ] && [ "${DIRTY_BUILD}" != "true" ]; then
+if [ "${FORCE_CLEAN:-false}" = "true" ] && [ "${DIRTY_BUILD:-false}" != "true" ]; then
   make -j$MAKE_JOBS O=out clean
 fi
 
@@ -253,4 +263,3 @@ trap - EXIT
 
 echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
 ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
-

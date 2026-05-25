@@ -136,12 +136,12 @@ on:
         default: 'dev'
         type: string
       stock_boot_img_url:
-        description: 'URL to the stock akita boot.img to repack with the new kernel (https://). Leave empty to skip repack.'
+        description: 'URL to the stock Pixel 8 series boot.img to repack with the new kernel (https://). Leave empty to skip repack.'
         required: false
         default: ''
         type: string
       stock_boot_gdrive_id:
-        description: 'Google Drive file ID for stock akita boot.img to repack. Leave empty to skip.'
+        description: 'Google Drive file ID for stock Pixel 8 series boot.img to repack. Leave empty to skip.'
         required: false
         default: ''
         type: string

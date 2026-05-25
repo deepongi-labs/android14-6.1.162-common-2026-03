@@ -67,9 +67,18 @@ force_clean_build: false
 dry_run_only: false
 ```
 
+Local dirty compile, preserving `kernel/out/` and the current source tree:
+
+```bash
+KSU_VARIANT=enhance ENABLE_SUSFS=true scripts/local-dirty-build.sh
+```
+
+This local wrapper assumes KernelSU/SuSFS integration has already been staged in
+`kernel/`; it does not resync sources or reapply workflow patches.
+
 Source pin overrides:
 
-* `kernel_ref`  default `android14-6.1-2026-03_r12`
+* `kernel_ref`  default `android14-6.1-lts`; the workflow applies upstream Linux stable `6.1.173` when the checked-out LTS tree is exactly one sublevel behind
 * `susfs_ref`   default `gki-android14-6.1-dev`
 * `tiann_ref`   default pinned commit (bump deliberately)
 * `kowsu_ref`, `resukisu_ref`, `next_ref` — branches

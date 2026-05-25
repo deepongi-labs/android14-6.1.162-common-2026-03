@@ -93,6 +93,58 @@ apply_remote_patch_with_policy() {
   fi
 }
 
+apply_upstream_lts_patch_if_needed() {
+  local target_sublevel="${UPSTREAM_LTS_PATCH_LEVEL:-}"
+  local patch_url="${UPSTREAM_LTS_PATCH_URL:-}"
+  local current_version
+  local current_patchlevel
+  local current_sublevel
+  local patch_file
+
+  [ -n "$target_sublevel" ] || return 0
+  [ -n "$patch_url" ] || return 0
+
+  current_version=$(awk '/^VERSION =/ {print $3; exit}' Makefile)
+  current_patchlevel=$(awk '/^PATCHLEVEL =/ {print $3; exit}' Makefile)
+  current_sublevel=$(awk '/^SUBLEVEL =/ {print $3; exit}' Makefile)
+
+  case "$target_sublevel:$current_sublevel" in
+    *[!0-9:]*|:|*:)
+      echo "❌ Invalid upstream LTS patch level state: target=${target_sublevel}, current=${current_sublevel}"
+      exit 1
+      ;;
+  esac
+
+  if [ "$current_version" != "6" ] || [ "$current_patchlevel" != "1" ]; then
+    echo "⏭️  Upstream 6.1.${target_sublevel} patch skipped: kernel is ${current_version}.${current_patchlevel}.${current_sublevel}"
+    printf 'upstream linux stable 6.1.%s | %s | skipped-not-6.1\n' "$target_sublevel" "$patch_url" >> "${PATCH_MANIFEST:-/dev/null}"
+    return 0
+  fi
+
+  if [ "$current_sublevel" -ge "$target_sublevel" ]; then
+    echo "ℹ️ Kernel already at 6.1.${current_sublevel}; upstream 6.1.${target_sublevel} patch not needed."
+    printf 'upstream linux stable 6.1.%s | %s | already-at-or-newer\n' "$target_sublevel" "$patch_url" >> "${PATCH_MANIFEST:-/dev/null}"
+    return 0
+  fi
+
+  if [ $((target_sublevel - current_sublevel)) -ne 1 ]; then
+    echo "❌ Refusing to apply single upstream 6.1.${target_sublevel} patch on top of 6.1.${current_sublevel}; expected 6.1.$((target_sublevel - 1))."
+    exit 1
+  fi
+
+  command -v xz >/dev/null || { echo "❌ xz not found; cannot unpack ${patch_url}"; exit 1; }
+  patch_file="/tmp/upstream-linux-6.1.${target_sublevel}.patch"
+  curl --fail --location --silent --show-error "$patch_url" | xz -dc > "$patch_file"
+
+  if [ ! -s "$patch_file" ]; then
+    echo "❌ upstream 6.1.${target_sublevel} patch download produced an empty file"
+    exit 1
+  fi
+
+  apply_patch_or_fail "$patch_file" "upstream Linux stable 6.1.${target_sublevel}"
+  printf 'upstream linux stable 6.1.%s | %s | applied\n' "$target_sublevel" "$patch_url" >> "${PATCH_MANIFEST:-/dev/null}"
+}
+
 apply_kerneltoast_adapted_patches() {
   local processed=0
 
@@ -259,7 +311,11 @@ PY
 
 cd kernel
 
-# 0. GKI ABI symbol checks: keep stripped on akita.
+# 0. Upstream Linux stable patch for android14-6.1-lts when the checked-out
+# LTS branch is exactly one sublevel behind the requested stable point.
+apply_upstream_lts_patch_if_needed
+
+# 1. GKI ABI symbol checks: keep stripped on akita.
 # Background: removing android/abi_gki_protected_exports_* lets the
 # kernel add new EXPORT_SYMBOLs without ABI-hash check failures.
 # On Pixel 8 (akita) Wi-Fi (BCM4389) the vendor module needs symbols
@@ -274,10 +330,10 @@ else
   rm -f android/abi_gki_protected_exports_* || true
 fi
 
-# 1. CLIDR uninitialized fix (use local copy, not a remote SHA-pinned URL)
+# 2. CLIDR uninitialized fix (use local copy, not a remote SHA-pinned URL)
 apply_repo_patch_or_fail ".github/patches/fix-clidr-uninitialized.patch" "CLIDR initialization fix"
 
-# 2. (Optional) Wi-Fi patch from OnePlus 12 (Qualcomm SM8650 tree)
+# 3. (Optional) Wi-Fi patch from OnePlus 12 (Qualcomm SM8650 tree)
 # Tensor G3 (Pixel 8, akita) uses Broadcom BCM4389 Wi-Fi, NOT QCA.
 # The 3-way fallback in apply_patch_or_fail can land hunks in the wrong
 # place on a foreign WLAN driver, panicking on first wpa_supplicant up.
@@ -291,14 +347,14 @@ else
   echo "⏭️  OnePlus 12 (SM8650) Wi-Fi patch skipped: incompatible with Pixel 8 (BCM4389)"
 fi
 
-# 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
+# 3b. Apply selected kerneltoast 16.0.0-sultan optimizations.
 if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
   apply_kerneltoast_adapted_patches
 else
   echo "⏭️  kerneltoast patchset disabled by policy"
 fi
 
-# 3. Fix KernelSU stack overflow in variant trees that still carry this implementation.
+# 4. Fix KernelSU stack overflow in variant trees that still carry this implementation.
 if [ -f "drivers/kernelsu/app_profile.c" ] && grep -q "char comm\\[TASK_COMM_LEN\\];" drivers/kernelsu/app_profile.c; then
   python -c 'from pathlib import Path; p=Path("drivers/kernelsu/app_profile.c"); t=p.read_text(); p.write_text(t.replace("char comm[TASK_COMM_LEN];", "static char comm[TASK_COMM_LEN];", 1))'
   echo "✅ app_profile stack workaround applied"
@@ -306,7 +362,7 @@ else
   echo "⏭️  app_profile stack workaround not needed"
 fi
 
-# 4. Fix localversion script appending dirty flags
+# 5. Fix localversion script appending dirty flags
 apply_repo_patch_or_fail ".github/patches/global/fix_setlocalversion_dirty.patch" "setlocalversion dirty suffix fix"
 
 if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
@@ -315,7 +371,7 @@ if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
   apply_repo_patch_or_fail ".github/patches/global/dirty_allow_vendor_module_vermagic.patch" "dirty vendor module vermagic bypass"
 fi
 
-# 5. Fix libbpf compilation error
+# 6. Fix libbpf compilation error
 echo "🔧 Patching libbpf.c type casting..."
 apply_repo_patch_or_fail ".github/patches/global/fix_libbpf_strchr_cast.patch" "libbpf strchr cast fix"
 
@@ -359,4 +415,3 @@ PY
 else
   echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
 fi
-

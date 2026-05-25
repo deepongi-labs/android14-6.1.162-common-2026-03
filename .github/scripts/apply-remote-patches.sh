@@ -113,11 +113,6 @@ fi
 # 1. CLIDR uninitialized fix (use local copy, not a remote SHA-pinned URL)
 apply_repo_patch_or_fail ".github/patches/fix-clidr-uninitialized.patch" "CLIDR initialization fix"
 
-# 1b. Display and power enhancements
-echo "🎨 Applying display and power enhancement patches..."
-apply_repo_patch_or_fail ".github/patches/global/fast_charge_usb.patch" "Fast USB charging"
-echo "✅ Display and power enhancements applied"
-
 # 2. (Optional) Wi-Fi patch from OnePlus 12 (Qualcomm SM8650 tree)
 # Tensor G3 (Pixel 8, akita) uses Broadcom BCM4389 Wi-Fi, NOT QCA.
 # The 3-way fallback in apply_patch_or_fail can land hunks in the wrong

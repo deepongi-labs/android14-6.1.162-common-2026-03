@@ -75,6 +75,11 @@ on:
         required: false
         default: false
         type: boolean
+      dirty_module_abi_bypass:
+        description: 'Allow boot with built-in KernelSU by bypassing module ABI checks'
+        required: false
+        default: true
+        type: boolean
       kernel_ref:
         description: 'Override kernel ref'
         required: false
@@ -1330,6 +1335,8 @@ jobs:
             done
           elif [ "${{ needs.setup.outputs.android_version }}" = "android16" ]; then
             for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/lineageos-akita-android16-boot.img" \
+              "/mnt/Android/gki-kernel-builder/boot-images/lineageos-akita-android16-boot.img" \
               "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp21.260508.005.img" \
               "/mnt/Android/gki-kernel-builder/boot-images/stock-akita-cp21.260508.005.img"; do
               if [ -f "$candidate" ]; then

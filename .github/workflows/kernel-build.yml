@@ -127,7 +127,7 @@ on:
         type: boolean
       dirty_module_abi_bypass:
         required: false
-        default: false
+        default: true
         type: boolean
       dirty_build:
         required: false

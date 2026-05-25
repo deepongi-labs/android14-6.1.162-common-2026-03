@@ -64,3 +64,23 @@ fi
 echo "Dirty local build: variant=${KSU_VARIANT}, susfs=${ENABLE_SUSFS}, jobs=${BUILD_JOBS}, clang=${CLANG_BIN}"
 cd "${ROOT_DIR}"
 bash .github/scripts/build-kernel.sh
+
+# Post-build: create boot image with correct format (LZ4 + V4 header)
+IMAGE_FILE="${KERNEL_DIR}/out/arch/arm64/boot/Image"
+IMAGE_LZ4="${KERNEL_DIR}/out/arch/arm64/boot/Image.lz4"
+BOOT_IMG="${ROOT_DIR}/boot-image-local-build.img"
+
+if [ -f "${IMAGE_FILE}" ] && command -v lz4 >/dev/null 2>&1 && command -v mkbootimg >/dev/null 2>&1; then
+  echo "Creating LZ4-compressed kernel..."
+  lz4 -l -12 --favor-decSpeed "${IMAGE_FILE}" "${IMAGE_LZ4}" 2>&1
+  echo "Creating boot image with V4 header..."
+  mkbootimg --kernel "${IMAGE_LZ4}" \
+    --base 0x00000000 \
+    --pagesize 4096 \
+    --header_version 4 \
+    -o "${BOOT_IMG}" 2>&1
+  echo "Boot image created: ${BOOT_IMG}"
+  sha256sum "${BOOT_IMG}"
+else
+  echo "warning: boot image not created (lz4/mkbootimg missing, or kernel Image not found)"
+fi

@@ -52,10 +52,7 @@ export TMP="$TMPDIR"
 export MAKEFLAGS="-j${MAKE_JOBS} -l${BUILD_LOAD:-$((MAKE_JOBS + 1))}"
 START_TIME=$SECONDS
 
-# Keep LOCALVERSION empty to preserve stock vermagic for vendor module compat.
-# Branding goes into BUILD_SALT (does not affect UTS_RELEASE / vermagic).
-KSU_LOCALVERSION='CONFIG_LOCALVERSION=""'
-KSU_BUILD_SALT='CONFIG_BUILD_SALT="deepongi"'
+KSU_LOCALVERSION='CONFIG_LOCALVERSION="-deepongi"'
 
 add_gki_defconfig_once() {
   local line
@@ -116,7 +113,7 @@ CONFIG_TMPFS_XATTR=y
 CONFIG_TMPFS_POSIX_ACL=y
 CONFIG_LOCALVERSION_AUTO=n
 ${KSU_LOCALVERSION}
-${KSU_BUILD_SALT}
+CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
 CONFIG_KSU_LSM_SECURITY_HOOKS=y
 EOF
 
@@ -213,6 +210,17 @@ make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
   CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
   O=out syncconfig
 
+# Force KSU/SuSFS configs — syncconfig sometimes drops tristate without explicit prompting
+sed -i '/^CONFIG_KSU[ =]/d; /^CONFIG_KSU_SUSFS[ =]/d' out/.config
+cat << 'EOF' >> out/.config
+CONFIG_KSU=y
+CONFIG_KSU_SUSFS=y
+EOF
+
+# Remove schedutil governor; dynasched is the default on ARM64
+sed -i 's/^CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y/# CONFIG_CPU_FREQ_GOV_SCHEDUTIL is not set/' out/.config
+sed -i 's/^CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y/CONFIG_CPU_FREQ_DEFAULT_GOV_DYNASCHED=y/' out/.config
+
 if grep -q '^CONFIG_SECURITY_SELINUX=y$' out/.config; then
   # KernelSU includes SELinux objsec.h directly; it needs generated flask.h.
   make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
@@ -257,6 +265,7 @@ make -j$MAKE_JOBS O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
   READELF="$READELF" STRIP="$STRIP" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
   HOSTLD="$HOSTLD" HOSTAR="$HOSTAR" CLANG_TRIPLE="$CLANG_TRIPLE" \
   CROSS_COMPILE="$CROSS_COMPILE" CROSS_COMPILE_COMPAT="$CROSS_COMPILE_COMPAT" \
+  HOSTCFLAGS="-Wno-incompatible-pointer-types-discards-qualifiers" \
   all
 
 trap - EXIT

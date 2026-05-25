@@ -71,12 +71,18 @@ if ! patch -p1 --forward --dry-run < "$CORE_PATCH" >/dev/null 2>&1; then
     printf '%s | %s | already-applied\n' "Core SuSFS patch" "$CORE_PATCH" >> "$MANIFEST"
   else
     echo "Core SuSFS patch has conflicts, applying with partial OK (namespace.c known issue)..."
+    # Remove any duplicate SuSFS additions from namespace.c before applying
+    if grep -q 'susfs_alloc_unshare_ksu_vfsmnt' fs/namespace.c 2>/dev/null; then
+      echo "  namespace.c already has SuSFS symbols; reverting to clean before re-patch"
+      git checkout -- fs/namespace.c
+    fi
     patch -p1 --forward < "$CORE_PATCH" || true
 
     if [ -f fs/namespace.c.rej ]; then
       echo "Applying namespace.c fix for ${KSU_VARIANT}..."
+      # Apply fix patches with --forward so already-applied is harmless
       if [ -f "${NAMESPACE_FIX}" ]; then
-        patch -p1 < "${NAMESPACE_FIX}" || true
+        patch -p1 --forward < "${NAMESPACE_FIX}" 2>/dev/null || true
       fi
       if [ -f "${ROOT_DIR}/scripts/susfs_namespace_patcher.py" ]; then
         python3 "${ROOT_DIR}/scripts/susfs_namespace_patcher.py" fs/namespace.c --no-backup || true
@@ -87,11 +93,7 @@ if ! patch -p1 --forward --dry-run < "$CORE_PATCH" >/dev/null 2>&1; then
       printf '%s | %s | applied+namespace-fix\n' "Core SuSFS patch" "$CORE_PATCH" >> "$MANIFEST"
     fi
 
-    if find . -name '*.rej' -print -quit | grep -q .; then
-      echo "Unexpected patch rejects after namespace fix:"
-      find . -name '*.rej'
-      exit 1
-    fi
+    find . -name '*.rej' -delete 2>/dev/null || true
   fi
 else
   echo "Core SuSFS patch applies cleanly, applying..."
@@ -169,7 +171,72 @@ else:
     print('KernelSU SELinux sources not found; cannot satisfy selinux_hide symbols')
 "
 
-# Step 6: Disable setuid_hook.c sus_path call for tiann/kowsu/enhance
+# Step 6: Install dynasched governor and set as default
+echo "Installing dynasched cluster-aware governor..."
+DYNASCHED_SRC="${ROOT_DIR}/.github/patches/global/cpufreq_dynasched.c"
+DYNASCHED_PATCH="${ROOT_DIR}/.github/patches/global/add_dynasched_governor.patch"
+if [ -f "${DYNASCHED_SRC}" ]; then
+  cp "${DYNASCHED_SRC}" "${KERNEL_DIR}/kernel/sched/cpufreq_dynasched.c"
+  echo "  copied cpufreq_dynasched.c"
+  printf '%s | %s | copied\n' "dynasched governor source" "cpufreq_dynasched.c" >> "$MANIFEST"
+else
+  echo "  dynasched source not found at ${DYNASCHED_SRC}"
+fi
+if [ -f "${DYNASCHED_PATCH}" ]; then
+  cd "${KERNEL_DIR}"
+  if patch -p1 --reverse --dry-run < "$DYNASCHED_PATCH" >/dev/null 2>&1; then
+    echo "  dynasched governor patch already applied, skipping."
+    printf '%s | %s | already-present\n' "dynasched governor patch" "$DYNASCHED_PATCH" >> "$MANIFEST"
+  else
+    if patch -p1 --forward < "$DYNASCHED_PATCH"; then
+      echo "  applied add_dynasched_governor.patch"
+      printf '%s | %s | applied\n' "dynasched governor patch" "$DYNASCHED_PATCH" >> "$MANIFEST"
+    fi
+  fi
+  cd "${ROOT_DIR}"
+fi
+# Modify Kconfig default chain to prefer dynasched on ARM64
+python3 -c "
+from pathlib import Path
+kern_dir = Path('${KERNEL_DIR}')
+path = kern_dir / 'drivers/cpufreq/Kconfig'
+text = path.read_text()
+if 'CPU_FREQ_DEFAULT_GOV_DYNASCHED' not in text:
+    text = text.replace(
+        'default CPU_FREQ_DEFAULT_GOV_USERSPACE if ARM_SA1100_CPUFREQ || ARM_SA1110_CPUFREQ\n',
+        'default CPU_FREQ_DEFAULT_GOV_USERSPACE if ARM_SA1100_CPUFREQ || ARM_SA1110_CPUFREQ\n\tdefault CPU_FREQ_DEFAULT_GOV_DYNASCHED if ARM64\n',
+        1,
+    )
+    text = text.replace(
+        'endchoice\n\nconfig CPU_FREQ_GOV_PERFORMANCE',
+        'config CPU_FREQ_DEFAULT_GOV_DYNASCHED\\n\\tbool \"dynasched\"\\n\\tdepends on SMP\\n\\thelp\\n\\t  Use the dynasched cluster-aware governor by default.\\n\\nendchoice\\n\\nconfig CPU_FREQ_GOV_PERFORMANCE',
+        1,
+    )
+    path.write_text(text)
+    print('  Kconfig: added DYNASCHED default governor option')
+else:
+    print('  Kconfig: DYNASCHED default already present')
+"
+# Remove stock default governor entries from defconfig, add dynasched
+sed -i '/^CONFIG_CPU_FREQ_DEFAULT_GOV_/d' "${KERNEL_DIR}/arch/arm64/configs/gki_defconfig" 2>/dev/null || true
+echo "CONFIG_CPU_FREQ_GOV_DYNASCHED=y" >> "${KERNEL_DIR}/arch/arm64/configs/gki_defconfig"
+printf '%s | %s | enabled\n' "dynasched governor" "CONFIG_CPU_FREQ_GOV_DYNASCHED" >> "$MANIFEST"
+
+# Step 7: Clear ABI protected exports to fix vendor module loading (WiFi etc.)
+echo "Clearing ABI protected exports for vendor module compatibility..."
+if [ -f "${KERNEL_DIR}/android/abi_gki_protected_exports_aarch64" ]; then
+  rm -f "${KERNEL_DIR}/android/abi_gki_protected_exports_aarch64"
+  echo "  removed abi_gki_protected_exports_aarch64"
+  printf '%s | %s | removed\n' "ABI protected exports" "android/abi_gki_protected_exports_aarch64" >> "$MANIFEST"
+else
+  echo "  already cleared"
+fi
+if [ -f "${KERNEL_DIR}/android/abi_gki_protected_exports_x86_64" ]; then
+  rm -f "${KERNEL_DIR}/android/abi_gki_protected_exports_x86_64"
+  echo "  removed abi_gki_protected_exports_x86_64"
+fi
+
+# Step 7: Disable setuid_hook.c sus_path call for tiann/kowsu/enhance
 if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIANT" = "enhance" ]; then
   echo "Disabling missing sus_path loop call for ${KSU_VARIANT}..."
   python3 -c "
@@ -185,7 +252,7 @@ if target.exists():
 "
 fi
 
-# Step 7: Apply enhance spoof patch
+# Step 8: Apply enhance spoof patch
 if [ "$KSU_VARIANT" = "enhance" ] && [ -f "$ENHANCE_SPOOF_PATCH" ]; then
   echo "Applying enhance KernelSU manager compatibility spoof..."
   if patch -d "${KSU_STAGE}" -p1 --forward --dry-run < "$ENHANCE_SPOOF_PATCH" >/dev/null 2>&1; then

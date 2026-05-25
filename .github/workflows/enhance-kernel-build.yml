@@ -68,9 +68,9 @@ on:
           - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
-        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
+        description: 'Policy for adapted kerneltoast scheduler/power patches'
         required: false
-        default: 'best_effort'
+        default: 'strict'
         type: choice
         options:
           - strict
@@ -91,10 +91,24 @@ on:
         required: false
         default: true
         type: boolean
+      android_version:
+        description: 'Android version target'
+        required: false
+        default: 'android16'
+        type: choice
+        options:
+          - android14
+          - android16
+          - android17
       kernel_ref:
         description: 'Override kernel ref'
         required: false
-        default: 'android14-6.1-lts'
+        default: ''
+        type: string
+      kernel_ref_android17:
+        description: 'Override kernel ref for Android 17'
+        required: false
+        default: ''
         type: string
       susfs_ref:
         description: 'Override SuSFS ref'
@@ -144,8 +158,12 @@ jobs:
       create_release: ${{ inputs.create_release }}
       dry_run_only: ${{ inputs.dry_run_only }}
       dirty_build: ${{ inputs.dirty_build }}
+      android_version: ${{ inputs.android_version }}
+      kernel_ref_android17: ${{ inputs.kernel_ref_android17 }}
       refs: |
+        android_version=${{ inputs.android_version }}
         kernel_ref=${{ inputs.kernel_ref }}
+        kernel_ref_android17=${{ inputs.kernel_ref_android17 }}
         susfs_ref=${{ inputs.susfs_ref }}
         tiann_ref=${{ inputs.tiann_ref }}
         kowsu_ref=${{ inputs.kowsu_ref }}

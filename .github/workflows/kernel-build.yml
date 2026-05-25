@@ -25,6 +25,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_telegram:
+        description: 'Enable Telegram notifications'
+        required: false
+        default: true
+        type: boolean
       create_release:
         description: 'Create GitHub Release with artifacts'
         required: false
@@ -48,6 +53,16 @@ on:
           - thin
           - full
           - none
+      make_jobs:
+        description: 'Parallel make jobs (auto or integer)'
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        description: 'Include Pixel 8 runtime tuner script'
+        required: false
+        default: true
+        type: boolean
       governor_mode:
         description: 'CPU governor strategy'
         required: false
@@ -57,7 +72,7 @@ on:
           - dynasched
           - stock_schedutil
       kerneltoast_patch_policy:
-        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
+        description: 'Policy for adapted kerneltoast scheduler/power patches'
         required: false
         default: 'strict'
         type: choice
@@ -75,22 +90,62 @@ on:
         required: false
         default: false
         type: boolean
-      kernel_ref:
-        description: 'Override kernel ref'
+      dirty_module_abi_bypass:
+        description: 'Allow built-in KernelSU to load despite dirty module ABI checks'
         required: false
-        default: 'android14-6.1-lts'
-        type: string
+        default: true
+        type: boolean
       android_version:
-        description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'
+        description: 'Android version target'
         required: false
         default: 'android16'
         type: choice
         options:
           - android14
-          - android17
           - android16
+          - android17
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: ''
+        type: string
       kernel_ref_android17:
-        description: 'Override kernel ref for Android 17 (android17-6.18 branch)'
+        description: 'Override kernel ref for Android 17'
+        required: false
+        default: ''
+        type: string
+      susfs_ref:
+        description: 'Override SuSFS ref'
+        required: false
+        default: ''
+        type: string
+      tiann_ref:
+        description: 'Override tiann KernelSU ref'
+        required: false
+        default: ''
+        type: string
+      kowsu_ref:
+        description: 'Override kowsu KernelSU ref'
+        required: false
+        default: ''
+        type: string
+      resukisu_ref:
+        description: 'Override ReSukiSU ref'
+        required: false
+        default: ''
+        type: string
+      next_ref:
+        description: 'Override KernelSU-Next ref'
+        required: false
+        default: ''
+        type: string
+      stock_boot_img_url:
+        description: 'HTTPS stock akita boot.img URL for repack; empty uses default/skip behavior'
+        required: false
+        default: ''
+        type: string
+      stock_boot_gdrive_id:
+        description: 'Google Drive file ID or sharing URL for stock akita boot.img; empty skips'
         required: false
         default: ''
         type: string
@@ -127,7 +182,7 @@ on:
         type: boolean
       dirty_module_abi_bypass:
         required: false
-        default: false
+        default: true
         type: boolean
       dirty_build:
         required: false
@@ -138,6 +193,62 @@ on:
         default: 'android16'
         type: string
       kernel_ref_android17:
+        required: false
+        default: ''
+        type: string
+      kernel_ref:
+        required: false
+        default: ''
+        type: string
+      susfs_ref:
+        required: false
+        default: ''
+        type: string
+      tiann_ref:
+        required: false
+        default: ''
+        type: string
+      kowsu_ref:
+        required: false
+        default: ''
+        type: string
+      resukisu_ref:
+        required: false
+        default: ''
+        type: string
+      next_ref:
+        required: false
+        default: ''
+        type: string
+      tuning_profile:
+        required: false
+        default: ''
+        type: string
+      lto_mode:
+        required: false
+        default: ''
+        type: string
+      make_jobs:
+        required: false
+        default: ''
+        type: string
+      include_runtime_tuner:
+        required: false
+        default: ''
+        type: string
+      governor_mode:
+        required: false
+        default: ''
+        type: string
+      kerneltoast_patch_policy:
+        required: false
+        default: ''
+        type: string
+      stock_boot_img_url:
+        required: false
+        default: ''
+        type: string
+      stock_boot_gdrive_id:
         required: false
         default: ''
         type: string
@@ -248,14 +359,14 @@ jobs:
           # Format: newline-separated key=value lines. Whitespace around `=` is
           # trimmed. Blank lines and `#`-prefixed lines are ignored. Unknown
           # keys are a hard error.
-          KERNEL_REF=""
+          KERNEL_REF="${{ inputs.kernel_ref }}"
           KERNEL_REF_ANDROID17="${{ inputs.kernel_ref_android17 }}"
           ANDROID_VERSION="${{ inputs.android_version }}"
-          SUSFS_REF=""
-          TIANN_REF=""
-          KOWSU_REF=""
-          RESUKISU_REF=""
-          NEXT_REF=""
+          SUSFS_REF="${{ inputs.susfs_ref }}"
+          TIANN_REF="${{ inputs.tiann_ref }}"
+          KOWSU_REF="${{ inputs.kowsu_ref }}"
+          RESUKISU_REF="${{ inputs.resukisu_ref }}"
+          NEXT_REF="${{ inputs.next_ref }}"
           REFS_INPUT=$(cat <<'__REFS_EOF__'
           ${{ inputs.refs }}
           __REFS_EOF__
@@ -285,15 +396,15 @@ jobs:
             esac
           done <<< "$REFS_INPUT"
 
-          TUNING_PROFILE=""
-          LTO_MODE=""
-          MAKE_JOBS=""
-          INCLUDE_RUNTIME_TUNER=""
-          GOVERNOR_MODE=""
-          KERNELTOAST_PATCH_POLICY=""
-          DIRTY_MODULE_ABI_BYPASS=""
-          STOCK_BOOT_IMG_URL=""
-          STOCK_BOOT_GDRIVE_ID=""
+          TUNING_PROFILE="${{ inputs.tuning_profile }}"
+          LTO_MODE="${{ inputs.lto_mode }}"
+          MAKE_JOBS="${{ inputs.make_jobs }}"
+          INCLUDE_RUNTIME_TUNER="${{ inputs.include_runtime_tuner }}"
+          GOVERNOR_MODE="${{ inputs.governor_mode }}"
+          KERNELTOAST_PATCH_POLICY="${{ inputs.kerneltoast_patch_policy }}"
+          DIRTY_MODULE_ABI_BYPASS="${{ inputs.dirty_module_abi_bypass }}"
+          STOCK_BOOT_IMG_URL="${{ inputs.stock_boot_img_url }}"
+          STOCK_BOOT_GDRIVE_ID="${{ inputs.stock_boot_gdrive_id }}"
           BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
           ${{ inputs.build_options }}
           __BUILD_OPTIONS_EOF__

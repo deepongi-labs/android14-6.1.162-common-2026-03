@@ -93,6 +93,170 @@ apply_remote_patch_with_policy() {
   fi
 }
 
+apply_kerneltoast_adapted_patches() {
+  local processed=0
+
+  echo "🚀 Applying adapted kerneltoast scheduler/power commits (${KERNELTOAST_PATCH_POLICY})..."
+
+  apply_remote_patch_with_policy "${KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL}" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
+  processed=$((processed + 1))
+
+  if [ -f kernel/sched/cass.c ]; then
+    python3 - <<'PY'
+from pathlib import Path
+
+path = Path('kernel/sched/cass.c')
+text = path.read_text()
+if 'arch_scale_min_freq_capacity(cpu)' in text:
+    raise SystemExit(0)
+
+old = '''\t\t\t/*
+\t\t\t * A non-idle candidate may be better for energy
+\t\t\t * efficiency when @p is uclamp boosted, or when the
+\t\t\t * only idle candidate found so far is the prime CPU.
+\t\t\t * Otherwise, prefer idle candidates.
+\t\t\t */
+\t\t\tif (!uc_min && !cass_prime_cpu(curr)) {
+\t\t\t\t/* Discard any previous non-idle candidate */
+\t\t\t\tif (!has_idle)
+\t\t\t\t\tbest = curr;
+\t\t\t\thas_idle = true;
+\t\t\t}
+'''
+new = '''\t\t\t/*
+\t\t\t * A non-idle candidate may be better for energy
+\t\t\t * efficiency when @p is uclamp boosted above @curr's
+\t\t\t * minimum capacity, or when the only idle candidate
+\t\t\t * found so far is the prime CPU. Otherwise, prefer idle
+\t\t\t * candidates.
+\t\t\t */
+\t\t\tif (!has_idle &&
+\t\t\t    uc_min <= arch_scale_min_freq_capacity(cpu) &&
+\t\t\t    !cass_prime_cpu(curr)) {
+\t\t\t\t/* Discard any previous non-idle candidate */
+\t\t\t\tbest = curr;
+\t\t\t\thas_idle = true;
+\t\t\t}
+'''
+if old not in text:
+    raise SystemExit('kerneltoast CASS adaptation context not found')
+path.write_text(text.replace(old, new, 1))
+PY
+    echo "✅ Applied kerneltoast: sched/cass uclamp packing threshold"
+    printf '%s | %s | applied-adapted\n' "kerneltoast: sched/cass uclamp packing threshold" "kernel/sched/cass.c" >> "${PATCH_MANIFEST:-/dev/null}"
+  else
+    echo "ℹ️ kerneltoast: sched/cass uclamp packing threshold not applicable; kernel/sched/cass.c is absent in this GKI tree."
+    printf '%s | %s | not-applicable-no-cass\n' "kerneltoast: sched/cass uclamp packing threshold" "kernel/sched/cass.c" >> "${PATCH_MANIFEST:-/dev/null}"
+  fi
+  processed=$((processed + 1))
+
+  python3 - <<'PY'
+from pathlib import Path
+
+path = Path('kernel/sched/cpufreq_schedutil.c')
+text = path.read_text()
+if 'static bool sugov_should_rate_limit' not in text:
+    old = '''static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
+{
+\ts64 delta_ns;
+
+'''
+    new = '''static bool sugov_should_rate_limit(struct sugov_policy *sg_policy, u64 time)
+{
+\ts64 delta_ns = time - sg_policy->last_freq_update_time;
+
+\treturn delta_ns < sg_policy->freq_update_delay_ns;
+}
+
+static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
+{
+'''
+    if old not in text:
+        raise SystemExit('sugov_should_update_freq declaration context not found')
+    text = text.replace(old, new, 1)
+    old = '''\tdelta_ns = time - sg_policy->last_freq_update_time;
+
+\treturn delta_ns >= sg_policy->freq_update_delay_ns;
+}
+'''
+    new = '''\t/*
+\t * With frequency-invariant utilization tracking, do not rate limit
+\t * before computing the next frequency. The update path selectively
+\t * rate limits only reductions once the next frequency is known.
+\t */
+\tif (arch_scale_freq_invariant())
+\t\treturn true;
+
+\t/* If the last frequency wasn't set yet then we can still amend it */
+\tif (sg_policy->work_in_progress)
+\t\treturn true;
+
+\treturn !sugov_should_rate_limit(sg_policy, time);
+}
+'''
+    if old not in text:
+        raise SystemExit('sugov_should_update_freq rate-limit context not found')
+    text = text.replace(old, new, 1)
+
+if 'must_update:' not in text:
+    old = '''\t\tif (sg_policy->next_freq == next_freq &&
+\t\t    !cpufreq_driver_test_flags(CPUFREQ_NEED_UPDATE_LIMITS))
+\t\t\treturn false;
+\t} else if (sg_policy->next_freq == next_freq) {
+\t\treturn false;
+\t}
+
+\tsg_policy->next_freq = next_freq;
+'''
+    new = '''\t\tif (cpufreq_driver_test_flags(CPUFREQ_NEED_UPDATE_LIMITS))
+\t\t\tgoto must_update;
+\t}
+
+\t/*
+\t * If frequency-invariant utilization bypassed the early rate-limit
+\t * check, apply the delay only to frequency reductions now that the
+\t * next frequency is known. Scaling up remains immediate.
+\t */
+\tif (next_freq == sg_policy->next_freq ||
+\t    (next_freq < sg_policy->next_freq &&
+\t     sugov_should_rate_limit(sg_policy, time)))
+\t\treturn false;
+
+must_update:
+\tsg_policy->next_freq = next_freq;
+'''
+    if old not in text:
+        raise SystemExit('sugov_update_next_freq context not found')
+    text = text.replace(old, new, 1)
+
+path.write_text(text)
+PY
+  echo "✅ Applied kerneltoast: schedutil ignore FIE rate-limit on scale-up"
+  printf '%s | %s | applied-adapted\n' "kerneltoast: schedutil ignore FIE rate-limit on scale-up" "kernel/sched/cpufreq_schedutil.c" >> "${PATCH_MANIFEST:-/dev/null}"
+  processed=$((processed + 1))
+
+  python3 - <<'PY'
+from pathlib import Path
+
+path = Path('kernel/sched/cpufreq_schedutil.c')
+text = path.read_text()
+old = 'tunables->rate_limit_us = cpufreq_policy_transition_delay_us(policy);'
+new = 'tunables->rate_limit_us = 2000;'
+if old in text:
+    text = text.replace(old, new, 1)
+path.write_text(text)
+PY
+  echo "✅ Applied kerneltoast: schedutil default rate-limit 2000us"
+  printf '%s | %s | applied-adapted\n' "kerneltoast: schedutil default rate-limit 2000us" "kernel/sched/cpufreq_schedutil.c" >> "${PATCH_MANIFEST:-/dev/null}"
+  processed=$((processed + 1))
+
+  if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ] && [ "$processed" -ne 4 ]; then
+    echo "❌ Strict kerneltoast expected 4 commits, processed ${processed}"
+    exit 1
+  fi
+  echo "✅ Kerneltoast patchset processed ${processed}/4 commits (${KERNELTOAST_PATCH_POLICY})"
+}
+
 cd kernel
 
 # 0. GKI ABI symbol checks: keep stripped on akita.
@@ -129,21 +293,7 @@ fi
 
 # 2b. Apply selected kerneltoast 16.0.0-sultan optimizations.
 if [ "${KERNELTOAST_PATCH_POLICY}" != "off" ]; then
-  echo "🚀 Applying selected kerneltoast scheduler/power commits (${KERNELTOAST_PATCH_POLICY})..."
-  KERNELTOAST_APPLIED_COUNT=0
-  apply_remote_patch_with_policy "${KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL}" "kt-arch-topology-min-freq-scale.patch" "kerneltoast: arch_topology minimum frequency scale"
-  KERNELTOAST_APPLIED_COUNT=$((KERNELTOAST_APPLIED_COUNT + 1))
-  apply_remote_patch_with_policy "${KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL}" "kt-sched-cass-uclamp-packing.patch" "kerneltoast: sched/cass uclamp packing threshold"
-  KERNELTOAST_APPLIED_COUNT=$((KERNELTOAST_APPLIED_COUNT + 1))
-  apply_remote_patch_with_policy "${KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL}" "kt-schedutil-ignore-fie-ratelimit.patch" "kerneltoast: schedutil ignore FIE rate-limit on scale-up"
-  KERNELTOAST_APPLIED_COUNT=$((KERNELTOAST_APPLIED_COUNT + 1))
-  apply_remote_patch_with_policy "${KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL}" "kt-schedutil-default-ratelimit.patch" "kerneltoast: schedutil default rate-limit 2000us"
-  KERNELTOAST_APPLIED_COUNT=$((KERNELTOAST_APPLIED_COUNT + 1))
-  if [ "${KERNELTOAST_PATCH_POLICY}" = "strict" ] && [ "$KERNELTOAST_APPLIED_COUNT" -ne 4 ]; then
-    echo "❌ Strict kerneltoast expected 4 commits, processed ${KERNELTOAST_APPLIED_COUNT}"
-    exit 1
-  fi
-  echo "✅ Kerneltoast patchset processed ${KERNELTOAST_APPLIED_COUNT}/4 commits (${KERNELTOAST_PATCH_POLICY})"
+  apply_kerneltoast_adapted_patches
 else
   echo "⏭️  kerneltoast patchset disabled by policy"
 fi
@@ -209,5 +359,4 @@ PY
 else
   echo "⏭️  dynasched governor disabled by governor_mode=${GOVERNOR_MODE}"
 fi
-
 

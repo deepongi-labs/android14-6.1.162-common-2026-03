@@ -54,6 +54,13 @@ if [ ! -d "${KERNEL_DIR}/drivers/kernelsu" ] && [ ! -d "${KERNEL_DIR}/KernelSU" 
   echo "warning: this wrapper preserves the dirty tree and does not sync/apply workflow patches" >&2
 fi
 
+if [ "${ENABLE_SUSFS}" = "true" ] && [ ! -f "${KERNEL_DIR}/fs/susfs.c" ]; then
+  echo "SuSFS enabled but not yet applied. Running local-setup-susfs.sh..."
+  bash "${ROOT_DIR}/scripts/local-setup-susfs.sh"
+elif [ "${ENABLE_SUSFS}" = "true" ]; then
+  echo "SuSFS source files already present in kernel tree."
+fi
+
 echo "Dirty local build: variant=${KSU_VARIANT}, susfs=${ENABLE_SUSFS}, jobs=${BUILD_JOBS}, clang=${CLANG_BIN}"
 cd "${ROOT_DIR}"
 bash .github/scripts/build-kernel.sh

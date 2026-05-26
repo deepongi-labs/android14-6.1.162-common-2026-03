@@ -183,7 +183,7 @@ echo "🔧 Patching boot.img with ksud boot-patch..."
   -o "${REPACK_DIR}"
 
 # Find patched image
-PATCHED_IMG=$(find "${REPACK_DIR}" -name '*patched*boot*' -o -name 'new-boot.img' | head -1)
+PATCHED_IMG=$(find "${REPACK_DIR}" -name 'kernelsu_patched_*.img' -o -name '*patched*.img' -o -name 'new-boot.img' | head -1)
 if [ -z "$PATCHED_IMG" ] || [ ! -f "$PATCHED_IMG" ]; then
   echo "❌ ksud boot-patch did not produce a patched image"
   echo "   Contents of repack directory:"

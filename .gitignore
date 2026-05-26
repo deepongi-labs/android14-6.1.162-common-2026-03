@@ -19,6 +19,13 @@ kernel/kernel/sched/cpufreq_dynasched.c
 .autoclaw/
 boot-images/
 
+# Boot images and kernel artifacts
+boot-*.img
+*.img.sha256
+Image.lz4
+AnyKernel3/
+AK3-*/
+
 # Logs
 logs
 *.log

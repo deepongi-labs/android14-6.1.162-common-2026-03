@@ -270,5 +270,7 @@ make -j$MAKE_JOBS O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
 
 trap - EXIT
 
-echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> $GITHUB_ENV
+if [ -n "${GITHUB_ENV:-}" ]; then
+  echo "BUILD_TIME=$((SECONDS - START_TIME))s" >> "$GITHUB_ENV"
+fi
 ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true

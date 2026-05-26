@@ -427,6 +427,8 @@ if [ "$KSU_VARIANT" = "tiann" ] || [ "$KSU_VARIANT" = "kowsu" ] || [ "$KSU_VARIA
   printf '%s | %s | applied\n' "Disable missing sus_path loop call (tiann/kowsu/enhance)" "kernel/hook/setuid_hook.c" >> "$PATCH_MANIFEST"
 fi
 
-echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
-echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+if [ -n "${GITHUB_ENV:-}" ]; then
+  echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+  echo "PATCH_FAILURE_LOG=$PATCH_FAILURE_LOG" >> "$GITHUB_ENV"
+fi
 

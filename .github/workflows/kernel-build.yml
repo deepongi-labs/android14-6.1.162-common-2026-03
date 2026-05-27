@@ -161,7 +161,7 @@ permissions:
 
 concurrency:
   group: kernel-build-workflow-${{ github.ref_name }}-${{ inputs.ksu_variant || 'all' }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   # Mirror the local self-hosted toolchain layout used for manual builds.

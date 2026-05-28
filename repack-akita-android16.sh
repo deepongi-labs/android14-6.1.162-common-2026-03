@@ -170,17 +170,25 @@ PY
   echo "✅ Built ksud: $KSUD"
 fi
 
-# Copy stock boot image to repack directory
+# Convert ksud to absolute path before changing directories
+KSUD="$(cd "$(dirname "$KSUD")" && pwd)/$(basename "$KSUD")"
+
+# Copy stock boot image and kernel to repack directory
 echo "📋 Copying stock boot image..."
 cp "$STOCK_BOOT" "${REPACK_DIR}/stock_boot.img"
 
+echo "📋 Copying kernel image..."
+cp "${WORKSPACE}/${KERNEL_IMAGE}" "${REPACK_DIR}/kernel_image.bin"
+
 # Patch boot image with ksud
 echo "🔧 Patching boot.img with ksud boot-patch..."
+cd "${REPACK_DIR}"
 "$KSUD" boot-patch \
-  -b "${REPACK_DIR}/stock_boot.img" \
-  -k "${WORKSPACE}/${KERNEL_IMAGE}" \
+  -b "stock_boot.img" \
+  -k "kernel_image.bin" \
   --no-install \
-  -o "${REPACK_DIR}"
+  -o "."
+cd "${WORKSPACE}"
 
 # Find patched image
 PATCHED_IMG=$(find "${REPACK_DIR}" -name 'kernelsu_patched_*.img' -o -name '*patched*.img' -o -name 'new-boot.img' | head -1)

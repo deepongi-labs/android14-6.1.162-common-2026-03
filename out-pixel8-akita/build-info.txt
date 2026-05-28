@@ -1,0 +1,6 @@
+Device: akita
+Android: android16
+Manifest: android-gs-akita-6.1-android16-beta
+KernelSU: 9ab31068345d5811160d74ff0dec79c51b1ce9c3
+Build Date: 2026-05-28 08:23:07 UTC
+Kernel Version: 6.1.124-g8769cc47188c

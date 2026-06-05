@@ -1,0 +1,1592 @@
+name: Build GKI Kernel with KernelSU Variants v5.1.0
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_variant:
+        description: 'KernelSU variant to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - enhance
+          - tiann
+          - kowsu
+          - resukisu
+          - next
+      disable_susfs:
+        description: 'Disable SuSFS features'
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: true
+        type: boolean
+      tuning_profile:
+        description: 'Pixel 8 tuning profile'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - balanced
+          - performance
+          - battery
+      lto_mode:
+        description: 'LTO mode (thin/full/none)'
+        required: false
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      governor_mode:
+        description: 'CPU governor strategy'
+        required: false
+        default: 'dynasched'
+        type: choice
+        options:
+          - dynasched
+          - stock_schedutil
+      kerneltoast_patch_policy:
+        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
+        required: false
+        default: 'strict'
+        type: choice
+        options:
+          - strict
+          - best_effort
+          - 'off'
+      dry_run_only:
+        description: 'Validate source sync and patch application only'
+        required: false
+        default: false
+        type: boolean
+      dirty_build:
+        description: 'Incremental build: skip source cleanup, preserve out/ directory'
+        required: false
+        default: false
+        type: boolean
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: 'android14-6.1-lts'
+        type: string
+      android_version:
+        description: 'Android version target (android14-6.1, android16-6.1, or android17-6.18)'
+        required: false
+        default: 'android16'
+        type: choice
+        options:
+          - android14
+          - android17
+          - android16
+      kernel_ref_android17:
+        description: 'Override kernel ref for Android 17 (android17-6.18 branch)'
+        required: false
+        default: ''
+        type: string
+
+  workflow_call:
+    inputs:
+      use_self_hosted:
+        required: false
+        default: false
+        type: boolean
+      ksu_variant:
+        required: false
+        default: 'all'
+        type: string
+      disable_susfs:
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        required: false
+        default: true
+        type: boolean
+      dry_run_only:
+        required: false
+        default: false
+        type: boolean
+      dirty_module_abi_bypass:
+        required: false
+        default: true
+        type: boolean
+      dirty_build:
+        required: false
+        default: false
+        type: boolean
+      android_version:
+        required: false
+        default: 'android16'
+        type: string
+      kernel_ref_android17:
+        required: false
+        default: ''
+        type: string
+      refs:
+        required: false
+        default: ''
+        type: string
+      build_options:
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: kernel-build-workflow-${{ github.ref_name }}-${{ inputs.ksu_variant || 'all' }}
+  cancel-in-progress: false
+
+env:
+  # Mirror the local self-hosted toolchain layout used for manual builds.
+  CLANG_BIN: /mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin
+  ARM64_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-
+  ARM32_TOOLCHAIN: /mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-
+  CCACHE_DIR: /mnt/ccache/.ccache
+  SOURCE_MIRROR_DIR: /mnt/Android/source-mirrors
+  KERNEL_REPO_URL: https://android.googlesource.com/kernel/common.git
+  SUSFS_REPO_URL: https://gitlab.com/simonpunk/susfs4ksu
+  TIANN_REPO_URL: https://github.com/tiann/KernelSU.git
+  KOWSU_REPO_URL: https://github.com/KOWX712/KernelSU.git
+  RESUKISU_REPO_URL: https://github.com/ReSukiSU/ReSukiSU.git
+  NEXT_REPO_URL: https://github.com/KernelSU-Next/KernelSU-Next.git
+  ANYKERNEL_REPO_URL: https://github.com/deepongi-labs/AnyKernel3-p8a
+  ENHANCE_KSU_REF: da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a
+  ANDROID16_KERNEL_REF: android14-6.1-lts
+  ANDROID17_KERNEL_REF: android17-6.18-2026-06
+  ANDROID16_STOCK_BOOT_URL: ""
+  ANDROID17_STOCK_BOOT_URL: ""
+  PATCHES_REPO_SHA: 4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e
+  CLIDR_PATCH_URL: https://raw.githubusercontent.com/infectedmushi/kernel_patches/4cbfb5f8c15acf6b3b797151a54a3a56dc6a843e/fix-clidr-uninitialized.patch
+  WIFI_PATCH_URL: https://github.com/OnePlus-12-Development/android_kernel_qcom_sm8650/commit/3e0cb08.patch
+  KT_PATCH_ARCH_TOPOLOGY_MIN_FREQ_SCALE_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/48a3fd5e41.patch
+  KT_PATCH_SCHED_CASS_UCLAMP_PACKING_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/201c5c7c99.patch
+  KT_PATCH_SCHEDUTIL_IGNORE_FIE_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/56040db35c.patch
+  KT_PATCH_SCHEDUTIL_DEFAULT_RATELIMIT_URL: https://github.com/kerneltoast/android_kernel_google_tensynos/commit/627184a51c.patch
+
+jobs:
+  setup:
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      enable_susfs: ${{ steps.config.outputs.enable_susfs }}
+      force_clean: ${{ steps.config.outputs.force_clean }}
+      dirty_build: ${{ steps.config.outputs.dirty_build }}
+      dry_run: ${{ steps.config.outputs.dry_run }}
+      build_start_time: ${{ steps.timestamp.outputs.start_time }}
+      create_release: ${{ steps.config.outputs.create_release }}
+      kernel_ref: ${{ steps.config.outputs.kernel_ref }}
+      android_version: ${{ steps.config.outputs.android_version }}
+      kernel_ref_android17: ${{ steps.config.outputs.kernel_ref_android17 }}
+      susfs_ref: ${{ steps.config.outputs.susfs_ref }}
+      tiann_ref: ${{ steps.config.outputs.tiann_ref }}
+      kowsu_ref: ${{ steps.config.outputs.kowsu_ref }}
+      resukisu_ref: ${{ steps.config.outputs.resukisu_ref }}
+      next_ref: ${{ steps.config.outputs.next_ref }}
+      tuning_profile: ${{ steps.config.outputs.tuning_profile }}
+      lto_mode: ${{ steps.config.outputs.lto_mode }}
+      make_jobs: ${{ steps.config.outputs.make_jobs }}
+      include_runtime_tuner: ${{ steps.config.outputs.include_runtime_tuner }}
+      governor_mode: ${{ steps.config.outputs.governor_mode }}
+      kerneltoast_patch_policy: ${{ steps.config.outputs.kerneltoast_patch_policy }}
+      dirty_module_abi_bypass: ${{ steps.config.outputs.dirty_module_abi_bypass }}
+      stock_boot_img_url: ${{ steps.config.outputs.stock_boot_img_url }}
+      stock_boot_gdrive_id: ${{ steps.config.outputs.stock_boot_gdrive_id }}
+    steps:
+      - name: Record Build Start Time
+        id: timestamp
+        run: |
+          echo "WORKFLOW_START_TIME=$(date +%s)" >> $GITHUB_ENV
+          START_TIME=$(date +%s)
+          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "::notice::Workflow started at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Set Build Matrix
+        id: set-matrix
+        run: |
+          VARIANT="${{ inputs.ksu_variant }}"
+          DISABLE_SUSFS="${{ inputs.disable_susfs }}"
+
+          if [ "$VARIANT" = "all" ]; then
+            if [ "$DISABLE_SUSFS" = "true" ]; then
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS disabled"
+            else
+              echo 'matrix={"variant":["tiann","kowsu","resukisu","next"]}' >> $GITHUB_OUTPUT
+              echo "🎯 Building all variants with SuSFS enabled"
+            fi
+          else
+            echo "matrix={\"variant\":[\"$VARIANT\"]}" >> $GITHUB_OUTPUT
+            echo "🎯 Building single variant: $VARIANT"
+          fi
+
+      - name: Set Build Config
+        id: config
+        run: |
+          # Parse consolidated `refs` and `build_options` string inputs.
+          # Format: newline-separated key=value lines. Whitespace around `=` is
+          # trimmed. Blank lines and `#`-prefixed lines are ignored. Unknown
+          # keys are a hard error.
+          KERNEL_REF=""
+          KERNEL_REF_ANDROID17="${{ inputs.kernel_ref_android17 }}"
+          ANDROID_VERSION="${{ inputs.android_version }}"
+          SUSFS_REF=""
+          TIANN_REF=""
+          KOWSU_REF=""
+          RESUKISU_REF=""
+          NEXT_REF=""
+          REFS_INPUT=$(cat <<'__REFS_EOF__'
+          ${{ inputs.refs }}
+          __REFS_EOF__
+          )
+          while IFS= read -r line; do
+            # Strip leading/trailing whitespace.
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            key="${key%"${key##*[![:space:]]}"}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+              kernel_ref) KERNEL_REF="$value" ;;
+              kernel_ref_android17) KERNEL_REF_ANDROID17="$value" ;;
+              android_version) ANDROID_VERSION="$value" ;;
+              susfs_ref) SUSFS_REF="$value" ;;
+              tiann_ref) TIANN_REF="$value" ;;
+              kowsu_ref) KOWSU_REF="$value" ;;
+              resukisu_ref) RESUKISU_REF="$value" ;;
+              next_ref) NEXT_REF="$value" ;;
+              *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
+            esac
+          done <<< "$REFS_INPUT"
+
+          TUNING_PROFILE=""
+          LTO_MODE=""
+          MAKE_JOBS=""
+          INCLUDE_RUNTIME_TUNER=""
+          GOVERNOR_MODE=""
+          KERNELTOAST_PATCH_POLICY=""
+          DIRTY_MODULE_ABI_BYPASS=""
+          STOCK_BOOT_IMG_URL=""
+          STOCK_BOOT_GDRIVE_ID=""
+          BUILD_OPTIONS_INPUT=$(cat <<'__BUILD_OPTIONS_EOF__'
+          ${{ inputs.build_options }}
+          __BUILD_OPTIONS_EOF__
+          )
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            key="${key%"${key##*[![:space:]]}"}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+              tuning_profile) TUNING_PROFILE="$value" ;;
+              lto_mode) LTO_MODE="$value" ;;
+              make_jobs) MAKE_JOBS="$value" ;;
+              include_runtime_tuner) INCLUDE_RUNTIME_TUNER="$value" ;;
+              governor_mode) GOVERNOR_MODE="$value" ;;
+              kerneltoast_patch_policy) KERNELTOAST_PATCH_POLICY="$value" ;;
+              dirty_module_abi_bypass) DIRTY_MODULE_ABI_BYPASS="$value" ;;
+              stock_boot_img_url) STOCK_BOOT_IMG_URL="$value" ;;
+              stock_boot_gdrive_id) STOCK_BOOT_GDRIVE_ID="$value" ;;
+              *) echo "❌ Unknown key in refs/build_options: $key"; exit 1 ;;
+            esac
+          done <<< "$BUILD_OPTIONS_INPUT"
+
+          ENABLE_SUSFS="${{ inputs.disable_susfs && 'false' || 'true' }}"
+          echo "enable_susfs=${ENABLE_SUSFS}" >> $GITHUB_OUTPUT
+          echo "force_clean=${{ inputs.force_clean_build }}" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.force_clean_build }}" = "true" ]; then
+            echo "dirty_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "dirty_build=${{ inputs.dirty_build }}" >> $GITHUB_OUTPUT
+          fi
+          echo "dry_run=${{ inputs.dry_run_only }}" >> $GITHUB_OUTPUT
+          echo "create_release=${{ inputs.create_release && !inputs.dry_run_only && 'true' || 'false' }}" >> $GITHUB_OUTPUT
+
+          ANDROID_VERSION="${ANDROID_VERSION:-android16}"
+          case "$ANDROID_VERSION" in
+            android14|android16|android17) ;;
+            *) echo "❌ Invalid android_version: $ANDROID_VERSION (expected android14, android16, or android17)"; exit 1 ;;
+          esac
+
+          if [ "$ANDROID_VERSION" = "android17" ]; then
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android17-6.18-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          elif [ "$ANDROID_VERSION" = "android16" ]; then
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-${ANDROID16_KERNEL_REF}}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          else
+            RESOLVED_KERNEL_REF="${KERNEL_REF:-android14-6.1-lts}"
+            RESOLVED_SUSFS_REF="${SUSFS_REF:-gki-android14-6.1-dev}"
+            RESOLVED_KERNEL_REF_ANDROID17="${KERNEL_REF_ANDROID17:-${ANDROID17_KERNEL_REF}}"
+          fi
+
+          echo "android_version=${ANDROID_VERSION}" >> $GITHUB_OUTPUT
+          echo "kernel_ref=${RESOLVED_KERNEL_REF}" >> $GITHUB_OUTPUT
+          echo "kernel_ref_android17=${RESOLVED_KERNEL_REF_ANDROID17}" >> $GITHUB_OUTPUT
+          echo "susfs_ref=${RESOLVED_SUSFS_REF}" >> $GITHUB_OUTPUT
+          echo "tiann_ref=${TIANN_REF:-0544f475962fd7f27d27ae24a7ab3ee2a8d7538a}" >> $GITHUB_OUTPUT
+          echo "kowsu_ref=${KOWSU_REF:-master}" >> $GITHUB_OUTPUT
+          echo "resukisu_ref=${RESUKISU_REF:-main}" >> $GITHUB_OUTPUT
+          # Default to upstream KernelSU-Next 'dev' branch.
+          # SuSFS patches are fetched from simonpunk/susfs4ksu gki-android14-6.1-dev
+          # and WildKernels v2.1.0 fixers, so upstream dev branch works directly.
+          RESOLVED_NEXT_REF="${NEXT_REF:-dev}"
+          echo "next_ref=${RESOLVED_NEXT_REF}" >> $GITHUB_OUTPUT
+          case "$TUNING_PROFILE" in
+            balanced|performance|battery) ;;
+          esac
+
+          LTO_MODE="${LTO_MODE:-thin}"
+          case "$LTO_MODE" in
+            thin|full|none) ;;
+            *) echo "❌ Invalid lto_mode: $LTO_MODE"; exit 1 ;;
+          esac
+          echo "lto_mode=$LTO_MODE" >> $GITHUB_OUTPUT
+
+          MAKE_JOBS_INPUT="${MAKE_JOBS:-auto}"
+          if [ "$MAKE_JOBS_INPUT" = "auto" ] || [[ "$MAKE_JOBS_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "make_jobs=$MAKE_JOBS_INPUT" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Invalid make_jobs: $MAKE_JOBS_INPUT (expected auto or integer >= 1)"
+            exit 1
+          fi
+
+          if [ -z "$INCLUDE_RUNTIME_TUNER" ]; then
+            INCLUDE_RUNTIME_TUNER="true"
+          fi
+          case "$INCLUDE_RUNTIME_TUNER" in
+            true|false) ;;
+            *) echo "❌ Invalid include_runtime_tuner: $INCLUDE_RUNTIME_TUNER (expected true or false)"; exit 1 ;;
+          esac
+          echo "include_runtime_tuner=$INCLUDE_RUNTIME_TUNER" >> $GITHUB_OUTPUT
+
+          GOVERNOR_MODE_INPUT="${GOVERNOR_MODE:-dynasched}"
+          case "$GOVERNOR_MODE_INPUT" in
+            dynasched|pixel8_dynamic_schedutil)
+              GOVERNOR_MODE_INPUT="dynasched"
+              ;;
+            stock_schedutil) ;;
+            *) echo "❌ Invalid governor_mode: $GOVERNOR_MODE_INPUT"; exit 1 ;;
+          esac
+          echo "governor_mode=$GOVERNOR_MODE_INPUT" >> $GITHUB_OUTPUT
+
+          KERNELTOAST_PATCH_POLICY="${KERNELTOAST_PATCH_POLICY:-strict}"
+          case "$KERNELTOAST_PATCH_POLICY" in
+            strict|best_effort|off) ;;
+            *) echo "❌ Invalid kerneltoast_patch_policy: $KERNELTOAST_PATCH_POLICY"; exit 1 ;;
+          esac
+          echo "kerneltoast_patch_policy=$KERNELTOAST_PATCH_POLICY" >> $GITHUB_OUTPUT
+
+          DIRTY_MODULE_ABI_BYPASS="${DIRTY_MODULE_ABI_BYPASS:-true}"
+          case "$DIRTY_MODULE_ABI_BYPASS" in
+            true|false) ;;
+            *) echo "❌ Invalid dirty_module_abi_bypass: $DIRTY_MODULE_ABI_BYPASS (expected true or false)"; exit 1 ;;
+          esac
+          echo "dirty_module_abi_bypass=$DIRTY_MODULE_ABI_BYPASS" >> $GITHUB_OUTPUT
+
+          # Select stock boot image based on Android version
+          if [ "$ANDROID_VERSION" = "android17" ]; then
+            STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-${{ env.ANDROID17_STOCK_BOOT_URL }}}"
+          else
+            STOCK_BOOT_IMG_URL="${STOCK_BOOT_IMG_URL:-https://filebin.net/kspfgod8qsyhpk66/stock-akita-cp1a.260505.005.a1.img}"
+          fi
+
+          # stock_boot_img_url: optional, must be https:// or empty
+          if [ -n "$STOCK_BOOT_IMG_URL" ]; then
+            case "$STOCK_BOOT_IMG_URL" in
+              https://*) ;;
+              *) echo "❌ stock_boot_img_url must start with https://"; exit 1 ;;
+            esac
+          fi
+          if [ -n "$STOCK_BOOT_GDRIVE_ID" ]; then
+            case "$STOCK_BOOT_GDRIVE_ID" in
+              https://drive.google.com/file/d/*)
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID#*file/d/}"
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID%%/*}"
+                ;;
+              https://drive.google.com/open?id=*)
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID#*id=}"
+                STOCK_BOOT_GDRIVE_ID="${STOCK_BOOT_GDRIVE_ID%%&*}"
+                ;;
+            esac
+          fi
+          echo "stock_boot_img_url=$STOCK_BOOT_IMG_URL" >> $GITHUB_OUTPUT
+          echo "stock_boot_gdrive_id=$STOCK_BOOT_GDRIVE_ID" >> $GITHUB_OUTPUT
+
+  build:
+    needs: setup
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
+    timeout-minutes: 120
+    concurrency:
+      group: kernel-build-job-${{ github.ref_name }}-${{ matrix.variant }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    env:
+      ENABLE_SUSFS: ${{ needs.setup.outputs.enable_susfs }}
+      FORCE_CLEAN: ${{ needs.setup.outputs.force_clean }}
+      DIRTY_BUILD: ${{ needs.setup.outputs.dirty_build }}
+      DRY_RUN_ONLY: ${{ needs.setup.outputs.dry_run }}
+      ANDROID_VERSION: ${{ needs.setup.outputs.android_version }}
+      KSU_VARIANT: ${{ matrix.variant }}
+      TUNING_PROFILE: ${{ needs.setup.outputs.tuning_profile }}
+      LTO_MODE: ${{ needs.setup.outputs.lto_mode }}
+      MAKE_JOBS_OVERRIDE: ${{ needs.setup.outputs.make_jobs }}
+      RUNTIME_TUNER: ${{ needs.setup.outputs.include_runtime_tuner }}
+      GOVERNOR_MODE: ${{ needs.setup.outputs.governor_mode }}
+      KERNELTOAST_PATCH_POLICY: ${{ needs.setup.outputs.kerneltoast_patch_policy }}
+      DIRTY_MODULE_ABI_BYPASS: ${{ needs.setup.outputs.dirty_module_abi_bypass }}
+      STOCK_BOOT_IMG_URL: ${{ needs.setup.outputs.stock_boot_img_url }}
+      STOCK_BOOT_GDRIVE_ID: ${{ needs.setup.outputs.stock_boot_gdrive_id }}
+
+    steps:
+      - name: Pre-Clean Build Artifacts
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf AnyKernel3 release-assets changelogs logs failure-logs success-metadata || true
+
+      - name: Checkout Workflow Repo
+        uses: actions/checkout@v5
+        with:
+          clean: false
+
+      - name: Setup Build Tools & Dependencies
+        run: |
+          set -e
+          echo "::group::Runner Sanity"
+          mkdir -p "${{ env.SOURCE_MIRROR_DIR }}" 2>/dev/null || true
+          df -h .
+          df -h /mnt/ccache 2>/dev/null || true
+          echo "CPU cores: $(nproc)"
+          echo "::endgroup::"
+
+          echo "::group::Toolchain Detection"
+          echo "🔧 Resolving build tools for self-hosted runner..."
+
+          if [ -x "/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin/clang" ] && [ -d "/mnt/Hawai/toolchains" ]; then
+            export CLANG_BIN="/mnt/Hawai/toolchains/Clang-23.0.0git-20260130/bin"
+            export ARM64_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
+            export ARM32_TOOLCHAIN="/mnt/Hawai/toolchains/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-"
+            export TOOLCHAIN_ID="clang23-gnu15.2"
+            echo "Using local self-hosted toolchains."
+          else
+            echo "Falling back to distro toolchains from PATH."
+            export CLANG_BIN="/usr/lib/llvm-17/bin"
+            export ARM64_TOOLCHAIN="aarch64-linux-gnu-"
+            export ARM32_TOOLCHAIN="arm-linux-gnueabihf-"
+            export TOOLCHAIN_ID="llvm17-distro"
+          fi
+
+          echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
+          echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "ARM32_TOOLCHAIN=${ARM32_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "TOOLCHAIN_ID=${TOOLCHAIN_ID}" >> $GITHUB_ENV
+
+          RUNNER_THREADS="$(nproc)"
+          BUILD_JOBS="$RUNNER_THREADS"
+          BUILD_LOAD="$((RUNNER_THREADS + 1))"
+          BUILD_TMPDIR="/mnt/ccache/kernel-tmp"
+          if ! mkdir -p "$BUILD_TMPDIR" 2>/dev/null; then
+            BUILD_TMPDIR="/mnt/Android/kernel-tmp"
+            mkdir -p "$BUILD_TMPDIR"
+          fi
+          echo "RUNNER_THREADS=${RUNNER_THREADS}" >> $GITHUB_ENV
+          echo "BUILD_JOBS=${BUILD_JOBS}" >> $GITHUB_ENV
+          echo "BUILD_LOAD=${BUILD_LOAD}" >> $GITHUB_ENV
+          echo "TMPDIR=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "TEMP=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "TMP=${BUILD_TMPDIR}" >> $GITHUB_ENV
+          echo "MAKEFLAGS=-j${BUILD_JOBS} -l${BUILD_LOAD}" >> $GITHUB_ENV
+
+          if [ -d "/mnt/ccache" ] && mkdir -p /mnt/ccache/.ccache 2>/dev/null; then
+            SELECTED_CCACHE_DIR="/mnt/ccache/.ccache"
+          else
+            SELECTED_CCACHE_DIR="$HOME/.ccache"
+            mkdir -p "$SELECTED_CCACHE_DIR"
+          fi
+
+          echo "CCACHE_DIR=${SELECTED_CCACHE_DIR}" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=mtime" >> $GITHUB_ENV
+          echo "CCACHE_NOCOMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=45G" >> $GITHUB_ENV
+          echo "CCACHE_HARDLINK=true" >> $GITHUB_ENV
+          echo "CCACHE_FILECLONE=true" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=${SELECTED_CCACHE_DIR}/tmp" >> $GITHUB_ENV
+
+          # Help cache hits across different checkout paths on self-hosted runners.
+          mkdir -p "${SELECTED_CCACHE_DIR}/tmp"
+          ccache --set-config=base_dir="${GITHUB_WORKSPACE}" >/dev/null 2>&1 || true
+          ccache --set-config=hash_dir=false >/dev/null 2>&1 || true
+          ccache --set-config=compiler_check=mtime >/dev/null 2>&1 || true
+          ccache --set-config=compression=false >/dev/null 2>&1 || true
+          ccache --set-config=hard_link=true >/dev/null 2>&1 || true
+          ccache --set-config=file_clone=true >/dev/null 2>&1 || true
+          ccache --set-config=sloppiness=file_macro,include_file_mtime,include_file_ctime,time_macros,locale,pch_defines,include_file_macro >/dev/null 2>&1 || true
+          ccache --set-config=temporary_dir="${SELECTED_CCACHE_DIR}/tmp" >/dev/null 2>&1 || true
+          ccache -M 45G >/dev/null 2>&1 || true
+
+          command -v git >/dev/null
+          command -v curl >/dev/null
+          command -v patch >/dev/null
+          command -v make >/dev/null
+          command -v ccache >/dev/null
+          command -v "${CLANG_BIN}/clang" >/dev/null 2>&1 || command -v clang >/dev/null
+          test -x "${CLANG_BIN}/clang" || command -v clang >/dev/null
+          command -v pahole >/dev/null || { echo "⚠️ pahole not found, installing dwarves..."; sudo apt-get update -qq && sudo apt-get install -y dwarves; }
+          test -w "${SELECTED_CCACHE_DIR}"
+          test -w "${BUILD_TMPDIR}"
+
+          echo "✅ Build tools configured: jobs=${BUILD_JOBS}, load=${BUILD_LOAD}, tmp=${BUILD_TMPDIR}, ccache=${SELECTED_CCACHE_DIR}"
+          echo "::endgroup::"
+
+      - name: Cache ccache
+        if: ${{ !startsWith(env.CCACHE_DIR, '/mnt/ccache') }}
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.TOOLCHAIN_ID }}-
+            ccache-${{ runner.os }}-
+
+      - name: Static analysis (shellcheck)
+        run: |
+          if command -v shellcheck >/dev/null; then
+            find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: Smart Sync Kernel & SuSFS Sources
+        run: |
+          set -e
+          sync_repo_shallow() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+
+            echo "::group::Sync ${name}"
+
+            # If target is a submodule gitlink or has stale .git/modules entry, nuke it
+            if [ -f "${target}/.git" ]; then
+              echo "⚠️ ${target} is a submodule gitlink; removing for standalone sync"
+              rm -rf "$target"
+              rm -rf ".git/modules/${target}" 2>/dev/null || true
+            fi
+
+            if [ -d "${target}/.git" ]; then
+              if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ]; then
+                echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+                echo "::endgroup::"
+                return 0
+              fi
+
+              git -C "$target" remote set-url origin "$url"
+              # Clean working tree FIRST to avoid checkout conflicts from previously applied patches
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard HEAD
+                git -C "$target" clean -fdx
+              fi
+              git -C "$target" fetch --depth=1 origin "$ref"
+              git -C "$target" checkout FETCH_HEAD
+              if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+                git -C "$target" reset --hard FETCH_HEAD
+                git -C "$target" clean -fdx
+              fi
+            else
+              rm -rf "$target"
+              rm -rf ".git/modules/${target}" 2>/dev/null || true
+              # Try branch first, fall back to commit SHA
+              if git ls-remote --heads "$url" "$ref" | grep -q "$ref"; then
+                git clone --depth=1 --branch="$ref" "$url" "$target"
+              else
+                git clone "$url" "$target"
+                git -C "$target" fetch origin "$ref"
+                git -C "$target" checkout "$ref"
+              fi
+              git -C "$target" checkout --detach
+            fi
+
+            echo "${name} -> $(git -C "$target" rev-parse --short HEAD)"
+            echo "::endgroup::"
+          }
+
+          echo "📦 Smart syncing kernel and SuSFS sources..."
+
+          # Avoid full mirrors here: kernel/common is huge and mirror fetches are slow.
+          sync_repo_shallow "kernel-common" "${{ env.KERNEL_REPO_URL }}" "${{ needs.setup.outputs.kernel_ref }}" "kernel"
+          sync_repo_shallow "susfs4ksu" "${{ env.SUSFS_REPO_URL }}" "${{ needs.setup.outputs.susfs_ref }}" "susfs4ksu"
+
+      - name: Store Commit Info (Workflow, Kernel, SuSFS)
+        run: |
+          set -e
+          record_commit_info() {
+            local prefix="$1"
+            local repo_path="$2"
+            local short_hash
+            local commit_date
+            local commit_msg
+
+            short_hash=$(git -C "$repo_path" log -1 --format='%h')
+            commit_date=$(git -C "$repo_path" log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')
+            commit_msg=$(git -C "$repo_path" log -1 --format='%s')
+
+            echo "${prefix}_COMMIT_SHORT=$short_hash" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_DATE=$commit_date" >> "$GITHUB_ENV"
+            echo "${prefix}_COMMIT_MSG=$commit_msg" >> "$GITHUB_ENV"
+          }
+
+          record_commit_info "WORKFLOW" "."
+          record_commit_info "KERNEL" "kernel"
+          record_commit_info "SUSFS" "susfs4ksu"
+
+      - name: Show CCACHE Status
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -s | grep -E "(Cacheable calls|Hits|Misses|Hit rate|cache size)" || true
+
+      - name: Reset CCACHE Counters
+        run: |
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          ccache -z || true
+
+      - name: Setup KernelSU Variant
+        run: |
+          set -e
+          KSU_SETUP_START=$SECONDS
+          sync_variant_repo() {
+            local name="$1"
+            local url="$2"
+            local ref="$3"
+            local target="$4"
+            local mirror="${SOURCE_MIRROR_DIR}/${name}.git"
+
+            if [ -d "$mirror" ]; then
+              # Check if the mirror points to the correct upstream URL
+              local current_url
+              current_url=$(git -C "$mirror" remote get-url origin 2>/dev/null || echo "")
+              if [ "$current_url" != "$url" ]; then
+                echo "⚠️ Mirror URL mismatch for ${name}: '${current_url}' != '${url}'"
+                echo "   Deleting stale mirror and re-cloning..."
+                rm -rf "$mirror"
+              fi
+            fi
+
+            if [ ! -d "$mirror" ]; then
+              git clone --mirror "$url" "$mirror"
+            else
+              git -C "$mirror" fetch --prune origin
+            fi
+
+            if [ "${{ needs.setup.outputs.dirty_build }}" = "true" ] && [ -d "$target/.git" ]; then
+              echo "♻️ DIRTY_BUILD=true: keeping existing ${target} checkout ($(git -C "$target" rev-parse --short HEAD))"
+              return 0
+            fi
+
+            rm -rf "$target"
+            git clone --reference-if-able "$mirror" "$mirror" "$target"
+            git -C "$target" fetch --depth=1 origin "$ref"
+            git -C "$target" checkout --detach FETCH_HEAD
+          }
+
+          # Clean any prior KSU artifacts from the kernel tree (legacy KernelSU/ folder,
+          # symlinks, and integrated drivers/kernelsu/) plus the workspace-level staging dir.
+          if [ "${{ needs.setup.outputs.dirty_build }}" != "true" ]; then
+            rm -rf kernel/KernelSU kernel/KernelSU-Next kernel/drivers/kernelsu
+            rm -rf "${GITHUB_WORKSPACE}/.ksu-src"
+          else
+            echo "♻️ DIRTY_BUILD=true: preserving existing KernelSU staging and integrated tree"
+          fi
+
+          case "${{ matrix.variant }}" in
+            # 'enhance' uses Tiann KernelSU with Pixel 8 optimizations.
+            "enhance") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ env.ENHANCE_KSU_REF }}" ;;
+            "tiann") KSU_REPO="${{ env.TIANN_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.tiann_ref }}" ;;
+            "kowsu") KSU_REPO="${{ env.KOWSU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.kowsu_ref }}" ;;
+            "resukisu") KSU_REPO="${{ env.RESUKISU_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.resukisu_ref }}" ;;
+            "next") KSU_REPO="${{ env.NEXT_REPO_URL }}"; KSU_BRANCH="${{ needs.setup.outputs.next_ref }}" ;;
+          esac
+
+          # For tiann/enhance, use official setup.sh script
+          if [ "${{ matrix.variant }}" = "tiann" ] || [ "${{ matrix.variant }}" = "enhance" ]; then
+            echo "::group::Setup Tiann KernelSU via official script"
+            cd kernel
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${KSU_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BRANCH"
+            cd ..
+            KSU_STAGE="${GITHUB_WORKSPACE}/kernel/KernelSU"
+            echo "Tiann KernelSU setup complete via official script"
+            echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+            echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+            echo "KSU_STAGE=$KSU_STAGE" >> $GITHUB_ENV
+            echo "::endgroup::"
+          else
+          # Clone the KSU source tree to a workspace-local staging dir OUTSIDE the
+          # kernel tree. The kernel/ subdirectory will later be copied directly into
+          # kernel/drivers/kernelsu/ by the "Integrate KernelSU into kernel tree" step,
+          # after all KSU-side patches have been applied. This keeps the kernel/ tree
+          # free of any auxiliary KernelSU/ folder.
+          KSU_STAGE="${GITHUB_WORKSPACE}/.ksu-src"
+          echo "::group::Sync KernelSU Variant"
+          sync_variant_repo "ksu-${{ matrix.variant }}" "$KSU_REPO" "$KSU_BRANCH" "$KSU_STAGE"
+          echo "KernelSU repo:    $KSU_REPO"
+          echo "KernelSU ref:     $KSU_BRANCH"
+          echo "Staged at:        $KSU_STAGE"
+          echo "::endgroup::"
+
+          if [ ! -d "$KSU_STAGE/kernel" ]; then
+            echo "❌ ${KSU_STAGE}/kernel directory not found after clone"
+            ls -la "$KSU_STAGE" || true
+            exit 1
+          fi
+
+          echo "KSU_REPO=$KSU_REPO" >> $GITHUB_ENV
+          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_SETUP_TIME=$((SECONDS - KSU_SETUP_START))s" >> $GITHUB_ENV
+          fi
+
+      - name: Get KSU Version Info & Commit
+        run: |
+          cd "${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          git fetch --unshallow --quiet || git fetch --depth=10000 --quiet || true
+
+          if [ "${{ matrix.variant }}" = "resukisu" ]; then
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((40000 + KSU_COUNT - 2815))
+          elif [ "${{ matrix.variant }}" = "next" ]; then
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+          else
+            KSU_COUNT=$(git rev-list --count HEAD)
+            KSU_VERSION=$((KSU_COUNT + 30000))
+          fi
+
+          KSU_COMMIT_SHORT=$(git log -1 --format='%h')
+          KSU_VERSION_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev-${KSU_COMMIT_SHORT}")
+
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_VERSION_TAG=$KSU_VERSION_TAG" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHORT=$KSU_COMMIT_SHORT" >> $GITHUB_ENV
+          echo "KSU_COMMIT_DATE=$(git log -1 --format='%cd' --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          echo "KSU_COMMIT_MSG=$(git log -1 --format='%s')" >> $GITHUB_ENV
+
+      - name: Generate Comprehensive Changelog
+        run: |
+          set -e
+          mkdir -p changelogs
+          CHANGELOG_FILE="changelogs/CHANGELOG-${{ matrix.variant }}.md"
+
+          cat << EOF > "$CHANGELOG_FILE"
+          # 📋 Comprehensive Build Changelog
+
+          **Variant:** ${{ matrix.variant }}
+          **Build Number:** #${{ github.run_number }}
+          **KernelSU Version:** r${{ env.KSU_VERSION }}
+          **SuSFS:** ${{ env.ENABLE_SUSFS == 'true' && 'Enabled' || 'Disabled' }}
+
+          ---
+          ## 📖 Component Versions
+          | Component | Current Commit | Date | Summary |
+          |-----------|---------------|------|---------|
+          | **KernelSU** | \`${{ env.KSU_COMMIT_SHORT }}\` | ${{ env.KSU_COMMIT_DATE }} | ${{ env.KSU_COMMIT_MSG }} |
+          | **Kernel** | \`${{ env.KERNEL_COMMIT_SHORT }}\` | ${{ env.KERNEL_COMMIT_DATE }} | ${{ env.KERNEL_COMMIT_MSG }} |
+          | **SuSFS4KSU** | \`${{ env.SUSFS_COMMIT_SHORT }}\` | ${{ env.SUSFS_COMMIT_DATE }} | ${{ env.SUSFS_COMMIT_MSG }} |
+
+          ---
+          EOF
+
+          echo "CHANGELOG_FILE=$CHANGELOG_FILE" >> $GITHUB_ENV
+
+      - name: Setup SuSFS
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          export ANDROID_VERSION="${{ needs.setup.outputs.android_version }}"
+          bash .github/scripts/setup-susfs.sh
+      - name: Inject SuSFS Kconfig for KernelSU-Next
+        if: env.ENABLE_SUSFS == 'true' && env.KSU_VARIANT == 'next'
+        run: |
+          set -e
+          KSU_KCONFIG="${KSU_STAGE}/kernel/Kconfig"
+
+          if ! grep -q 'config KSU_SUSFS' "$KSU_KCONFIG" 2>/dev/null; then
+            echo "⚠️  CONFIG_KSU_SUSFS missing from Kconfig, injecting for KernelSU-Next..."
+
+            cat << 'KCONFIGEOF' | sed 's/^          //' >> "$KSU_KCONFIG"
+
+          menu "KernelSU - SUSFS"
+          config KSU_SUSFS
+          bool "KernelSU addon - SUSFS"
+          depends on KSU
+          default y
+
+          config KSU_SUSFS_SUS_PATH
+          bool "Enable to hide suspicious path"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_SUS_MOUNT
+          bool "Enable to hide suspicious mounts"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_SUS_KSTAT
+          bool "Enable to spoof suspicious kstat"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_TRY_UMOUNT
+          bool "Enable to use ksu's try_umount"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_SPOOF_UNAME
+          bool "Enable to spoof uname"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_ENABLE_LOG
+          bool "Enable logging susfs log to kernel"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          bool "Enable to hide ksu/susfs symbols"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          bool "Enable to spoof /proc/bootconfig or /proc/cmdline"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_OPEN_REDIRECT
+          bool "Enable to redirect path opens"
+          depends on KSU_SUSFS
+          default y
+
+          config KSU_SUSFS_SUS_MAP
+          bool "Enable to hide mmapped files from proc maps"
+          depends on KSU_SUSFS
+          default y
+
+          endmenu
+          KCONFIGEOF
+
+            echo "✅ Injected SuSFS Kconfig entries"
+            printf '%s | %s | injected\n' "KernelSU-Next SuSFS Kconfig" "$KSU_KCONFIG" >> "$PATCH_MANIFEST"
+          else
+            echo "✅ CONFIG_KSU_SUSFS already present in Kconfig"
+          fi
+
+      - name: Validate SuSFS Integration
+        if: env.ENABLE_SUSFS == 'true'
+        run: |
+          set -e
+          echo "::group::SuSFS Integration Validation"
+
+          VALIDATION_ERRORS=0
+
+          # Check kernel-side SuSFS sources.
+          if [ ! -f kernel/fs/susfs.c ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/fs/susfs.c missing. Core SuSFS patch may have failed silently."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/fs/susfs.c present"
+          fi
+
+          if [ ! -f kernel/include/linux/susfs.h ]; then
+            echo "::error::ENABLE_SUSFS=true but kernel/include/linux/susfs.h missing."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ kernel/include/linux/susfs.h present"
+          fi
+
+          # Check KernelSU-side SuSFS integration.
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          if [ "$KSU_VARIANT" = "next" ]; then
+            echo "ℹ️ Skipping CONFIG_KSU_SUSFS check for KernelSU-Next (uses WildKernels integration)"
+          elif ! grep -q 'config KSU_SUSFS' "$KSU_STAGE/kernel/Kconfig" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Makefile" 2>/dev/null \
+            && ! grep -q 'KSU_SUSFS' "$KSU_STAGE/kernel/Kbuild" 2>/dev/null; then
+            echo "::error::ENABLE_SUSFS=true but CONFIG_KSU_SUSFS not found in KernelSU Kconfig/Makefile/Kbuild. Integration patch may have failed."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          else
+            echo "✅ KernelSU SuSFS integration present"
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ]; then
+            echo "⚠️ Skipping optional Brene CMD_SUSFS_* handler checks for ${KSU_VARIANT}"
+          else
+            for required_cmd in \
+              CMD_SUSFS_SHOW_ENABLED_FEATURES \
+              CMD_SUSFS_SHOW_VERSION \
+              CMD_SUSFS_SHOW_VARIANT; do
+              if ! grep -Rqs "$required_cmd" "$KSU_STAGE/kernel"; then
+                echo "::error::ENABLE_SUSFS=true but $required_cmd handler is missing from KernelSU supercall path. Brene cannot query SuSFS."
+                VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+              fi
+            done
+          fi
+
+          if [ "$KSU_VARIANT" = "next" ]; then
+            echo "⚠️ Skipping optional susfs_get_enabled_features check for ${KSU_VARIANT}"
+          elif ! grep -Rqs 'susfs_get_enabled_features' "$KSU_STAGE/kernel"; then
+            echo "::error::ENABLE_SUSFS=true but susfs_get_enabled_features bridge is missing from KernelSU. Brene cannot load enabled features."
+            VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
+          elif ! grep -Rqs 'susfs_get_susfs_version' "$KSU_STAGE/kernel" && ! grep -Rqs 'susfs_get_version' "$KSU_STAGE/kernel"; then
+            echo "::warning::SuSFS version command exists but no obvious version helper name was found; continuing because patch may inline the version copy."
+          else
+            echo "✅ KernelSU SuSFS Brene query bridge present"
+          fi
+
+          # Check patch manifest for silent disables.
+          if [ -f "$PATCH_MANIFEST" ]; then
+            DISABLED_COUNT=$(grep -c '| disabled$' "$PATCH_MANIFEST" 2>/dev/null || true)
+            DISABLED_COUNT="${DISABLED_COUNT:-0}"
+            if [ "$DISABLED_COUNT" -gt 0 ]; then
+              echo "::error::$DISABLED_COUNT SuSFS patch(es) were auto-disabled. Check patch-manifest-${KSU_VARIANT}.txt for details."
+              grep '| disabled$' "$PATCH_MANIFEST" || true
+              VALIDATION_ERRORS=$((VALIDATION_ERRORS + DISABLED_COUNT))
+            fi
+          fi
+
+          if [ "$VALIDATION_ERRORS" -gt 0 ]; then
+            echo "::endgroup::"
+            echo "::error::$VALIDATION_ERRORS SuSFS integration check(s) failed. Check patch-manifest-${KSU_VARIANT}.txt for patch failures."
+            exit 1
+          fi
+
+          echo "✅ SuSFS integration validation passed"
+          echo "::endgroup::"
+
+      - name: Integrate KernelSU into kernel tree
+        run: |
+          set -e
+          KSU_STAGE="${KSU_STAGE:-${GITHUB_WORKSPACE}/.ksu-src}"
+          if [ ! -d "$KSU_STAGE/kernel" ]; then
+            echo "❌ ${KSU_STAGE}/kernel missing; cannot integrate KernelSU."
+            exit 1
+          fi
+
+          # Place patched KernelSU sources at drivers/kernelsu/. Use a symlink
+          # into the staged repo so Kbuild can read the variant-specific Kconfig
+          # and KernelSU-Next can discover .git metadata.
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers
+          ln -s "$KSU_STAGE/kernel" kernel/drivers/kernelsu
+          test -f kernel/drivers/kernelsu/Kconfig
+
+          # KernelSU-Next keeps public headers outside kernel/ and links
+          # kernel/include/uapi back to that repo-root uapi directory. Once
+          # kernel/ is linked under drivers/kernelsu, that symlink may point at
+          # the wrong tree from the kernel build path, so replace it with copied
+          # headers in the staged source before building.
+          if [ -d "$KSU_STAGE/uapi" ]; then
+            rm -rf "$KSU_STAGE/kernel/uapi" "$KSU_STAGE/kernel/include/uapi"
+            mkdir -p "$KSU_STAGE/kernel/uapi"
+            cp -a "$KSU_STAGE/uapi/." "$KSU_STAGE/kernel/uapi/"
+            mkdir -p "$KSU_STAGE/kernel/include/uapi"
+            cp -a "$KSU_STAGE/uapi/." "$KSU_STAGE/kernel/include/uapi/"
+          elif [ -e "$KSU_STAGE/kernel/include/uapi" ]; then
+            rm -rf "$KSU_STAGE/kernel/include/uapi.real"
+            mkdir -p "$KSU_STAGE/kernel/include/uapi.real"
+            cp -aL "$KSU_STAGE/kernel/include/uapi/." "$KSU_STAGE/kernel/include/uapi.real/"
+            rm -rf "$KSU_STAGE/kernel/include/uapi"
+            mv "$KSU_STAGE/kernel/include/uapi.real" "$KSU_STAGE/kernel/include/uapi"
+          fi
+
+          # KernelSU-Next Kbuild can miss git metadata when built from a linked
+          # source under the kernel tree. Force sane fallback values from the
+          # staged repo so Manager never sees KSU_VERSION=1 / tag=v0.0.1.
+          if [ -f kernel/drivers/kernelsu/Kbuild ]; then
+            python -c 'from pathlib import Path; import sys; version, tag = sys.argv[1], sys.argv[2]; p = Path("kernel/drivers/kernelsu/Kbuild"); text = p.read_text(); text = text.replace("KSU_VERSION_FALLBACK := 1", f"KSU_VERSION_FALLBACK := {version}"); text = text.replace("KSU_VERSION_TAG_FALLBACK := v0.0.1", f"KSU_VERSION_TAG_FALLBACK := {tag}"); p.write_text(text)' "$KSU_VERSION" "$KSU_VERSION_TAG"
+            echo "✅ KernelSU-Next Kbuild fallback metadata: version=${KSU_VERSION}, tag=${KSU_VERSION_TAG}"
+          fi
+          echo "✅ KernelSU integrated at kernel/drivers/kernelsu (source: $KSU_STAGE)"
+
+          # Wire kernelsu/ into the upstream drivers Kbuild + Kconfig (idempotent).
+          if ! grep -Fq 'obj-$(CONFIG_KSU) += kernelsu/' kernel/drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> kernel/drivers/Makefile
+            echo "  + drivers/Makefile: obj-\$(CONFIG_KSU) += kernelsu/"
+          fi
+          if ! grep -Fq 'source "drivers/kernelsu/Kconfig"' kernel/drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' kernel/drivers/Kconfig
+            echo "  + drivers/Kconfig: source drivers/kernelsu/Kconfig"
+          fi
+
+      - name: Apply Remote Patches & Source Fixes
+        run: bash .github/scripts/apply-remote-patches.sh
+      - name: Verify Patched Tree
+        run: |
+          set -e
+          mkdir -p success-metadata
+
+          if [ -z "${PATCH_MANIFEST:-}" ]; then
+            PATCH_MANIFEST="$GITHUB_WORKSPACE/logs/patch-manifest-${KSU_VARIANT}.txt"
+            mkdir -p "$(dirname "$PATCH_MANIFEST")"
+            : > "$PATCH_MANIFEST"
+            echo "PATCH_MANIFEST=$PATCH_MANIFEST" >> "$GITHUB_ENV"
+          fi
+
+          echo "::group::Patch Verification"
+
+          # Check for CONFIG_KSU in Kconfig (use grep instead of rg)
+          if grep -q 'CONFIG_KSU' kernel/drivers/Kconfig 2>/dev/null; then
+            echo "✅ CONFIG_KSU found in kernel/drivers/Kconfig"
+          else
+            echo "⚠️  CONFIG_KSU not immediately visible (may be in submodule)"
+          fi
+
+          # Verify SuSFS integration if enabled
+          if [ "${ENABLE_SUSFS}" = "true" ]; then
+            echo "🔍 Verifying SuSFS files..."
+
+            # Check for SuSFS files
+            if [ -f kernel/fs/susfs.c ]; then
+              echo "✅ kernel/fs/susfs.c exists"
+            else
+              echo "⚠️  kernel/fs/susfs.c not found"
+            fi
+
+            if [ -f kernel/include/linux/susfs.h ]; then
+              echo "✅ kernel/include/linux/susfs.h exists"
+            else
+              echo "⚠️  kernel/include/linux/susfs.h not found"
+            fi
+
+            # Verify Makefile entry for SuSFS
+            if grep -q 'CONFIG_KSU_SUSFS.*susfs' kernel/fs/Makefile 2>/dev/null; then
+              echo "✅ SuSFS Makefile entry found"
+            else
+              echo "⚠️  SuSFS Makefile entry not found (will be added during compile)"
+            fi
+
+            # Verify Kconfig entry for SuSFS
+            if grep -q 'config KSU_SUSFS' kernel/drivers/kernelsu/Kconfig 2>/dev/null; then
+              echo "✅ SuSFS Kconfig entry found"
+            else
+              if [ "${KSU_VARIANT}" = "next" ]; then
+                echo "⚠️  Skipping SuSFS Kconfig check for KernelSU-Next (uses different integration)"
+              else
+                echo "⚠️  SuSFS Kconfig entry not found (will be added during compile)"
+              fi
+            fi
+
+            # Verify hooks for tiann/kowsu/enhance (next/resukisu handle hooks differently)
+            if [ "${KSU_VARIANT}" != "resukisu" ] && [ "${KSU_VARIANT}" != "next" ]; then
+              if grep -rq 'ksu_init_rc_hook\|ksu_execveat_hook\|ksu_input_hook' kernel/drivers/kernelsu 2>/dev/null; then
+                echo "✅ KSU hooks found"
+              else
+                echo "⚠️  KSU hooks not found in standard locations"
+              fi
+            fi
+          fi
+
+          # Write success metadata
+          echo "📝 Writing build metadata..."
+          {
+            echo "variant=${KSU_VARIANT}"
+            echo "kernel_ref=${{ needs.setup.outputs.kernel_ref }}"
+            echo "susfs_ref=${{ needs.setup.outputs.susfs_ref }}"
+            echo "ksu_repo=${KSU_REPO}"
+            echo "ksu_ref=${KSU_BRANCH}"
+            echo "enable_susfs=${ENABLE_SUSFS}"
+            echo "dry_run=${DRY_RUN_ONLY:-false}"
+            echo "tuning_profile=${TUNING_PROFILE}"
+            echo "lto_mode=${LTO_MODE}"
+            echo "make_jobs=${MAKE_JOBS_OVERRIDE}"
+            echo "runtime_tuner=${RUNTIME_TUNER}"
+            echo "governor_mode=${GOVERNOR_MODE}"
+            echo "kerneltoast_patch_policy=${KERNELTOAST_PATCH_POLICY}"
+            echo "dirty_module_abi_bypass=${DIRTY_MODULE_ABI_BYPASS}"
+            echo "patch_repo_sha=${GITHUB_SHA}"
+          } > "success-metadata/source-manifest-${KSU_VARIANT}.txt"
+
+          echo "✅ Patch verification complete"
+          echo "::endgroup::"
+
+      - name: Stop After Patch Validation
+        if: env.DRY_RUN_ONLY == 'true'
+        run: |
+          {
+            echo "## Dry Run Complete"
+            echo
+            echo "- Variant: \`${{ matrix.variant }}\`"
+            echo "- KernelSU repo: \`${{ env.KSU_REPO }}\`"
+            echo "- KernelSU ref: \`${{ env.KSU_BRANCH }}\`"
+            echo "- Kernel ref: \`${{ needs.setup.outputs.kernel_ref }}\`"
+            echo "- SuSFS ref: \`${{ needs.setup.outputs.susfs_ref }}\`"
+            echo "- Result: Patch and config verification passed; compile intentionally skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build Kernel
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          export KSU_VARIANT="${{ matrix.variant }}"
+          bash .github/scripts/build-kernel.sh
+      - name: Package Kernel (AnyKernel3)
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          cd kernel
+          KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
+          cd ..
+
+          DIRTY_SUFFIX=""
+          if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
+            DIRTY_SUFFIX="-dirtyabi"
+          fi
+
+          case "${{ matrix.variant }}" in
+            "enhance") AK3_BRANCH="KernelSU" ;;
+            "tiann") AK3_BRANCH="KernelSU" ;;
+            "kowsu") AK3_BRANCH="KowSU" ;;
+            "resukisu") AK3_BRANCH="resukisu" ;;
+            "next") AK3_BRANCH="next" ;;
+          esac
+
+          git clone --depth=1 --branch=$AK3_BRANCH "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3 || git clone --depth=1 --branch=main "${{ env.ANYKERNEL_REPO_URL }}" AnyKernel3
+
+          if ! grep -Eiq 'akita' AnyKernel3/anykernel.sh; then
+            echo "::error::AnyKernel3 device assertions do not include Pixel 8a (akita). Refusing to package a potentially non-bootable zip."
+            echo "::group::anykernel.sh (device-related lines)"
+            grep -Ein 'device|model|codename|assert|getprop|ro\.product' AnyKernel3/anykernel.sh || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          [ -f kernel/out/arch/arm64/boot/dtb ] && cp kernel/out/arch/arm64/boot/dtb AnyKernel3/
+
+          cd AnyKernel3 && rm -rf .git .github
+          ZIP_NAME="AK3-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}-r${{ env.KSU_VERSION }}.zip"
+          zip -r9 "../$ZIP_NAME" .
+          cd ..
+
+          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+
+          # Generate lz4-compressed kernel image for direct boot.img patching
+          if command -v lz4 >/dev/null 2>&1; then
+            lz4 -9 -f kernel/out/arch/arm64/boot/Image "Image-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}.lz4"
+            echo "IMAGE_LZ4=Image-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}.lz4" >> $GITHUB_ENV
+          else
+            echo "::warning::lz4 not available; skipping Image compression"
+            echo "IMAGE_LZ4=" >> $GITHUB_ENV
+          fi
+
+          echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Repack akita boot.img (ksud)
+        if: env.DRY_RUN_ONLY != 'true' && matrix.variant != 'enhance'
+        run: |
+          set -e
+          echo "::group::Repack akita boot.img via ksud"
+
+          cd kernel
+          KERNEL_VERSION=$(grep "^VERSION" Makefile | cut -d' ' -f3).$(grep "^PATCHLEVEL" Makefile | cut -d' ' -f3).$(grep "^SUBLEVEL" Makefile | cut -d' ' -f3)
+          cd ..
+
+          DIRTY_SUFFIX=""
+          if [ "${DIRTY_MODULE_ABI_BYPASS}" = "true" ]; then
+            DIRTY_SUFFIX="-dirtyabi"
+          fi
+
+          REPACK_DIR="$(mktemp -d)"
+
+          # Build ksud from Tiann KernelSU source. Other KSU variants may not
+          # ship a compatible host ksud, but Tiann boot-patch works for repack.
+          TIANN_KSUD_STAGE="${GITHUB_WORKSPACE}/kernel/KernelSU"
+          if [ ! -f "${TIANN_KSUD_STAGE}/Cargo.toml" ]; then
+            TIANN_KSUD_STAGE="${GITHUB_WORKSPACE}/.tiann-ksu-src"
+            rm -rf "${TIANN_KSUD_STAGE}"
+            git clone --depth=1 --branch "${{ needs.setup.outputs.tiann_ref }}" "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}" \
+              || git clone --depth=1 "${TIANN_REPO_URL}" "${TIANN_KSUD_STAGE}"
+          fi
+          python3 - "${TIANN_KSUD_STAGE}/userspace/ksud/src/boot_patch.rs" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old_kmod = "\n".join([
+              '        let kmod_file = workdir.join("kernelsu.ko");',
+              '        if let Some(kmod) = kmod {',
+              '            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;',
+              '        } else if !no_install {',
+              '            // If kmod is not specified, extract from assets',
+              '            println!("- KMI: {kmi}");',
+              '            let name = format!("{kmi}_kernelsu.ko");',
+              '            assets::copy_assets_to_file(&name, kmod_file)',
+              '                .with_context(|| format!("Failed to copy {name}"))?;',
+              '        }',
+              '',
+          ])
+          new_kmod = "\n".join([
+              '        let install_kmod = kmod.is_some();',
+              '        let kmod_file = workdir.join("kernelsu.ko");',
+              '        if let Some(kmod) = kmod {',
+              '            std::fs::copy(kmod, kmod_file).context("copy kernel module failed")?;',
+              '        }',
+              '',
+          ])
+          old_add = "\n".join([
+              '            do_cpio_cmd(',
+              '                &magiskboot,',
+              '                workdir,',
+              '                ramdisk,',
+              '                "add 0755 kernelsu.ko kernelsu.ko",',
+              '            )?;',
+              '',
+          ])
+          new_add = "\n".join([
+              '            if install_kmod {',
+              '                do_cpio_cmd(',
+              '                    &magiskboot,',
+              '                    workdir,',
+              '                    ramdisk,',
+              '                    "add 0755 kernelsu.ko kernelsu.ko",',
+              '                )?;',
+              '            }',
+              '',
+          ])
+          text = text.replace(old_kmod, new_kmod)
+          text = text.replace('            println!("- Adding KernelSU LKM");', '            println!("- Adding KernelSU init for built-in KSU kernel");')
+          text = text.replace(old_add, new_add)
+          path.write_text(text)
+          PY
+          command -v cargo >/dev/null || { echo "❌ cargo not found; cannot build tiann ksud"; exit 1; }
+          rustup default stable
+          rustup target add aarch64-unknown-linux-musl
+          KSUINIT_LINKER="${ARM64_TOOLCHAIN}gcc"
+          if [ ! -x "$KSUINIT_LINKER" ]; then
+            KSUINIT_LINKER="$(command -v aarch64-linux-gnu-gcc || true)"
+          fi
+          if [ -z "$KSUINIT_LINKER" ]; then
+            echo "❌ aarch64 linker not found; cannot build ksuinit"
+            exit 1
+          fi
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$KSUINIT_LINKER" \
+            cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksuinit --target aarch64-unknown-linux-musl
+          mkdir -p "${TIANN_KSUD_STAGE}/userspace/ksud/bin/aarch64"
+          cp "${TIANN_KSUD_STAGE}/target/aarch64-unknown-linux-musl/release/ksuinit" \
+            "${TIANN_KSUD_STAGE}/userspace/ksud/bin/aarch64/ksuinit"
+          cargo fix --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --bin "ksud" -p ksud --allow-dirty || true
+          echo "🦀 Building tiann ksud from ${TIANN_KSUD_STAGE}..."
+          cargo build --manifest-path "${TIANN_KSUD_STAGE}/Cargo.toml" --release -p ksud
+          KSUD="${TIANN_KSUD_STAGE}/target/release/ksud"
+          test -x "$KSUD"
+
+          # Check for local stock boot.img first (self-hosted runner optimization).
+          # actions/checkout runs under _work/, while the persistent repo lives
+          # under /mnt/Android/enhance-kernel, so check both locations.
+          LOCAL_BOOT_IMG=""
+          # Select stock boot image paths based on Android version
+          if [ "${{ needs.setup.outputs.android_version }}" = "android17" ]; then
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp31.260508.005.img" \
+              "/mnt/Android/enhance-kernel/boot-images/stock-akita-cp31.260508.005.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
+          elif [ "${{ needs.setup.outputs.android_version }}" = "android16" ]; then
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp21.260508.005.img" \
+              "/mnt/Android/enhance-kernel/boot-images/stock-akita-cp21.260508.005.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
+          else
+            for candidate in \
+              "${GITHUB_WORKSPACE}/boot-images/stock-akita-cp1a.260505.005.a1.img" \
+              "/mnt/Android/enhance-kernel/boot-images/stock-akita-cp1a.260505.005.a1.img"; do
+              if [ -f "$candidate" ]; then
+                LOCAL_BOOT_IMG="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [ -n "$LOCAL_BOOT_IMG" ]; then
+            echo "✅ Using local stock boot.img: $LOCAL_BOOT_IMG"
+            cp "$LOCAL_BOOT_IMG" "${REPACK_DIR}/stock_boot.img"
+          elif [ -n "${STOCK_BOOT_IMG_URL}" ] || [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
+            echo "📥 Downloading stock boot.img..."
+            if [ -n "${STOCK_BOOT_GDRIVE_ID}" ]; then
+              python3 -m pip install --user --quiet gdown
+              export PATH="${HOME}/.local/bin:${PATH}"
+              gdown --id "${STOCK_BOOT_GDRIVE_ID}" -O "${REPACK_DIR}/stock_boot.img"
+            else
+              curl -fsSL "${STOCK_BOOT_IMG_URL}" -o "${REPACK_DIR}/stock_boot.img"
+            fi
+          else
+            echo "⚠️ No stock boot.img available (no local file, URL, or GDrive ID). Skipping repack."
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "🔧 Patching boot.img with ksud boot-patch..."
+          "$KSUD" boot-patch \
+            -b "${REPACK_DIR}/stock_boot.img" \
+            -k "${GITHUB_WORKSPACE}/kernel/out/arch/arm64/boot/Image" \
+            --no-install \
+            -o "${REPACK_DIR}"
+
+          # ksud outputs patched file as kernelsu_patched_boot.img or similar
+          PATCHED_IMG=$(find "${REPACK_DIR}" -name '*patched*boot*' -o -name 'new-boot.img' | head -1)
+          if [ -z "$PATCHED_IMG" ] || [ ! -f "$PATCHED_IMG" ]; then
+            echo "❌ ksud boot-patch did not produce a patched image"
+            ls -la "${REPACK_DIR}/"
+            exit 1
+          fi
+
+          BOOT_IMG_NAME="boot-${KERNEL_VERSION}-${{ matrix.variant }}${DIRTY_SUFFIX}-r${{ env.KSU_VERSION }}-akita.img"
+          cp "$PATCHED_IMG" "${GITHUB_WORKSPACE}/${BOOT_IMG_NAME}"
+          cd "${GITHUB_WORKSPACE}"
+
+          sha256sum "${BOOT_IMG_NAME}" > "${BOOT_IMG_NAME}.sha256"
+          echo "REPACK_BOOT_IMG=${BOOT_IMG_NAME}" >> $GITHUB_ENV
+
+          # Cleanup
+          rm -rf "${REPACK_DIR}"
+
+          echo "✅ Repacked boot.img: ${BOOT_IMG_NAME}"
+          echo "::endgroup::"
+
+      - name: Generate Pixel 8 Runtime Tuner Script
+        if: env.DRY_RUN_ONLY != 'true'
+        run: |
+          export KSU_VARIANT="${{ matrix.variant }}"
+          bash .github/scripts/generate-runtime-tuner.sh
+      - name: Upload Artifacts
+        if: env.DRY_RUN_ONLY != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernel-${{ matrix.variant }}-${{ github.run_number }}
+          path: |
+            ${{ env.KERNEL_ZIP }}
+            ${{ env.KERNEL_ZIP }}.sha256
+            ${{ env.IMAGE_LZ4 }}
+            ${{ env.REPACK_BOOT_IMG }}
+            ${{ env.REPACK_BOOT_IMG }}.sha256
+            ${{ env.CHANGELOG_FILE }}
+            logs/build-${{ matrix.variant }}.log
+            kernel/out/.config
+            kernel/out/pixel8-profile-${{ env.TUNING_PROFILE }}.config
+            success-metadata/pixel8-runtime-tuner-${{ matrix.variant }}.sh
+            ${{ env.PATCH_MANIFEST }}
+            success-metadata/source-manifest-${{ matrix.variant }}.txt
+
+      - name: Collect Failure Logs
+        if: failure()
+        run: |
+          ARTIFACT_DIR="failure-logs/${{ matrix.variant }}"
+          mkdir -p "$ARTIFACT_DIR"
+
+          [ -f "logs/build-${{ matrix.variant }}.log" ] && cp "logs/build-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "logs/patch-failure-${{ matrix.variant }}.log" ] && cp "logs/patch-failure-${{ matrix.variant }}.log" "$ARTIFACT_DIR/"
+          [ -f "kernel/out/.config" ] && cp "kernel/out/.config" "$ARTIFACT_DIR/out.config"
+          [ -f "kernel/.config" ] && cp "kernel/.config" "$ARTIFACT_DIR/kernel.config"
+          [ -f "${{ env.CHANGELOG_FILE }}" ] && cp "${{ env.CHANGELOG_FILE }}" "$ARTIFACT_DIR/"
+          [ -n "${{ env.PATCH_MANIFEST }}" ] && [ -f "${{ env.PATCH_MANIFEST }}" ] && cp "${{ env.PATCH_MANIFEST }}" "$ARTIFACT_DIR/"
+          [ -f "success-metadata/source-manifest-${{ matrix.variant }}.txt" ] && cp "success-metadata/source-manifest-${{ matrix.variant }}.txt" "$ARTIFACT_DIR/"
+          find kernel -type f \( -name "*.rej" -o -name "*.orig" \) -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          find kernel/out -maxdepth 3 -type f \
+            \( -name "*.log" -o -name "*.cmd" -o -name "*.tmp" -o -name ".config.old" \) \
+            -exec cp --parents {} "$ARTIFACT_DIR/" \; 2>/dev/null || true
+
+          for RUNNER_DIR in /actions-runner /home/runner/actions-runner /home/deepongi/actions-runner /opt/actions-runner /mnt/Hawai/actions-runner; do
+            if [ -d "$RUNNER_DIR/_diag" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-diag"
+              cp -a "$RUNNER_DIR/_diag/." "$ARTIFACT_DIR/runner-diag/" 2>/dev/null || true
+            fi
+
+            if [ -d "$RUNNER_DIR/_work/_temp" ]; then
+              mkdir -p "$ARTIFACT_DIR/runner-temp"
+              cp -a "$RUNNER_DIR/_work/_temp/." "$ARTIFACT_DIR/runner-temp/" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload Failure Logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failure-logs-${{ matrix.variant }}-${{ github.run_number }}
+          path: failure-logs/${{ matrix.variant }}
+          if-no-files-found: warn
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          {
+            echo "## Variant \`${{ matrix.variant }}\`"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Status | \`${{ job.status }}\` |"
+            echo "| Dry run | \`${{ env.DRY_RUN_ONLY }}\` |"
+            echo "| KernelSU repo | \`${{ env.KSU_REPO }}\` |"
+            echo "| KernelSU ref | \`${{ env.KSU_BRANCH }}\` |"
+            echo "| Kernel ref | \`${{ needs.setup.outputs.kernel_ref }}\` |"
+            echo "| SuSFS ref | \`${{ needs.setup.outputs.susfs_ref }}\` |"
+            echo "| KSU version | \`r${{ env.KSU_VERSION }}\` |"
+            echo "| Tuning profile | \`${{ env.TUNING_PROFILE }}\` |"
+            echo "| LTO mode | \`${{ env.LTO_MODE }}\` |"
+            echo "| Make jobs | \`${{ env.MAKE_JOBS_OVERRIDE }}\` |"
+            echo "| Runtime tuner script | \`${{ env.RUNTIME_TUNER }}\` |"
+            echo "| Governor mode | \`${{ env.GOVERNOR_MODE }}\` |"
+            echo "| kerneltoast patch policy | \`${{ env.KERNELTOAST_PATCH_POLICY }}\` |"
+            echo "| Build log | \`logs/build-${{ matrix.variant }}.log\` |"
+            if [ "${{ env.DRY_RUN_ONLY }}" != "true" ] && [ -n "${{ env.KERNEL_ZIP }}" ]; then
+              echo "| ZIP artifact | \`${{ env.KERNEL_ZIP }}\` |"
+            fi
+            if [ -n "${{ env.PATCH_MANIFEST }}" ]; then
+              echo "| Patch manifest | \`${{ env.PATCH_MANIFEST }}\` |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  create_release:
+    needs: [setup, build]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
+    if: always() && needs.setup.result == 'success' && needs.setup.outputs.create_release == 'true' && needs.build.result == 'success' && needs.setup.outputs.dry_run != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+
+      - name: Create GitHub Release
+        run: |
+          if [ ! -d release-assets ]; then
+            echo "No release-assets directory found; no artifacts were produced for this run."
+            exit 0
+          fi
+
+          cd release-assets
+          find . -type f -exec mv {} . \; 2>/dev/null || true
+
+          # Safety check: Only create release if at least one ZIP was actually built
+          if ! ls *.zip 1> /dev/null 2>&1; then
+            echo "❌ No ZIP artifacts found! All matrix builds must have failed. Skipping release."
+            exit 0
+          fi
+
+          RELEASE_NOTES="**Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          **SuSFS:** ${{ inputs.disable_susfs && '❌ Disabled' || '✅ Enabled' }}
+
+          ### Devices Supported
+          - Pixel 8, 8a, 8 Pro
+
+          Flash ZIP in Kernel Flasher or extract Image to patch boot.img manually."
+
+          RELEASE_TAG="build-${{ github.run_number }}"
+          RELEASE_TITLE="Android 14 Kernel Build #${{ github.run_number }}"
+
+          # Added ./*.md to upload the changelogs alongside the zips!
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "ℹ️ Release $RELEASE_TAG already exists; updating notes and replacing artifacts."
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}"
+            gh release upload "$RELEASE_TAG" --repo "${{ github.repository }}" --clobber ./*.zip ./*.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --repo "${{ github.repository }}" \
+              ./*.zip ./*.md
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    needs: [setup, create_release, build]
+    runs-on: [self-hosted, linux, x64, deepongi-labs]
+    if: always() && inputs.enable_telegram && needs.setup.outputs.dry_run != 'true'
+    steps:
+      - name: Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are not configured; skipping notification."
+            exit 0
+          fi
+
+          STATUS="${{ needs.build.result }}"
+          ICON="✅"
+          [ "$STATUS" != "success" ] && ICON="⚠️"
+          [ "$STATUS" == "failure" ] && ICON="❌"
+
+          # Format variables
+          IS_CLEAN="${{ inputs.force_clean_build && 'Yes' || 'No' }}"
+          IS_SUSFS="${{ inputs.disable_susfs && 'Disabled' || 'Enabled' }}"
+          DO_REL="${{ inputs.create_release && 'Yes' || 'No' }}"
+
+          # Use HTML parsing to completely avoid Markdown character breaking (hyphens/underscores)
+          cat << EOF > tg_message.txt
+          $ICON <b>Kernel Build ${STATUS^^}</b>
+          ━━━━━━━━━━━━━━━━━━━━━
+          📱 <b>Target:</b> Pixel 8 / 8a / 8 Pro
+          🛠️ <b>Variant(s):</b> ${{ inputs.ksu_variant }}
+          🛡️ <b>SuSFS:</b> $IS_SUSFS
+          🧹 <b>Clean Build:</b> $IS_CLEAN
+          📦 <b>Release Created:</b> $DO_REL
+          👤 <b>Triggered by:</b> <a href="https://github.com/${{ github.actor }}">${{ github.actor }}</a>
+
+          🔗 <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run Logs & Artifacts</a>
+          EOF
+
+          # Safely URL-encode the file using --data-urlencode text@filename
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            --data-urlencode text@tg_message.txt \
+            -d parse_mode="HTML" \
+            -d disable_web_page_preview=true

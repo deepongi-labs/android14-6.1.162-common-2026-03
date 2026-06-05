@@ -1,0 +1,163 @@
+name: Build Enhance Kernel (Dedicated) for Pixel 8 Series
+
+concurrency:
+  group: enhance-kernel-build-v2-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      disable_susfs:
+        description: 'Disable SuSFS features'
+        required: false
+        default: false
+        type: boolean
+      force_clean_build:
+        description: 'Force clean build (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+      enable_telegram:
+        description: 'Enable Telegram notifications'
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        description: 'Create GitHub Release with artifacts'
+        required: false
+        default: true
+        type: boolean
+      tuning_profile:
+        description: 'Pixel 8 tuning profile'
+        required: false
+        default: 'balanced'
+        type: choice
+        options:
+          - balanced
+          - performance
+          - battery
+      lto_mode:
+        description: 'LTO mode (thin/full/none)'
+        required: false
+        default: 'thin'
+        type: choice
+        options:
+          - thin
+          - full
+          - none
+      make_jobs:
+        description: 'Parallel make jobs (auto or integer)'
+        required: false
+        default: 'auto'
+        type: string
+      include_runtime_tuner:
+        description: 'Include Pixel 8 runtime tuner script'
+        required: false
+        default: true
+        type: boolean
+      governor_mode:
+        description: 'CPU governor mode'
+        required: false
+        default: 'dynasched'
+        type: choice
+        options:
+          - dynasched
+          - stock_schedutil
+      kerneltoast_patch_policy:
+        description: 'Policy for kerneltoast patchset application (off = recommended; patches drift against android14-6.1)'
+        required: false
+        default: 'best_effort'
+        type: choice
+        options:
+          - strict
+          - best_effort
+          - 'off'
+      dry_run_only:
+        description: 'Validate source sync and patch application only'
+        required: false
+        default: false
+        type: boolean
+      dirty_build:
+        description: 'Incremental build: skip source cleanup, preserve out/ directory'
+        required: false
+        default: false
+        type: boolean
+      dirty_module_abi_bypass:
+        description: 'Allow loading the built-in KernelSU kernel without requiring android14-6.1_kernelsu.ko'
+        required: false
+        default: true
+        type: boolean
+      kernel_ref:
+        description: 'Override kernel ref'
+        required: false
+        default: 'android14-6.1-lts'
+        type: string
+      susfs_ref:
+        description: 'Override SuSFS ref'
+        required: false
+        default: 'gki-android14-6.1-dev'
+        type: string
+      tiann_ref:
+        description: 'Override tiann KernelSU ref'
+        required: false
+        default: 'da8e0ab1786dc55cce3ed4ff4c304be614e0fa0a'
+        type: string
+      kowsu_ref:
+        description: 'Override kowsu KernelSU ref'
+        required: false
+        default: 'master'
+        type: string
+      resukisu_ref:
+        description: 'Override ReSukiSU ref'
+        required: false
+        default: 'main'
+        type: string
+      next_ref:
+        description: 'Override KernelSU-Next ref'
+        required: false
+        default: 'dev'
+        type: string
+      stock_boot_img_url:
+        description: 'URL to the stock akita boot.img to repack with the new kernel (https://). Leave empty to skip repack.'
+        required: false
+        default: ''
+        type: string
+      stock_boot_gdrive_id:
+        description: 'Google Drive file ID for stock akita boot.img to repack. Leave empty to skip.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build-enhance:
+    uses: ./.github/workflows/kernel-build.yml
+    with:
+      use_self_hosted: true
+      ksu_variant: enhance
+      disable_susfs: ${{ inputs.disable_susfs }}
+      force_clean_build: ${{ inputs.force_clean_build }}
+      enable_telegram: ${{ inputs.enable_telegram }}
+      create_release: ${{ inputs.create_release }}
+      dry_run_only: ${{ inputs.dry_run_only }}
+      dirty_build: ${{ inputs.dirty_build }}
+      refs: |
+        kernel_ref=${{ inputs.kernel_ref }}
+        susfs_ref=${{ inputs.susfs_ref }}
+        tiann_ref=${{ inputs.tiann_ref }}
+        kowsu_ref=${{ inputs.kowsu_ref }}
+        resukisu_ref=${{ inputs.resukisu_ref }}
+        next_ref=${{ inputs.next_ref }}
+      build_options: |
+        tuning_profile=${{ inputs.tuning_profile }}
+        lto_mode=${{ inputs.lto_mode }}
+        make_jobs=${{ inputs.make_jobs }}
+        include_runtime_tuner=${{ inputs.include_runtime_tuner }}
+        governor_mode=${{ inputs.governor_mode }}
+        kerneltoast_patch_policy=${{ inputs.kerneltoast_patch_policy }}
+        dirty_module_abi_bypass=${{ inputs.dirty_module_abi_bypass }}
+        stock_boot_img_url=${{ inputs.stock_boot_img_url }}
+        stock_boot_gdrive_id=${{ inputs.stock_boot_gdrive_id }}

@@ -1,0 +1,6 @@
+out/
+*.log
+*.img
+*.lz4
+*.ko
+*.zip

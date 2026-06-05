@@ -1,0 +1,14 @@
+diff --git a/kernel/module/version.c b/kernel/module/version.c
+index 56a34d27f257..3e6db5c8f95d 100644
+--- a/kernel/module/version.c
++++ b/kernel/module/version.c
+@@ -50,7 +50,8 @@ int check_version(const struct load_info *info,
+ 
+ bad_version:
+ 	pr_warn("%s: disagrees about version of symbol %s\n", info->name, symname);
+-	return 0;
++	pr_warn("%s: dirty build is forcing module version mismatch for %s\n", info->name, symname);
++	return try_to_force_load(mod, symname) == 0;
+ }
+ 
+ int check_modstruct_version(const struct load_info *info,

@@ -1,0 +1,34 @@
+--- a/drivers/power/supply/google/google_battery.c
++++ b/drivers/power/supply/google/google_battery.c
+@@ -50,6 +50,12 @@
+ #define DEFAULT_BATT_DRV_RL_SOC_THRESHOLD	97
+ #define DEFAULT_BD_TRICKLE_ENABLE		false
+
++/* Fast charging configuration for Pixel 8 */
++#define FAST_CHARGE_USB_CURRENT_MA		3000  /* 3A USB fast charge */
++#define FAST_CHARGE_USB_PD_CURRENT_MA		5000  /* 5A USB-PD fast charge */
++#define FAST_CHARGE_VOLTAGE_MV			9000  /* 9V for fast charge */
++#define FAST_CHARGE_ENABLE			1
++
+ /* Thermal */
+ #define DEFAULT_BATT_TEMP_COLD			0
+ #define DEFAULT_BATT_TEMP_COOL			100
+@@ -1500,6 +1506,18 @@ static int gbms_set_property(struct power_supply *psy,
+ 		break;
+ 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
+ 		break;
++	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
++		/* Enable fast charging if requested */
++		if (FAST_CHARGE_ENABLE) {
++			if (val->intval > FAST_CHARGE_USB_CURRENT_MA * 1000) {
++				/* USB-PD fast charge */
++				val->intval = FAST_CHARGE_USB_PD_CURRENT_MA * 1000;
++			} else if (val->intval > 500000) {
++				/* Standard USB fast charge */
++				val->intval = FAST_CHARGE_USB_CURRENT_MA * 1000;
++			}
++		}
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}

@@ -1,0 +1,6 @@
+diff --git a/tools/lib/bpf/libbpf.c b/tools/lib/bpf/libbpf.c
+--- a/tools/lib/bpf/libbpf.c
++++ b/tools/lib/bpf/libbpf.c
+@@ -10751,1 +10751,1 @@
+-			char *next_path;
++			const char *next_path;

@@ -1,0 +1,15 @@
+diff --git a/kernel/module/main.c b/kernel/module/main.c
+--- a/kernel/module/main.c
++++ b/kernel/module/main.c
+@@ -2012,9 +2012,9 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
+ 		if (err)
+ 			return err;
+ 	} else if (!same_magic(modmagic, vermagic, info->index.vers)) {
+-		pr_err("%s: version magic '%s' should be '%s'\n",
++		pr_warn("%s: dirty build is forcing version magic '%s' over expected '%s'\n",
+ 		       info->name, modmagic, vermagic);
+-		return -ENOEXEC;
++		return try_to_force_load(mod, "bad vermagic") == 0 ? 0 : -ENOEXEC;
+ 	}
+ 
+ 	if (!get_modinfo(info, "intree"))
